@@ -5,7 +5,7 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 **FinanceTracker** is a **personal finance tracker**. Backend = **Google Apps Script (GAS)** over one Google Sheets workbook, published as a Web App exposing a small JSON API (record transactions, read accounts/categories) plus a scheduled daily-interest job.
 - **Use:** personal finance tracking — log transactions, accounts, interest into a private Google Sheet.
 - **Current client:** a single **n8n workflow** (workflow JSON to be added later).
-- **Direction:** also build a **GAS Web App frontend** (HTML via `doGet`/`HtmlService`), not just an API.
+- **Direction:** also build a **GAS Web App frontend** (HTML via `doGet`/`HtmlService`), not just an API. Must be **responsive** — desktop, tablet, and mobile friendly.
 - **Locale:** amounts in **PHP**; timezone `Asia/Manila`.
 
 ## Repository layout
