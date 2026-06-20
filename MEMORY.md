@@ -19,6 +19,7 @@ Durable, append-only project notes (newest on top). **Keep token-efficient: dens
 - `Categories` — `Category`, `Type`, `Segment`, `Description`.
 
 ## Decisions
+- 2026-06-20: Web App frontend must be responsive — usable on desktop, tablet, and mobile.
 - 2026-06-20: Repo configured for clasp (`.clasp.json`, `appsscript.json`, `.claspignore`, `package.json`, `.gitignore`). Manifest: `executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS` so n8n POSTs without OAuth.
 - 2026-06-20: Deployment URL kept out of git (secret); only its existence + trigger details recorded here.
 
