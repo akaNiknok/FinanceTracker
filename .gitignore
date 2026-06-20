@@ -1,0 +1,11 @@
+# clasp / Apps Script auth credentials — NEVER commit these
+.clasprc.json
+~/.clasprc.json
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+*.log

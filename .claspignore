@@ -1,0 +1,8 @@
+# Ignore everything by default...
+**/**
+
+# ...then allow only the files Apps Script should receive.
+!appsscript.json
+!**/*.gs
+!**/*.js
+!**/*.html
