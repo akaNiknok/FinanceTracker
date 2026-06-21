@@ -47,3 +47,4 @@ Linked via `.clasp.json` (`scriptId` is committed; the auth token is not).
 - **Match sheet headers exactly** — `doPost` and the interest job map by header text; a renamed header silently breaks mapping.
 - After changing n8n-facing behavior, **redeploy** (saved editor code doesn't affect the live Web App until deployed).
 - Keep **MEMORY.md** current: decisions, trigger setup, secret locations, n8n details once added.
+- **No Claude metadata in commits:** never add `Co-Authored-By: Claude ...` or `Claude-Session: ...` trailers to commit messages.
