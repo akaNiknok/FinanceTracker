@@ -1,0 +1,956 @@
+{
+  "name": "Finance Tracker",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1824,
+        -80
+      ],
+      "id": "9813a80b-e873-42eb-9235-62630aff1fef",
+      "name": "Telegram Trigger",
+      "webhookId": "cd3a2f59-32d7-41e9-a38f-cfb4efd4b20e",
+      "credentials": {
+        "telegramApi": {
+          "id": "8aTuZ7wAjnflt3Pp",
+          "name": "agiFinanceTracker_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json._sheet }}",
+                    "rightValue": "Categories",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "b9e2fe79-dc83-4691-9876-e0a8a8751934"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "be050609-4eb1-4653-aadb-e49d37583189",
+                    "leftValue": "={{ $json._sheet }}",
+                    "rightValue": "Accounts",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -240,
+        -464
+      ],
+      "id": "4eed82ea-a32c-4618-9ae1-962cb788b74a",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "R6MkgMfWucIzpmGW",
+          "mode": "list",
+          "cachedResultName": "Accounts",
+          "cachedResultUrl": "/projects/L52IQ6VRNq9tG3dE/datatables/R6MkgMfWucIzpmGW"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "Name",
+              "keyValue": "={{ $json.Name }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.Name }}",
+            "Currency": "={{ $json.Currency }}"
+          },
+          "matchingColumns": [
+            "Name"
+          ],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Currency",
+              "displayName": "Currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        -368
+      ],
+      "id": "1daf0f6d-f5ba-4d9e-bcc8-4caaf72d5b02",
+      "name": "Upsert row(s) to Accounts"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "wUHDIshH8agxlaY6",
+          "mode": "list",
+          "cachedResultName": "Categories",
+          "cachedResultUrl": "/projects/L52IQ6VRNq9tG3dE/datatables/wUHDIshH8agxlaY6"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "Name",
+              "keyValue": "={{ $json.Name }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.Name }}",
+            "Type": "={{ $json.Type }}",
+            "Description": "={{ $json.Description }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Type",
+              "displayName": "Type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Description",
+              "displayName": "Description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        -560
+      ],
+      "id": "7d7e3223-2c7a-4ce9-8ba6-1a3f8b0d481d",
+      "name": "Upsert row(s) to Categories"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "wUHDIshH8agxlaY6",
+          "mode": "list",
+          "cachedResultName": "Categories",
+          "cachedResultUrl": "/projects/L52IQ6VRNq9tG3dE/datatables/wUHDIshH8agxlaY6"
+        },
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -1152,
+        16
+      ],
+      "id": "3e1d926a-810e-4dff-ad4c-5933c13856d4",
+      "name": "Get Categories",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "R6MkgMfWucIzpmGW",
+          "mode": "list",
+          "cachedResultName": "Accounts",
+          "cachedResultUrl": "/projects/L52IQ6VRNq9tG3dE/datatables/R6MkgMfWucIzpmGW"
+        },
+        "filters": {
+          "conditions": []
+        },
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -928,
+        16
+      ],
+      "id": "2ad430fc-797f-4b8e-bfa5-1e69e1b92e3f",
+      "name": "Get Accounts",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-flash-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        240
+      ],
+      "id": "be082641-195a-4682-8d22-c3aa8e00f0ed",
+      "name": "Gemini Flash",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "zMFWLm9hQ9PQ59we",
+          "name": "Finance Tracker"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-flash-lite-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -576,
+        240
+      ],
+      "id": "642d7e06-e77f-4da3-893f-1fa0100e421e",
+      "name": "Gemini Flash Lite",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "zMFWLm9hQ9PQ59we",
+          "name": "Finance Tracker"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7eef3443-93c3-4f2f-aa72-21eceb40c24f",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "/sync",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1376,
+        -176
+      ],
+      "id": "be8fd30c-ebac-46b0-8129-22610d87c99a",
+      "name": "If (text == \"/sync\")"
+    },
+    {
+      "parameters": {
+        "url": "<<APPS_SCRIPT_WEB_APP_URL>>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1152,
+        -464
+      ],
+      "id": "127473d3-240c-495a-a520-f6c11b3e22d0",
+      "name": "Fetch from Apps Script"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nreturn [\n  {\n    json: { sheet: \"Categories\", rows: data.Categories },\n  },\n  {\n    json: { sheet: \"Accounts\", rows: data.Accounts },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -928,
+        -464
+      ],
+      "id": "a59aaa8a-3b82-4dbe-97e2-19bc13e60072",
+      "name": "Parse Sheets Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = [];\n\nfor (const item of $input.all()) {\n  const { sheet, rows } = item.json;\n\n  for (const [name, fields] of Object.entries(rows)) {\n    items.push({\n      json: {\n        _sheet: sheet,\n        Name: name,\n        ...fields,\n      },\n    });\n  }\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -592,
+        -464
+      ],
+      "id": "5956b07c-e1be-4f9a-8be3-6888b35295e4",
+      "name": "Flatten to Rows"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7342714a-97a0-441f-95be-306f59d0e969",
+              "leftValue": "={{ $json.message.from.id }}",
+              "rightValue": 1283809316,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": false
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1600,
+        -80
+      ],
+      "id": "3ce644c7-eea2-42c6-8679-29eec1129922",
+      "name": "If (Auth Check)"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Telegram Trigger').item.json.message.text }}",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=You are a financial transaction parser. Extract structured data from the user's message and return ONLY a valid JSON object — no explanation, no markdown, no extra text.\n\nVALID CATEGORIES (\"Name\" (Type) - Description):\n{{ $('Get Categories').all().map(i => `- \"${i.json.Name}\" (${i.json.Type}) - ${i.json.Description}`).join('\\n') }}\n\nVALID ACCOUNTS (\"Name\" (Currency)):\n{{ $('Get Accounts').all().map(i => `- \"${i.json.Name}\" (${i.json.Currency})`).join('\\n') }}\n\nOUTPUT FORMAT:\n{\n  \"Date\": \"D-MMM-YYYY\",\n  \"Category\": \"exact match from VALID CATEGORIES\",\n  \"Description\": \"concise description, max 256 chars\",\n  \"Account\": \"exact match from VALID ACCOUNTS\",\n  \"Amount\": 0.00,\n  \"ExchangeRate\": null,\n  \"ToAccount\": null,\n  \"ToAmount\": null\n}\n\nRULES:\n1. Date format must always be D-MMM-YYYY (e.g., 27-Jan-2026). If no date is mentioned, use: {{ (function() { const d = new Date($('Telegram Trigger').item.json.message.date * 1000); const m = [\"Jan\",\"Feb\",\"Mar\",\"Apr\",\"May\",\"Jun\",\"Jul\",\"Aug\",\"Sep\",\"Oct\",\"Nov\",\"Dec\"]; return `${d.getDate()}-${m[d.getMonth()]}-${d.getFullYear()}`; })() }}\n2. Category must exactly match a name from VALID CATEGORIES (case-sensitive)\n3. Account must exactly match a name from VALID ACCOUNTS (case-sensitive)\n4. Amount must be a positive number\n5. For Transfer type: ToAccount and ToAmount are REQUIRED, set both to their respective values\n6. ExchangeRate is PHP per 1 USD — only set if explicitly mentioned, otherwise null\n7. If not a transfer: ToAccount and ToAmount must be null\n8. If the input is not a financial transaction, return: { \"error\": \"Not a transaction\" }\n\nReturn only the JSON. No other text."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        -656,
+        16
+      ],
+      "id": "7e95026e-5e13-47d5-94f8-331f8783b6ed",
+      "name": "Basic LLM Chain",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"Date\": {\n      \"type\": \"string\",\n      \"description\": \"Transaction date in D-MMM-YYYY format, e.g. 27-Jan-2026\"\n    },\n    \"Category\": {\n      \"type\": \"string\",\n      \"description\": \"Must exactly match a valid category name.\"\n    },\n    \"Description\": {\n      \"type\": \"string\",\n      \"description\": \"Concise description of the transaction, max 256 chars\"\n    },\n    \"Account\": {\n      \"type\": \"string\",\n      \"description\": \"Must exactly match a valid account name.\"\n    },\n    \"Amount\": {\n      \"type\": \"number\",\n      \"description\": \"Positive transaction amount\"\n    },\n    \"ExchangeRate\": {\n      \"type\": [\"number\", \"null\"],\n      \"description\": \"PHP per 1 USD, only if explicitly mentioned, otherwise null.\"\n    },\n    \"ToAccount\": {\n      \"type\": [\"string\", \"null\"],\n      \"description\": \"Destination account for transfers, otherwise null\"\n    },\n    \"ToAmount\": {\n      \"type\": [\"number\", \"null\"],\n      \"description\": \"Amount received in destination account for transfers, otherwise null\"\n    },\n    \"error\": {\n      \"type\": [\"string\", \"null\"],\n      \"description\": \"Set to a short error message if the input is not a financial transaction, otherwise null.\"\n    }\n  },\n  \"required\": [\"Date\", \"Category\", \"Description\", \"Account\", \"Amount\", \"ExchangeRate\", \"ToAccount\", \"ToAmount\", \"error\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        -448,
+        240
+      ],
+      "id": "3bc1b769-064b-4419-b9fc-58cc85d0c60c",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2178ace7-f52f-43fd-bb97-b386444fe78d",
+              "leftValue": "={{ $json.output.error }}",
+              "rightValue": "null",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -240,
+        16
+      ],
+      "id": "66b33c73-fc3f-4ae7-9367-6ce4b27a5ffb",
+      "name": "If (LLM Error)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "<<APPS_SCRIPT_WEB_APP_URL>>",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.output.toJsonString() }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -16,
+        -80
+      ],
+      "id": "0220e7a1-4664-4124-a465-8c99292581c3",
+      "name": "Add Transaction"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3f09eb98-1b68-4d89-92f7-f18408781a7b",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "error",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        208,
+        -80
+      ],
+      "id": "4cf041b4-40a2-4c3e-98d8-b60c73eca1b1",
+      "name": "If (HTTP Error)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=✦ *Logged*\n› _{{ $('Basic LLM Chain').item.json.output.Date }}_\n› _{{ $('Basic LLM Chain').item.json.output.Category }}_\n› _{{ $('Basic LLM Chain').item.json.output.Description }}_\n› _{{ $('Basic LLM Chain').item.json.output.Account }}_\n› `{{ $('Basic LLM Chain').item.json.output.Amount }}`\n{{ $('Basic LLM Chain').item.json.output.ToAccount ? '› To: _' + $('Basic LLM Chain').item.json.output.ToAccount + '_' : '' }}\n{{ $('Basic LLM Chain').item.json.output.ToAmount ? '› `' + $('Basic LLM Chain').item.json.output.ToAmount + '`' : '' }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $('Telegram Trigger').item.json.message.message_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        432,
+        -176
+      ],
+      "id": "e8c15d46-d399-4d27-97cd-f7cf2feeadc6",
+      "name": "Send Success Message",
+      "webhookId": "2fdcad65-1263-44a9-a37d-09ca535f636b",
+      "credentials": {
+        "telegramApi": {
+          "id": "8aTuZ7wAjnflt3Pp",
+          "name": "agiFinanceTracker_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "=✦ *Sync Complete*",
+        "additionalFields": {
+          "appendAttribution": false,
+          "reply_to_message_id": "={{ $('Telegram Trigger').first().json.message.message_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        432,
+        -464
+      ],
+      "id": "0881d1b2-890c-49a5-8089-badf86f94438",
+      "name": "Send Sync Complete",
+      "webhookId": "2fdcad65-1263-44a9-a37d-09ca535f636b",
+      "credentials": {
+        "telegramApi": {
+          "id": "8aTuZ7wAjnflt3Pp",
+          "name": "agiFinanceTracker_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "empty"
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        208,
+        -464
+      ],
+      "id": "c4ab7391-b239-4b58-b49a-cfce2ae3923e",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=❌ *Failed to add transaction*\n› {{ $('Add Transaction').item.json.message }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $('Telegram Trigger').item.json.message.message_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        432,
+        16
+      ],
+      "id": "69ebafd5-dddb-43f0-a749-3f088cfe09aa",
+      "name": "Send HTTP Error Message",
+      "webhookId": "f0ab6fe3-5fab-480e-81bc-09272f7626e8",
+      "credentials": {
+        "telegramApi": {
+          "id": "8aTuZ7wAjnflt3Pp",
+          "name": "agiFinanceTracker_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=❌ *Failed to add transaction*\n› {{ $('Basic LLM Chain').item.json.output.error }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $('Telegram Trigger').item.json.message.message_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -16,
+        112
+      ],
+      "id": "0cc6d322-7282-4e33-b687-ec4a3698fd4d",
+      "name": "Send LLM Error Message",
+      "webhookId": "f0ab6fe3-5fab-480e-81bc-09272f7626e8",
+      "credentials": {
+        "telegramApi": {
+          "id": "8aTuZ7wAjnflt3Pp",
+          "name": "agiFinanceTracker_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "⛔ *Unauthorized. This bot is private.*",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1376,
+        16
+      ],
+      "id": "4796784c-8fd1-465c-aca5-20d52355807d",
+      "name": "Send unauthorized message",
+      "webhookId": "a8a5928f-1793-4a45-b39d-34efe8efa02e",
+      "credentials": {
+        "telegramApi": {
+          "id": "8aTuZ7wAjnflt3Pp",
+          "name": "agiFinanceTracker_bot"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "If (Auth Check)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Upsert row(s) to Categories",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upsert row(s) to Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Categories": {
+      "main": [
+        [
+          {
+            "node": "Get Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Accounts": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Flash": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Flash Lite": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "If (text == \"/sync\")": {
+      "main": [
+        [
+          {
+            "node": "Fetch from Apps Script",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch from Apps Script": {
+      "main": [
+        [
+          {
+            "node": "Parse Sheets Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Sheets Response": {
+      "main": [
+        [
+          {
+            "node": "Flatten to Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten to Rows": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If (Auth Check)": {
+      "main": [
+        [
+          {
+            "node": "If (text == \"/sync\")",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send unauthorized message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "If (LLM Error)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If (LLM Error)": {
+      "main": [
+        [
+          {
+            "node": "Add Transaction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send LLM Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Transaction": {
+      "main": [
+        [
+          {
+            "node": "If (HTTP Error)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If (HTTP Error)": {
+      "main": [
+        [
+          {
+            "node": "Send Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send HTTP Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert row(s) to Categories": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Sync Complete": {
+      "main": [
+        []
+      ]
+    },
+    "Upsert row(s) to Accounts": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Send Sync Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "rZ34Tsr252RQhbzJ",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "201b831f-ee1d-4ef1-a3e1-a00b0cda559b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "03828363dbc2ffa67498f28c3e92e7beb699b09dee5294274cf0a26f7d24601e"
+  },
+  "id": "cBmTh54CrAADgKjt",
+  "tags": []
+}

@@ -24,6 +24,6 @@ Durable, append-only project notes (newest on top). **Keep token-efficient: dens
 - 2026-06-20: Deployment URL kept out of git (secret); only its existence + trigger details recorded here.
 
 ## TODO / open questions
-- [ ] Add the n8n workflow JSON for reference.
+- [x] Add the n8n workflow JSON for reference — exports in `n8n/` (`Finance Tracker.json`, `Finance Tracker - Error Handler.json`), 2026-06-21. Client = private Telegram bot: parses messages via Gemini → POSTs to GAS Web App; `/sync` refreshes Categories/Accounts; separate error-handler workflow. Secrets redacted: Apps Script Web App URL → `<<APPS_SCRIPT_WEB_APP_URL>>`, n8n API key → `<<N8N_API_KEY>>` (see `n8n/README.md`).
 - [ ] Plan the Web App frontend: how `doGet` serves HTML vs. JSON.
 - [ ] Confirm exact, full column lists for each sheet.
