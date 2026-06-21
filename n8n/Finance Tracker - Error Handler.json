@@ -1,0 +1,126 @@
+{
+  "name": "Finance Tracker - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "85143b15-6664-4ff5-a6c5-0fcd25265fbf",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=⚠️ *Something went wrong*\n› Node: `{{ $json.error_node }}`\n› {{ $json.error_msg }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $json.message_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "48cd6536-935a-4d8d-96fd-12581718af6b",
+      "name": "Send a text message",
+      "webhookId": "9000e7a6-55a8-4cab-980c-94510ac342b6",
+      "credentials": {
+        "telegramApi": {
+          "id": "8aTuZ7wAjnflt3Pp",
+          "name": "agiFinanceTracker_bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/executions/{{ $json.execution.id }}?includeData=true",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "<<N8N_API_KEY>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        0
+      ],
+      "id": "2b7242cd-f396-4777-bfeb-9d98f5467e95",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "const exec = $input.first().json;\n\nconst triggerData = exec.data?.resultData?.runData?.[\"Telegram Trigger\"];\nconst msg = triggerData?.[0]?.data?.main?.[0]?.[0]?.json?.message;\n\nreturn [{\n  json: {\n    chat_id: msg?.chat?.id ?? null,\n    message_id: msg?.message_id ?? null,\n    error_node: $('Error Trigger').first().json.execution.lastNodeExecuted,\n    error_msg: $('Error Trigger').first().json.execution.error.message,\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "27da978e-63d5-41fc-aa5f-770d226c86db",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "aab4b30e-bdff-4381-8655-d9cbd9dac3d5",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "03828363dbc2ffa67498f28c3e92e7beb699b09dee5294274cf0a26f7d24601e"
+  },
+  "id": "rZ34Tsr252RQhbzJ",
+  "tags": []
+}
