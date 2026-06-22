@@ -1,4 +1,18 @@
 function doGet(e) {
+  const params = (e && e.parameter) ? e.parameter : {};
+
+  // ── DATA-PULL MODE (for testing) ────────────────────────────
+  // ?sheets        → list sheet names
+  // ?sheet=<name>  → dump a sheet's rows (use "all" for every sheet)
+  // optional &limit=<n> caps the number of data rows returned.
+  if (params.sheets !== undefined) {
+    return jsonResponse(listSheetNames());
+  }
+  if (params.sheet) {
+    const limit = params.limit ? parseInt(params.limit, 10) : 0;
+    return jsonResponse(readSheetPayload(params.sheet, limit));
+  }
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   // ── CATEGORIES ──────────────────────────────────────────────

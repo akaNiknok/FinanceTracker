@@ -19,6 +19,7 @@ Durable, append-only project notes (newest on top). **Keep token-efficient: dens
 - `Categories` — `Category`, `Type`, `Segment`, `Description`.
 
 ## Decisions
+- 2026-06-22: Added data-pull read endpoint for testing (`Read.gs`, wired into `doGet`). `?sheets` lists names; `?sheet=<name>` (or `all`) dumps raw rows as JSON; `&limit=<n>` caps rows. Default `doGet` (Categories+Accounts) unchanged → n8n `/sync` unaffected. Note: web app is `ANYONE_ANONYMOUS`, so this exposes raw `Transactions` to anyone with the URL — same URL-as-secret model as before; revisit/lock down when the authenticated frontend lands. Live behavior only changes after redeploying the same `deploymentId`.
 - 2026-06-20: Web App frontend must be responsive — usable on desktop, tablet, and mobile.
 - 2026-06-20: Repo configured for clasp (`.clasp.json`, `appsscript.json`, `.claspignore`, `package.json`, `.gitignore`). Manifest: `executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS` so n8n POSTs without OAuth.
 - 2026-06-20: Deployment URL kept out of git (secret); only its existence + trigger details recorded here.
