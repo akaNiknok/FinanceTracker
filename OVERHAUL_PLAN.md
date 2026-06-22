@@ -1,7 +1,7 @@
 # FinanceTracker — System Overhaul Plan
 
-Status: **draft for review** (2026-06-22). Confirmed decisions are locked; "Open
-items" near the end list defaults that can still change before Phase 1 ships.
+Status: **scope locked** (2026-06-22). All five open items resolved (§8); ready to
+start Phase 1.
 
 ## 1. Goal
 
@@ -80,12 +80,15 @@ go through it — no logic duplicated in n8n.
 ### 4.1 Schema changes
 - **Stable transaction `ID`** column (UUID or timestamp+rand) on every row. This is
   the enabler for UI edit/delete and bot undo/correct — nothing reliable works without it.
-- **Derived fields computed on write** by the service layer (Type, Segment from
-  Categories; Currency from Account; Month from Date; Amount (PHP) from FX). Gives the
-  API consistent values and avoids appendRow vs. formula conflicts. *(Alternative:
-  ARRAYFORMULA helper columns — see Open items #2.)*
-- **FX handling**: small `Rates` mechanism (sheet or live lookup) so Amount (PHP) is
-  computed at write time from the row currency, instead of a single hard-coded 59.
+- **Keep derivation in the Sheet (formulas).** Derived columns are formula-driven today;
+  convert per-row formulas to **header-anchored `ARRAYFORMULA`s** (Month, Type, Segment,
+  Currency, Amount (PHP)) so any appended row auto-derives. The service layer therefore
+  writes **input columns only** (never the formula cells), keeping the Sheet
+  self-consistent across manual edits, UI writes, and n8n writes. `appendRow` is replaced
+  by targeted range writes so formulas are never clobbered.
+- **FX**: `ExchangeRate` becomes an **input** column. Default = **live rate fetched at
+  write time** (service layer stamps it), but **overridable per transaction** by the UI
+  or bot. `Amount (PHP)` stays an `ARRAYFORMULA` of `Amount × ExchangeRate`.
 - **Transfers** stay one row (ToAccount / ToCurrency / ToAmount); the service layer,
   UI, and bot all understand that shape.
 
@@ -111,9 +114,10 @@ go through it — no logic duplicated in n8n.
   (60/25/15) and segment targets (25/15/50/10).
 
 ### 4.4 Integrity & security
-- **Balances**: decide authoritative source — recommend **derive from Starting
-  Balance + transaction deltas** (transfers touch two accounts) so ledger and balances
-  never drift (Open item #1).
+- **Balances (per account type)**: cash / liquid / credit / receivable balance =
+  Starting Balance + Σ transaction deltas (transfers touch two accounts) so ledger and
+  balances never drift. **Shares** accounts: quantity = Starting + Σ share transactions,
+  PHP value = quantity × live price × FX (price via the Sheet's Google Finance, not the ledger).
 - **Validation / idempotency**: reject unknown categories/accounts; accept an
   idempotency key from n8n to prevent double-posts.
 - **Auth migration**: manifest → `executeAs: USER_DEPLOYING`, `access: MYSELF`
@@ -134,9 +138,11 @@ IDs and consistent derived fields; `Tests.gs` runner functions for verification.
   2. **Transactions** — filter/paginate; add / edit / delete; add transfer; quick-add FAB.
   3. **Accounts** — balances, edit, interest config, receivables.
   4. **Budgets** — segment targets vs actual; recurring/one-off obligations + Months Left.
-  5. **Investments / FIRE** — portfolio value (PHP), allocation vs Lean-6 core (60/25/15)
-     and segments (25/15/50/10), quarterly-rotation reminder, Stability-target progress
-     (~$2,000). Read-only analytics — *no trade execution*.
+  5. **Investments / FIRE** — **read-only in v1**, sourced from the Accounts sheet
+     (holdings keep being maintained in Google Finance + the Sheet). Shows portfolio value
+     (PHP), allocation vs Lean-6 core (60/25/15) and segments (25/15/50/10), quarterly-
+     rotation reminder, and Stability-target progress (~$2,000). In-app holding edits can
+     come later, once the read view is trusted.
   6. **Tax / BIR** — Ledger view: per-payout income, filed status, what's due (Calendar),
      running 8% liability.
 
@@ -165,13 +171,14 @@ project (`Financial_System.md`), not the app.
 - **Migration safety**: back up the Sheet before schema changes; add + backfill the ID
   column; verify derived columns reconcile against existing values.
 
-## 8. Open items (defaults chosen; confirm before Phase 1 lands)
+## 8. Resolved decisions (was "open items")
 
-1. **Balances** — derive from transactions *(recommended)* vs. keep manually-maintained
-   Current Balance?
-2. **Derived fields** — how are Type / Segment / Amount (PHP) populated today (sheet
-   formula vs. manual)? Drives migration; affects compute-on-write vs. ARRAYFORMULA.
-3. **FX** — static (Budgets = 59) vs. live rate captured at write time?
-4. **Investments v1** — read-only analytics *(recommended)* vs. editable holdings?
-5. **n8n auth** — OAuth-as-owner Bearer to the same API *(keeps one write path,
-   recommended)* vs. n8n writing directly via the Google Sheets API node?
+1. **Balances** — **derive** from Starting Balance + transactions, per account type
+   (Shares valued by quantity × live price). ✅
+2. **Derived fields** — currently **sheet formulas** → keep them, as header-anchored
+   **`ARRAYFORMULA`s**; the service layer writes input columns only. ✅
+3. **FX** — **live rate by default, overridable per transaction** via the `ExchangeRate`
+   input column. ✅
+4. **Investments v1** — **read-only**, sourced from the Sheet / Google Finance; in-app
+   editing deferred. ✅ (revisit once the read view is trusted)
+5. **n8n auth** — **OAuth-as-owner Bearer** to the same authenticated API. ✅
