@@ -12,7 +12,8 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 | File | Purpose |
 | --- | --- |
 | `Code.gs` | `doPost` (append a transaction) + `addDailyInterestTransactions` job. |
-| `Get.gs` | `doGet` — returns Categories + Accounts metadata as JSON. |
+| `Get.gs` | `doGet` — routes GET requests: data-pull params (`Read.gs`) else Categories + Accounts metadata as JSON. |
+| `Read.gs` | Data-pull helpers for testing: dump raw sheet rows as JSON via `doGet` query params. |
 | `appsscript.json` | Apps Script manifest (runtime, timezone, web app access). |
 | `.clasp.json` | Links repo to the Apps Script project (`scriptId`). |
 | `.claspignore` | Restricts clasp pushes (only `.gs`/`.js`/`.html` + manifest). |
@@ -23,7 +24,7 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 
 ## How the backend works
 **`doPost(e)` — log a transaction (`Code.gs`):** parses `e.postData.contents` JSON; reads the **`Transactions`** header row and maps incoming JSON keys to columns **by header name** (sheet order, missing keys → `""`); appends one row; returns `{status, message}` JSON. So body keys must exactly match `Transactions` headers; add a sheet column to support a new field — no code change.
-**`doGet(e)` — reference data (`Get.gs`):** returns `{Categories, Accounts}` JSON. `Categories` from **`Categories`** sheet → `{Type, Description}` keyed by category. `Accounts` from **`Accounts`** sheet → `{Currency}` keyed by name. When the frontend lands, `doGet` will likely branch (serve `HtmlService` UI vs. JSON API).
+**`doGet(e)` — reference data + data-pull (`Get.gs` + `Read.gs`):** with no params returns `{Categories, Accounts}` JSON (`Categories` → `{Type, Description}` keyed by category; `Accounts` → `{Currency}` keyed by name). Query params enable raw data pulls for testing: `?sheets` lists sheet names; `?sheet=<name>` dumps that sheet as `{sheet, headers, rows:[{header:value}]}` (`?sheet=all` dumps every sheet); optional `&limit=<n>` caps data rows. Helpers live in `Read.gs` (also runnable in-editor via `testPullData`). When the frontend lands, `doGet` will likely branch further (serve `HtmlService` UI vs. JSON API).
 **`addDailyInterestTransactions()` — scheduled job (`Code.gs`):** for each `Accounts` row with `Interest Frequency === "Daily"`: `gross = balance * rate / 365`, apply **20% withholding tax** (`WITHHOLDING_TAX_RATE`), round to 2dp, append an `Income: Interest` transaction. Driven by a daily time-based trigger (see MEMORY.md; triggers are configured in the GAS UI, not in source).
 
 ## Google Sheet structure (source of truth)
