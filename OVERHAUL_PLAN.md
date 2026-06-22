@@ -91,6 +91,12 @@ go through it — no logic duplicated in n8n.
   or bot. `Amount (PHP)` stays an `ARRAYFORMULA` of `Amount × ExchangeRate`.
 - **Transfers** stay one row (ToAccount / ToCurrency / ToAmount); the service layer,
   UI, and bot all understand that shape.
+- **Derivation guardrails** (perf + integrity): FX is frozen via the static
+  `ExchangeRate` input, *not* a live formula, so history never reprices; no volatile
+  functions (`GOOGLEFINANCE`/`TODAY`/`NOW`/`IMPORTRANGE`) inside the derivation band;
+  `GOOGLEFINANCE` for share prices stays in **Accounts** only; the service layer writes
+  input columns exclusively (a stray write into a formula column `#REF!`s the spill).
+  The one-time migration lives in `Migration.gs` + `MIGRATION.md`.
 
 ### 4.2 Service layer (flat namespace — unique fn names)
 - `Router.gs` — `doGet` / `doPost` dispatch by `?action=`; JSON vs. HTML.
