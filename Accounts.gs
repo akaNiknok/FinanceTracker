@@ -56,14 +56,22 @@ function api_getAccounts() {
 /**
  * Independent ledger recompute in NATIVE currency, per account, for Tests.gs:
  *   net = Σ (Income +, Expense −, Transfer: source −Amount, dest +ToAmount).
- * Each account's transactions are in its own currency, so this is comparable to
- * the sheet's native `Current Balance`. Returns { name: { net, count } }.
+ * Liability accounts (credit cards) track an amount-OWED that moves opposite to
+ * asset cash — a charge increases the balance — so their deltas are inverted to
+ * match the sheet's positive-owed convention. Each account's transactions are in
+ * its own currency, so this is comparable to the sheet's native `Current Balance`.
+ * Returns { name: { net, count } }.
  */
 function acct_computeDeltas_() {
+  const liab = {};
+  su_readObjects_(SHEET_ACCOUNTS).forEach(function (a) {
+    if (/liab/i.test(String(a.Type || ""))) liab[a.Name] = true;
+  });
   const rows = su_readObjects_(SHEET_TX);
   const acc = {};
   function bump(name, v) {
     if (!name) return;
+    if (liab[name]) v = -v; // liability: owed balance moves opposite to asset cash
     if (!acc[name]) acc[name] = { net: 0, count: 0 };
     acc[name].net += v; acc[name].count += 1;
   }
