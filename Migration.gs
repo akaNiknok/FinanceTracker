@@ -5,8 +5,8 @@
  *   1) setupMigration()          — backs up Transactions, adds the `ID` column,
  *                                   backfills a UUID into every existing row.
  *   2) applyDerivationFormulas() — converts the per-row derived columns
- *                                   (Month, Type, Segment, Currency, Amount (PHP))
- *                                   into single header-anchored ARRAYFORMULAs.
+ *                                   (Month, Type, Segment, Currency, Amount (PHP),
+ *                                   ToCurrency) into single header-anchored ARRAYFORMULAs.
  *
  * Everything is idempotent and column lookups are by HEADER NAME, so it tolerates
  * columns being in a different order. A timestamped backup sheet is made before any
@@ -79,6 +79,13 @@ function applyDerivationFormulas() {
     "Currency":     '=ARRAYFORMULA(IF(LEN(' + acc + '2:' + acc + '), IFERROR(VLOOKUP(' + acc + '2:' + acc + ', Accounts!$A:$B, 2, FALSE), ""), ""))',
     "Amount (PHP)": '=ARRAYFORMULA(IF(LEN(' + amt + '2:' + amt + '), ' + amt + '2:' + amt + ' * IF(LEN(' + fx + '2:' + fx + '), ' + fx + '2:' + fx + ', 1), ""))'
   };
+
+  // ToCurrency mirrors Currency but looks up the transfer destination (ToAccount).
+  // Only present on workbooks that carry the transfer columns, so add it conditionally.
+  if (h["ToAccount"] && h["ToCurrency"]) {
+    const toAcc = L("ToAccount");
+    formulas["ToCurrency"] = '=ARRAYFORMULA(IF(LEN(' + toAcc + '2:' + toAcc + '), IFERROR(VLOOKUP(' + toAcc + '2:' + toAcc + ', Accounts!$A:$B, 2, FALSE), ""), ""))';
+  }
 
   const lastRow = sheet.getLastRow();
   Object.keys(formulas).forEach(function (colName) {

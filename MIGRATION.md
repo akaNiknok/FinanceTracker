@@ -12,8 +12,8 @@ the service layer can write **input columns only**. Code lives in `Migration.gs`
 
 - Current Transactions layout (A→…): `.`, Date, **Month**, Category, Description,
   **Type**, **Segment**, Account, **Currency**, Amount, **Amount (PHP)**, ExchangeRate,
-  ToAccount, ToCurrency, ToAmount. Bold = derived (becomes ARRAYFORMULA). `ExchangeRate`
-  stays a **static input** (the frozen FX lever) — it is *not* converted.
+  ToAccount, **ToCurrency**, ToAmount. Bold = derived (becomes ARRAYFORMULA).
+  `ExchangeRate` stays a **static input** (the frozen FX lever) — it is *not* converted.
 - The script finds columns by **header name**, so order doesn't matter — but the header
   text must match exactly (`Amount (PHP)`, `ExchangeRate`, etc.).
 
@@ -101,6 +101,11 @@ Replace `yyyy-mm` in the Month formula with your chosen format.
 **`Currency`** (cell `I2`):
 ```
 =ARRAYFORMULA(IF(LEN(H2:H), IFERROR(VLOOKUP(H2:H, Accounts!$A:$B, 2, FALSE), ""), ""))
+```
+
+**`ToCurrency`** (cell `N2`) — mirrors Currency but looks up `ToAccount` (col M):
+```
+=ARRAYFORMULA(IF(LEN(M2:M), IFERROR(VLOOKUP(M2:M, Accounts!$A:$B, 2, FALSE), ""), ""))
 ```
 
 **`Amount (PHP)`** (cell `K2`):
