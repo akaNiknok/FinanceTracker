@@ -1,7 +1,9 @@
 # FinanceTracker — System Overhaul Plan
 
-Status: **scope locked** (2026-06-22). All five open items resolved (§8); ready to
-start Phase 1.
+Status: **Phase 1 implemented** (2026-06-24) — migration done owner-side; service
+layer + `?action=` JSON API built (see `CLAUDE.md` and the 2026-06-24 MEMORY note).
+Pending owner verification (`Tests.gs test_balanceReconciliation`) before Phase 2.
+All five open items resolved (§8).
 
 ## 1. Goal
 

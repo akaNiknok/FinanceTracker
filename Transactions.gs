@@ -1,0 +1,200 @@
+/**
+ * Transactions.gs — create / list / update / delete + transfers.
+ *
+ * All writes go through su_*InputRow_ so only input columns are touched and the
+ * Month/Type/Segment/Currency/Amount (PHP)/ToCurrency ARRAYFORMULAs keep spilling.
+ * Validation rejects unknown categories/accounts. IDs are assigned server-side.
+ */
+
+// ── reference data ────────────────────────────────────────────────────────────
+function tx_categoriesMap_() {
+  const map = {};
+  su_readObjects_(SHEET_CATEGORIES).forEach(function (r) {
+    if (r.Category) map[r.Category] = { Type: r.Type || null, Segment: r.Segment || null };
+  });
+  return map;
+}
+function tx_accountsMap_() {
+  const map = {};
+  su_readObjects_(SHEET_ACCOUNTS).forEach(function (r) {
+    if (r.Name) map[r.Name] = r;
+  });
+  return map;
+}
+
+// ── create ────────────────────────────────────────────────────────────────────
+function api_createTransaction(args) {
+  args = args || {};
+  const cats = tx_categoriesMap_();
+  const accts = tx_accountsMap_();
+
+  const category = args.Category;
+  const account  = args.Account;
+  if (!category) throw new Error("Missing required field: Category");
+  if (!account)  throw new Error("Missing required field: Account");
+  if (!cats[category])  throw new Error("Unknown Category: " + category);
+  if (!accts[account])  throw new Error("Unknown Account: " + account);
+  if (args.Amount === undefined || args.Amount === "" || isNaN(parseFloat(args.Amount)))
+    throw new Error("Missing/invalid required field: Amount");
+
+  // Idempotency: if caller passes an existing ID, return the existing row instead
+  // of double-posting (used by n8n retries).
+  const sheet = su_sheet_(SHEET_TX);
+  const h = su_headerMap_(sheet);
+  if (args.ID) {
+    const existing = su_findRowById_(sheet, h, args.ID);
+    if (existing) return { status: "duplicate", message: "ID already exists.",
+                           transaction: tx_rowObject_(sheet, h, existing) };
+  }
+
+  const currency = accts[account].Currency;
+  const fx = fx_resolveRate_(currency, args.ExchangeRate);
+
+  const input = {
+    ID:          args.ID || Utilities.getUuid(),
+    Date:        args.Date || new Date(),
+    Category:    category,
+    Description: args.Description || "",
+    Account:     account,
+    Amount:      parseFloat(args.Amount)
+  };
+  if (!fx.blank) input.ExchangeRate = fx.rate;
+
+  const row = su_appendInputRow_(sheet, h, input);
+  const created = tx_rowObject_(sheet, h, row);
+  const res = { status: "success", message: "Transaction created.", transaction: created };
+  if (fx.warning) res.warning = fx.warning;
+  return res;
+}
+
+// ── transfer (one row: source Account + ToAccount/ToAmount) ───────────────────
+function api_createTransfer(args) {
+  args = args || {};
+  const cats = tx_categoriesMap_();
+  const accts = tx_accountsMap_();
+
+  const account   = args.Account;     // source
+  const toAccount = args.ToAccount;   // destination
+  const category  = args.Category;    // a Transfer-type category
+  if (!account || !toAccount) throw new Error("Transfer needs both Account and ToAccount.");
+  if (!accts[account])   throw new Error("Unknown Account: " + account);
+  if (!accts[toAccount]) throw new Error("Unknown ToAccount: " + toAccount);
+  if (account === toAccount) throw new Error("Account and ToAccount must differ.");
+  if (!category) throw new Error("Transfer needs a Category (Transfer type).");
+  if (!cats[category]) throw new Error("Unknown Category: " + category);
+  if (args.Amount === undefined || isNaN(parseFloat(args.Amount)))
+    throw new Error("Missing/invalid Amount (source amount).");
+
+  // ToAmount defaults to Amount (same-currency transfer); pass it for cross-currency.
+  const toAmount = (args.ToAmount !== undefined && args.ToAmount !== "")
+    ? parseFloat(args.ToAmount) : parseFloat(args.Amount);
+
+  const sheet = su_sheet_(SHEET_TX);
+  const h = su_headerMap_(sheet);
+  const fx = fx_resolveRate_(accts[account].Currency, args.ExchangeRate);
+
+  const input = {
+    ID:          args.ID || Utilities.getUuid(),
+    Date:        args.Date || new Date(),
+    Category:    category,
+    Description: args.Description || "",
+    Account:     account,
+    Amount:      parseFloat(args.Amount),
+    ToAccount:   toAccount,
+    ToAmount:    toAmount
+  };
+  if (!fx.blank) input.ExchangeRate = fx.rate;
+
+  const row = su_appendInputRow_(sheet, h, input);
+  return { status: "success", message: "Transfer created.",
+           transaction: tx_rowObject_(sheet, h, row) };
+}
+
+// ── list (filters + pagination, most-recent first) ────────────────────────────
+function api_listTransactions(args) {
+  args = args || {};
+  const rows = su_readObjects_(SHEET_TX);
+  const month    = args.month    ? String(args.month) : "";
+  const account  = args.account  ? String(args.account) : "";
+  const category = args.category ? String(args.category) : "";
+  const segment  = args.segment  ? String(args.segment) : "";
+  const search   = args.search   ? String(args.search).toLowerCase() : "";
+
+  let filtered = rows.filter(function (r) {
+    if (month    && String(r.Month)    !== month) return false;
+    if (account  && String(r.Account)  !== account && String(r.ToAccount) !== account) return false;
+    if (category && String(r.Category) !== category) return false;
+    if (segment  && String(r.Segment)  !== segment) return false;
+    if (search) {
+      const hay = (String(r.Description) + " " + String(r.Category)).toLowerCase();
+      if (hay.indexOf(search) === -1) return false;
+    }
+    return true;
+  });
+  filtered.reverse(); // most recent first
+
+  const total  = filtered.length;
+  const offset = Math.max(0, parseInt(args.offset, 10) || 0);
+  const limit  = Math.max(1, parseInt(args.limit, 10) || 100);
+  const page = filtered.slice(offset, offset + limit).map(tx_clean_);
+  return { status: "success", total: total, offset: offset, limit: limit, transactions: page };
+}
+
+// ── update (input columns only, by ID) ────────────────────────────────────────
+function api_updateTransaction(args) {
+  args = args || {};
+  if (!args.ID) throw new Error("update requires an ID.");
+  const sheet = su_sheet_(SHEET_TX);
+  const h = su_headerMap_(sheet);
+  const row = su_findRowById_(sheet, h, args.ID);
+  if (!row) throw new Error("No transaction with ID: " + args.ID);
+
+  const cats = tx_categoriesMap_();
+  const accts = tx_accountsMap_();
+  if (args.Category !== undefined && !cats[args.Category]) throw new Error("Unknown Category: " + args.Category);
+  if (args.Account  !== undefined && !accts[args.Account]) throw new Error("Unknown Account: " + args.Account);
+  if (args.ToAccount !== undefined && args.ToAccount !== "" && !accts[args.ToAccount])
+    throw new Error("Unknown ToAccount: " + args.ToAccount);
+
+  // Only apply provided client fields (never ID via this path, never derived cols).
+  const patch = {};
+  TX_CLIENT_FIELDS.forEach(function (f) { if (args[f] !== undefined) patch[f] = args[f]; });
+  if (Object.keys(patch).length === 0) throw new Error("Nothing to update.");
+  if (patch.Amount !== undefined) patch.Amount = parseFloat(patch.Amount);
+  if (patch.ToAmount !== undefined && patch.ToAmount !== "") patch.ToAmount = parseFloat(patch.ToAmount);
+
+  su_setInputCells_(sheet, h, row, patch);
+  SpreadsheetApp.flush();
+  return { status: "success", message: "Transaction updated.",
+           transaction: tx_rowObject_(sheet, h, row) };
+}
+
+// ── delete (by ID) ────────────────────────────────────────────────────────────
+function api_deleteTransaction(args) {
+  args = args || {};
+  if (!args.ID) throw new Error("delete requires an ID.");
+  const sheet = su_sheet_(SHEET_TX);
+  const h = su_headerMap_(sheet);
+  const row = su_findRowById_(sheet, h, args.ID);
+  if (!row) throw new Error("No transaction with ID: " + args.ID);
+  const snapshot = tx_rowObject_(sheet, h, row);
+  sheet.deleteRow(row);
+  return { status: "success", message: "Transaction deleted.", transaction: snapshot };
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+/** Read one transaction row (incl. derived values) as a clean object. */
+function tx_rowObject_(sheet, headerMap, row) {
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const vals = sheet.getRange(row, 1, 1, lastCol).getValues()[0];
+  const obj = {};
+  headers.forEach(function (hname, i) { if (hname !== "") obj[hname] = vals[i]; });
+  return tx_clean_(obj);
+}
+
+/** Strip the internal __row marker before returning to a client. */
+function tx_clean_(obj) {
+  if (obj && obj.__row !== undefined) { const c = {}; Object.keys(obj).forEach(function (k) { if (k !== "__row") c[k] = obj[k]; }); return c; }
+  return obj;
+}

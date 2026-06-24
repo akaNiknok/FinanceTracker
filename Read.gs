@@ -76,13 +76,6 @@ function listSheetNames() {
   };
 }
 
-/** Wrap an object as a pretty-printed JSON ContentService response. */
-function jsonResponse(obj) {
-  return ContentService.createTextOutput(
-    JSON.stringify(obj, null, 2)
-  ).setMimeType(ContentService.MimeType.JSON);
-}
-
 /**
  * Convenience runner for the Apps Script editor (no web request needed):
  * select this function, Run, then check Logs to see the data.
