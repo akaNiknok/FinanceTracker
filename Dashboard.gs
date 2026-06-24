@@ -12,20 +12,18 @@ function api_getDashboard(args) {
   const accountsRes = api_getAccounts();
   const accounts = accountsRes.accounts;
 
-  // Net worth = Σ each account's trusted PHP balance (balancePhp: computed for
-  // PHP cash, sheet-stored for FX/shares). Liability accounts compute negative
-  // (debt reduces net worth), so we sum straight through; assets = positive,
-  // liabilities = negative.
+  // Net worth uses each account's signed PHP balance (netWorthPhp: assets +,
+  // liabilities −). Balances come straight from the sheet's formula columns.
   let netWorth = 0, assets = 0, liabilities = 0, sharesValue = 0;
   const byType = {}, bySubtype = {};
   accounts.forEach(function (a) {
-    const php = (a.balancePhp === null || a.balancePhp === undefined) ? 0 : a.balancePhp;
-    if (a.computedBalance === null) sharesValue += php; // shares contribution
+    const php = (a.netWorthPhp === null || a.netWorthPhp === undefined) ? 0 : a.netWorthPhp;
+    if (a.isShares) sharesValue += (a.balancePhp || 0); // shares contribution (always asset)
     const t = a.type || "Unknown", s = a.subtype || "Unknown";
     byType[t] = (byType[t] || 0) + php;
     bySubtype[s] = (bySubtype[s] || 0) + php;
     netWorth += php;
-    if (php >= 0) assets += php; else liabilities += php; // liabilities kept negative
+    if (a.isLiability) liabilities += php; else assets += php; // liabilities are negative
   });
 
   // This-month expenses by Segment.
@@ -64,7 +62,7 @@ function api_getInvestments() {
   }).map(function (a) {
     return {
       name: a.name, subtype: a.subtype, currency: a.currency,
-      quantity: a.computedQuantity,
+      quantity: a.isShares ? a.balanceNative : null, // native = share quantity for Shares accts
       valuePhp: a.balancePhp
     };
   });

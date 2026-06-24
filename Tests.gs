@@ -39,20 +39,27 @@ function test_listTransactions() {
   if (r.transactions.length) Logger.log("newest: %s", JSON.stringify(r.transactions[0]));
 }
 
-/** Compare derived computedBalance vs the sheet's storedBalance, per account. */
+/**
+ * Integrity check: does the ledger (Transactions) agree with the Accounts sheet's
+ * balance formula? Compares the sheet's NATIVE `Current Balance` against an
+ * independent recompute (Starting Balance + Σ native deltas). This is in native
+ * currency, so USD and Shares accounts reconcile too (no FX noise). Any flagged
+ * row means the ledger and the sheet's SUMIF disagree — a real data issue to chase.
+ */
 function test_balanceReconciliation() {
   const accts = api_getAccounts().accounts;
-  Logger.log("== Balance reconciliation (computed vs stored) ==");
+  const deltas = acct_computeDeltas_();
+  Logger.log("== Ledger vs sheet balance (native currency) ==");
   accts.forEach(function (a) {
-    if (a.computedBalance === null) {
-      Logger.log(a.name + " | shares qty=" + a.computedQuantity + " (stored PHP " + a.storedBalance + ")");
-      return;
-    }
-    const diff = a.storedBalance === null ? "n/a" : Math.round((a.computedBalance - a.storedBalance) * 100) / 100;
-    const flag = (diff !== "n/a" && Math.abs(diff) >= 1) ? "  <-- CHECK" : "";
-    Logger.log(a.name + " | computed=" + a.computedBalance + " stored=" + a.storedBalance + " diff=" + diff + flag);
+    const start = a.startingBalance || 0;
+    const recompute = Math.round((start + (deltas[a.name] ? deltas[a.name].net : 0)) * 100) / 100;
+    const sheetNative = a.balanceNative;
+    const diff = (sheetNative === null) ? "n/a" : Math.round((recompute - sheetNative) * 100) / 100;
+    const flag = (diff !== "n/a" && Math.abs(diff) >= 0.01) ? "  <-- CHECK" : "";
+    Logger.log(a.name + " (" + a.currency + ") | sheet=" + sheetNative + " ledger=" + recompute +
+               " diff=" + diff + " | PHP=" + a.balancePhp + flag);
   });
-  Logger.log("If diffs are large/consistent, the Amount sign convention or Starting-Balance header may need tuning (see Accounts.gs).");
+  Logger.log("Flagged rows = ledger and sheet disagree. Clean = the sheet's balance formula matches the Transactions ledger.");
 }
 
 /** Create a throwaway transaction with real category/account, read it, delete it. */

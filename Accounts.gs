@@ -1,97 +1,79 @@
 /**
- * Accounts.gs — account listing, derived balances, and edits.
+ * Accounts.gs — account listing, balances, and edits.
  *
- * Balance model (OVERHAUL_PLAN §4.4): balance = Starting Balance + Σ transaction
- * deltas, signed by category Type (Income +, Expense −, Transfer moves between
- * the source Account and ToAccount). Amounts are taken in PHP from the
- * `Amount (PHP)` formula column.
+ * Balances are NOT recomputed in code. The Accounts sheet already derives them by
+ * formula: `Current Balance` (native currency) and `Current Balance (PHP)` =
+ * Starting Balance + Σ transactions, with live FX for non-PHP accounts and Google
+ * Finance pricing for Shares. The service layer just READS those — same principle
+ * as the Transactions ARRAYFORMULAs (derivation lives in the Sheet). Because the
+ * sheet's totals are SUMIFs over Transactions, they stay live the instant the API
+ * appends a row.
  *
- * ⚠ LIVE-DATA ASSUMPTIONS to verify with Tests.gs (acct schema isn't visible from
- * here): (a) the Starting-Balance header name; (b) whether `Amount` is stored
- * unsigned (Type drives sign — what we assume) or already signed; (c) Shares
- * accounts — quantity is derived, but PHP valuation stays with the sheet's
- * Google-Finance `Current Balance (PHP)`. `computedBalance` is shown next to the
- * sheet's `storedBalance` so any drift is obvious before the UI trusts it.
+ * `balancePhp` is the sheet value as shown (liabilities are positive amounts owed);
+ * `netWorthPhp` is signed for net-worth math (liabilities negative). For Shares
+ * accounts `balanceNative` is the share quantity. The JS ledger recompute survives
+ * only in Tests.gs (test_balanceReconciliation) as an independent integrity check.
  */
 
 // Editable Account columns (never write a formula/derived column like Current Balance).
 const ACCOUNT_EDITABLE = ["Starting Balance", "Interest Frequency", "Interest Rate", "Credit Limit", "Notes"];
 // Header candidates we tolerate for the same concept.
 const ACCT_START_HEADERS  = ["Starting Balance", "Starting Balance (PHP)", "Start Balance"];
-const ACCT_STORED_HEADERS = ["Current Balance (PHP)", "Current Balance", "Balance (PHP)"];
+const ACCT_NATIVE_HEADERS = ["Current Balance"];                                  // native currency
+const ACCT_STORED_HEADERS = ["Current Balance (PHP)", "Current Balance", "Balance (PHP)"]; // PHP (formula)
+const ACCT_CREDIT_HEADERS = ["Available Credit"];
 
 function api_getAccounts() {
   const accounts = su_readObjects_(SHEET_ACCOUNTS);
-  const deltas = acct_computeDeltas_();
   const out = accounts.map(function (a) {
-    const name = a.Name;
-    const start = acct_num_(acct_pick_(a, ACCT_START_HEADERS));
-    const stored = acct_pick_(a, ACCT_STORED_HEADERS);
-    const d = deltas[name] || { net: 0, qty: 0, count: 0 };
+    const type = a.Type || null;
+    const isLiability = /liab/i.test(String(type));
     const isShares = String(a.Currency).toUpperCase() === "SHARES" ||
                      /share|stock/i.test(String(a.Subtype || ""));
-    const isPhp = String(a.Currency || BASE_CURRENCY).toUpperCase() === BASE_CURRENCY;
-    const computed = isShares ? null : Math.round((start + d.net) * 100) / 100;
-    const storedNum = (stored === "" || stored === undefined) ? null : acct_num_(stored);
-
-    // Which PHP figure to trust: PHP cash accounts derive cleanly (validated), so
-    // use computed. Non-PHP (FX) and Shares accounts can't be valued by summing
-    // historical Amount (PHP) — the sheet already prices them via live FX / Google
-    // Finance, so we trust the sheet's stored balance there.
-    let balancePhp, balanceSource;
-    if (isShares)        { balancePhp = storedNum; balanceSource = "stored:shares"; }
-    else if (!isPhp)     { balancePhp = (storedNum !== null ? storedNum : computed); balanceSource = "stored:fx"; }
-    else                 { balancePhp = computed; balanceSource = "computed"; }
-
+    const balancePhp = acct_pickNum_(a, ACCT_STORED_HEADERS);
+    const signed = (balancePhp === null) ? null : (isLiability ? -balancePhp : balancePhp);
     return {
-      name: name,
+      name: a.Name,
       currency: a.Currency || null,
-      type: a.Type || null,
+      type: type,
       subtype: a.Subtype || null,
-      startingBalance: start,
-      balancePhp: balancePhp,            // the figure the UI/dashboard should use
-      balanceSource: balanceSource,
-      computedBalance: computed,         // derived (PHP-cash authoritative; else reference)
-      computedQuantity: isShares ? (start + d.qty) : null,
-      storedBalance: storedNum,
-      txCount: d.count,
+      startingBalance: acct_pickNum_(a, ACCT_START_HEADERS),
+      balancePhp: balancePhp,                        // sheet value as shown (liabilities positive)
+      balanceNative: acct_pickNum_(a, ACCT_NATIVE_HEADERS), // native; for Shares this is the quantity
+      netWorthPhp: signed,                           // signed for net-worth (liabilities negative)
+      availableCredit: acct_pickNum_(a, ACCT_CREDIT_HEADERS),
+      isLiability: isLiability,
+      isShares: isShares,
       interestFrequency: a["Interest Frequency"] || null,
       interestRate: a["Interest Rate"] || null,
-      creditLimit: a["Credit Limit"] || null,
+      creditLimit: acct_pickNum_(a, ["Credit Limit"]),
       notes: a.Notes || null
     };
   });
   return { status: "success", accounts: out };
 }
 
-/** One pass over Transactions → per-account { net (PHP), qty (shares), count }. */
+/**
+ * Independent ledger recompute in NATIVE currency, per account, for Tests.gs:
+ *   net = Σ (Income +, Expense −, Transfer: source −Amount, dest +ToAmount).
+ * Each account's transactions are in its own currency, so this is comparable to
+ * the sheet's native `Current Balance`. Returns { name: { net, count } }.
+ */
 function acct_computeDeltas_() {
   const rows = su_readObjects_(SHEET_TX);
   const acc = {};
-  function bump(name, field, v) {
+  function bump(name, v) {
     if (!name) return;
-    if (!acc[name]) acc[name] = { net: 0, qty: 0, count: 0 };
-    acc[name][field] += v;
-    if (field === "net" || field === "qty") acc[name].count += 1;
+    if (!acc[name]) acc[name] = { net: 0, count: 0 };
+    acc[name].net += v; acc[name].count += 1;
   }
   rows.forEach(function (r) {
     const type = String(r.Type || "");
-    const amtPhp = acct_num_(r["Amount (PHP)"]);
-    const rawAmt = acct_num_(r.Amount);
-    const isSharesRow = String(r.Currency).toUpperCase() === "SHARES";
-
-    if (type === "Transfer") {
-      // Source loses; destination gains (ToAmount in dest currency → PHP best-effort).
-      if (isSharesRow) bump(r.Account, "qty", -rawAmt);
-      else             bump(r.Account, "net", -amtPhp);
-      const toPhp = acct_toAmountPhp_(r);
-      if (String(r.ToCurrency).toUpperCase() === "SHARES") bump(r.ToAccount, "qty", acct_num_(r.ToAmount));
-      else                                                  bump(r.ToAccount, "net", toPhp);
-    } else if (type === "Expense") {
-      if (isSharesRow) bump(r.Account, "qty", -rawAmt); else bump(r.Account, "net", -amtPhp);
-    } else { // Income or untyped → treat as inflow
-      if (isSharesRow) bump(r.Account, "qty", rawAmt); else bump(r.Account, "net", amtPhp);
-    }
+    const amt = acct_num_(r.Amount);
+    const toAmt = acct_num_(r.ToAmount);
+    if (type === "Transfer")      { bump(r.Account, -amt); bump(r.ToAccount, toAmt); }
+    else if (type === "Expense")  { bump(r.Account, -amt); }
+    else                          { bump(r.Account, amt); } // Income / untyped → inflow
   });
   return acc;
 }
@@ -124,17 +106,13 @@ function acct_pick_(obj, headers) {
   for (let i = 0; i < headers.length; i++) if (obj[headers[i]] !== undefined && obj[headers[i]] !== "") return obj[headers[i]];
   return "";
 }
+/** Like acct_pick_ but coerced to a number, or null when the cell is blank. */
+function acct_pickNum_(obj, headers) {
+  const v = acct_pick_(obj, headers);
+  return (v === "" || v === null || v === undefined) ? null : acct_num_(v);
+}
 function acct_num_(v) {
   if (v === "" || v === null || v === undefined) return 0;
-  const n = parseFloat(String(v).replace(/[, ]/g, ""));
+  const n = parseFloat(String(v).replace(/[, ()]/g, function (m) { return m === "(" ? "-" : ""; }));
   return isNaN(n) ? 0 : n;
-}
-/** Destination PHP value of a transfer's ToAmount (best-effort for cross-currency). */
-function acct_toAmountPhp_(r) {
-  const toAmt = acct_num_(r.ToAmount);
-  if (!toAmt) return 0;
-  const cur = String(r.ToCurrency || BASE_CURRENCY).toUpperCase();
-  if (cur === BASE_CURRENCY) return toAmt;
-  const rate = fx_liveRate_(cur, BASE_CURRENCY);
-  return rate ? toAmt * rate : toAmt; // fall back to face value if no rate
 }
