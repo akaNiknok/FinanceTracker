@@ -12,8 +12,16 @@ const SHEET_TX        = "Transactions";
 const SHEET_ACCOUNTS  = "Accounts";
 const SHEET_CATEGORIES = "Categories";
 const SHEET_BUDGETS   = "Budgets";
+const SHEET_RECURRING = "Recurring";
 const SHEET_CALENDAR  = "Calendar";
 const SHEET_LEDGER    = "Ledger";
+
+// ── Budgets column model ──────────────────────────────────────────────────────
+// The Budgets sheet holds the PLAN only — one row per segment. Actuals/remaining/%
+// are computed in Budgets.gs from the Transactions ledger (period-aware), never
+// stored. Target Type = "Percent" (of MONTHLY_INCOME_PHP) or "Amount" (Currency
+// USD resolves at live FX; else passes through). Period = "Monthly"|"Quarterly".
+const BUDGET_INPUT_COLS = ["Segment", "Period", "Target Type", "Target", "Currency", "Notes"];
 
 // ── Transactions column model ────────────────────────────────────────────────
 // INPUT columns: the only cells the service layer is allowed to write. Anything
@@ -45,6 +53,7 @@ const BASE_CURRENCY = "PHP";
 //   ENFORCE_TOKEN     — "true" to require API_TOKEN on writes (default: off, so
 //                       the live n8n bot keeps working until Phase 3 cuts over).
 //   USD_PHP_FALLBACK  — exchange rate used if the live FX fetch fails.
+//   MONTHLY_INCOME_PHP — planning base for percent-of-income budget targets.
 function cfg_(key, fallback) {
   const v = PropertiesService.getScriptProperties().getProperty(key);
   return (v === null || v === undefined || v === "") ? fallback : v;
@@ -53,3 +62,4 @@ function cfgOwnerEmail_()    { return cfg_("OWNER_EMAIL", "austingimperial@gmail
 function cfgApiToken_()      { return cfg_("API_TOKEN", ""); }
 function cfgEnforceToken_()  { return String(cfg_("ENFORCE_TOKEN", "false")).toLowerCase() === "true"; }
 function cfgUsdPhpFallback_(){ return parseFloat(cfg_("USD_PHP_FALLBACK", "0")) || 0; }
+function cfgMonthlyIncomePhp_(){ return parseFloat(cfg_("MONTHLY_INCOME_PHP", "47200")) || 0; }

@@ -34,6 +34,22 @@ const MIG_ACCTTYPE_SEED = [
 const MIG_VALIDATION_STRICT = false; // false = warn on bad entry; true = reject it outright
 const MIG_INTEREST_FREQS = ["Daily", "Weekly", "Monthly", "Quarterly", "Annually"];
 
+// Budgets redesign (setupBudgets): targets-only Budgets sheet + a Recurring sheet.
+// The Budgets sheet stores only the PLAN; actuals/remaining/% are computed live in
+// Budgets.gs. Hybrid targets: Percent rows resolve against MONTHLY_INCOME_PHP,
+// the Growth USD cap converts at live FX. Tweak the seed after running.
+const MIG_BUDGETS_SHEET   = "Budgets";
+const MIG_RECURRING_SHEET = "Recurring";
+const MIG_BUDGET_HEADERS  = ["Segment", "Period", "Target Type", "Target", "Currency", "Notes"];
+const MIG_BUDGET_SEED = [
+  ["Essentials", "Monthly",   "Percent", 50,  "",    ""],
+  ["Rewards",    "Monthly",   "Percent", 10,  "",    ""],
+  ["Stability",  "Monthly",   "Percent", 15,  "",    "unfunded until a dedicated savings account exists"],
+  ["Growth",     "Quarterly", "Amount",  200, "USD", "quarterly investing cap"]
+];
+const MIG_RECURRING_HEADERS  = ["Description", "Currency", "Amount", "Transaction Fee", "Months Left", "Group"];
+const MIG_DEFAULT_INCOME_PHP = 47200; // sets MONTHLY_INCOME_PHP if it isn't set yet
+
 // Derived columns that become ARRAYFORMULAs (input columns are left untouched).
 // ExchangeRate is intentionally NOT here — it stays a static, stamped input so FX
 // history never drifts. Amount (PHP) = Amount × ExchangeRate (frozen per row).
@@ -239,6 +255,97 @@ function setupDataValidation() {
   }
 
   Logger.log("== setupDataValidation done. Cells with a red corner = existing value not in the list (a typo to fix). ==");
+}
+
+// ── 5. Budgets redesign (optional, run once) ───────────────────────────────────
+// Collapses the old Budgets sheet (3 duplicate target columns + a pinned, stale
+// USD→PHP rate + sheet-computed actuals + an "Essentials & Rewards" roll-up row)
+// into a targets-ONLY plan: Segment, Period, Target Type, Target, Currency, Notes.
+// Actuals/remaining/% are computed live in Budgets.gs. The embedded "Monthly
+// Expenses" table is split out into its own Recurring sheet. Backs up the old
+// Budgets sheet wholesale; idempotent (re-running won't clobber an edited layout).
+function setupBudgets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  Logger.log("== setupBudgets ==");
+
+  const old = ss.getSheetByName(MIG_BUDGETS_SHEET);
+  if (!old) throw new Error("Sheet not found: " + MIG_BUDGETS_SHEET);
+
+  const hdr = old.getRange(1, 1, 1, Math.max(1, old.getLastColumn())).getValues()[0].map(String);
+  if (hdr.indexOf("Target Type") !== -1) {
+    Logger.log("Budgets already migrated (has 'Target Type') — not rebuilding it.");
+  } else {
+    // Read the whole old sheet up front; we mine the Monthly Expenses block from it.
+    const grid = old.getDataRange().getValues();
+    mig_buildRecurring_(ss, grid);
+
+    const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
+    old.setName(MIG_BUDGETS_SHEET + "_backup_" + stamp);
+    Logger.log("Backup created: %s", old.getName());
+
+    const fresh = ss.insertSheet(MIG_BUDGETS_SHEET);
+    fresh.getRange(1, 1, 1, MIG_BUDGET_HEADERS.length).setValues([MIG_BUDGET_HEADERS]);
+    fresh.getRange(2, 1, MIG_BUDGET_SEED.length, MIG_BUDGET_HEADERS.length).setValues(MIG_BUDGET_SEED);
+    fresh.setFrozenRows(1);
+    fresh.autoResizeColumns(1, MIG_BUDGET_HEADERS.length);
+    Logger.log("Rebuilt '%s' with %s segment target row(s) — adjust the percents/cap to taste.", MIG_BUDGETS_SHEET, MIG_BUDGET_SEED.length);
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty("MONTHLY_INCOME_PHP")) {
+    props.setProperty("MONTHLY_INCOME_PHP", String(MIG_DEFAULT_INCOME_PHP));
+    Logger.log("Set MONTHLY_INCOME_PHP = %s (Script Property) — update it when your income changes.", MIG_DEFAULT_INCOME_PHP);
+  } else {
+    Logger.log("MONTHLY_INCOME_PHP already set to %s.", props.getProperty("MONTHLY_INCOME_PHP"));
+  }
+  Logger.log("== setupBudgets done. No redeploy needed for the sheet change. ==");
+}
+
+/** Locate the 'Monthly Expenses' table inside the old Budgets grid (by its
+ *  'Description' header) and copy it to a new Recurring sheet. Generic: reads down
+ *  until a blank Description. Skips if a Recurring sheet already exists. */
+function mig_buildRecurring_(ss, grid) {
+  if (ss.getSheetByName(MIG_RECURRING_SHEET)) {
+    Logger.log("'%s' already exists — leaving it as-is (not re-extracting).", MIG_RECURRING_SHEET);
+    return;
+  }
+  let hRow = -1; const col = {};
+  for (let r = 0; r < grid.length && hRow === -1; r++) {
+    for (let c = 0; c < grid[r].length; c++) {
+      if (String(grid[r][c]).trim().toLowerCase() === "description") { hRow = r; break; }
+    }
+  }
+  if (hRow === -1) {
+    Logger.log("No 'Monthly Expenses' (Description) block found — created an empty Recurring sheet.");
+    mig_writeRecurring_(ss, []);
+    return;
+  }
+  grid[hRow].forEach(function (cell, c) {
+    const k = String(cell).trim().toLowerCase();
+    if (k === "description") col.desc = c;
+    else if (k === "currency") col.cur = c;
+    else if (k === "amount") col.amt = c;
+    else if (k.indexOf("fee") !== -1) col.fee = c;
+    else if (k.indexOf("month") !== -1) col.months = c;
+  });
+  const pick = function (row, c) { return (c === undefined) ? "" : row[c]; };
+  const out = [];
+  for (let r = hRow + 1; r < grid.length; r++) {
+    const desc = String(grid[r][col.desc]).trim();
+    if (desc === "") break; // table ends at the first blank Description
+    const group = /sss|bir|philhealth|pag-?ibig/i.test(desc) ? "Govt" : "";
+    out.push([desc, pick(grid[r], col.cur), pick(grid[r], col.amt), pick(grid[r], col.fee), pick(grid[r], col.months), group]);
+  }
+  mig_writeRecurring_(ss, out);
+  Logger.log("Extracted %s recurring row(s) → '%s'.", out.length, MIG_RECURRING_SHEET);
+}
+
+function mig_writeRecurring_(ss, rows) {
+  const sheet = ss.insertSheet(MIG_RECURRING_SHEET);
+  sheet.getRange(1, 1, 1, MIG_RECURRING_HEADERS.length).setValues([MIG_RECURRING_HEADERS]);
+  if (rows.length) sheet.getRange(2, 1, rows.length, MIG_RECURRING_HEADERS.length).setValues(rows);
+  sheet.setFrozenRows(1);
+  sheet.autoResizeColumns(1, MIG_RECURRING_HEADERS.length);
 }
 
 // ── private helpers (trailing underscore = not web-exposed) ────────────────────

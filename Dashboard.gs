@@ -49,7 +49,7 @@ function api_getDashboard(args) {
     balancesByType: dash_round_(byType),
     balancesBySubtype: dash_round_(bySubtype),
     spendBySegment: dash_round_(spendBySegment),
-    budgets: reads_clean_(su_readObjects_(SHEET_BUDGETS)),
+    budgets: api_getBudgets({ month: month }).budgets, // targets + computed actuals, period-aware
     recentTransactions: recent
   };
 }

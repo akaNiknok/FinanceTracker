@@ -5,9 +5,15 @@
  * schema. getBootstrap bundles everything the UI needs on load.
  */
 
-function api_getBudgets()  { return { status: "success", rows: reads_clean_(su_readObjects_(SHEET_BUDGETS)) }; }
+// api_getBudgets lives in Budgets.gs (it computes actuals, not a raw row dump).
 function api_getCalendar()  { return { status: "success", rows: reads_clean_(su_readObjects_(SHEET_CALENDAR)) }; }
 function api_getLedger()   { return { status: "success", rows: reads_clean_(su_readObjects_(SHEET_LEDGER)) }; }
+
+/** Recurring bills / installments (reference notes). Empty if the sheet is absent. */
+function api_getRecurring() {
+  if (!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECURRING)) return { status: "success", rows: [] };
+  return { status: "success", rows: reads_clean_(su_readObjects_(SHEET_RECURRING)) };
+}
 
 /** Full categories map (Type, Segment, Description) for the UI/bot. */
 function api_getCategories() {
@@ -26,7 +32,8 @@ function api_getBootstrap() {
     baseCurrency: BASE_CURRENCY,
     categories: api_getCategories(),
     accounts: api_getAccounts().accounts,
-    budgets: reads_clean_(su_readObjects_(SHEET_BUDGETS)),
+    budgets: api_getBudgets().budgets,
+    recurring: api_getRecurring().rows,
     calendar: reads_clean_(su_readObjects_(SHEET_CALENDAR)),
     fxUsdPhp: fx_liveRate_("USD", BASE_CURRENCY) || null
   };

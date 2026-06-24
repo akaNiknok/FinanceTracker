@@ -109,6 +109,34 @@ aren't rejected; the service layer stays the hard validator. Flip the constant t
 to reject invalid manual entries outright. After running, scan for red-cornered cells —
 those are existing typos worth fixing.
 
+## Phase 1d (optional) — redesign Budgets (targets-only) + split out Recurring
+
+Collapses the old Budgets sheet — which stored the same target three ways
+(`Target %` / `USD` / `PHP`), pinned its **own** stale `PHP to USD` rate, kept
+sheet-computed actuals, and carried an `Essentials & Rewards` roll-up *row* — into
+a **plan-only** sheet. Actuals/remaining/% now compute live in `Budgets.gs`
+(period-aware), so there's nothing duplicated to drift. The embedded
+`Monthly Expenses` table is split into its own `Recurring` sheet.
+
+New `Budgets` columns: `Segment | Period | Target Type | Target | Currency | Notes`.
+Hybrid targets — `Percent` rows resolve against `MONTHLY_INCOME_PHP`; an `Amount`
+row with `Currency=USD` (e.g. Growth's $200 quarterly cap) converts at the **live**
+USD→PHP rate, the single FX source the rest of the app uses.
+
+**Run:** editor → **`setupBudgets`** → **Run**. It will:
+1. Find the `Monthly Expenses` block (by its `Description` header) and copy it to a
+   new **`Recurring`** sheet (`Description, Currency, Amount, Transaction Fee,
+   Months Left, Group`; govt contributions tagged `Group=Govt`).
+2. Back up the old Budgets sheet wholesale (`Budgets_backup_<timestamp>`), then
+   rebuild **`Budgets`** with the new headers + 4 seed rows (Essentials 50% /
+   Rewards 10% / Stability 15% monthly, Growth $200 quarterly). **Adjust to taste.**
+3. Set `MONTHLY_INCOME_PHP` (Script Property) to `47200` if unset — the planning
+   base for percent targets. Update it when your income changes.
+
+**Idempotent:** re-running won't clobber an already-migrated Budgets sheet (detected
+via the `Target Type` header) or an existing `Recurring` sheet. No redeploy needed
+(sheet-only change). Verify with `Tests.gs test_budgets`.
+
 ---
 
 ## Manual fallback — paste the ARRAYFORMULAs yourself

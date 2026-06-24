@@ -12,17 +12,18 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 | File | Purpose |
 | --- | --- |
 | `Router.gs` | The **only** `doGet`/`doPost`. Dispatches by `?action=`; keeps legacy n8n paths (bare-body POST = create tx; no-action GET = `/sync` payload). |
-| `Config.gs` | Sheet names, the Transactions **input vs derived** column model, settings via Script Properties (`OWNER_EMAIL`, `API_TOKEN`, `ENFORCE_TOKEN`, `USD_PHP_FALLBACK`). |
+| `Config.gs` | Sheet names, the Transactions **input vs derived** column model, settings via Script Properties (`OWNER_EMAIL`, `API_TOKEN`, `ENFORCE_TOKEN`, `USD_PHP_FALLBACK`, `MONTHLY_INCOME_PHP`). |
 | `Auth.gs` | Write/read guards: owner-identity (restricted deploy) or shared `API_TOKEN` (opt-in via `ENFORCE_TOKEN`, off by default so n8n keeps working). |
 | `SheetUtil.gs` | Header maps, find-by-ID, **input-columns-only** writes (never touch the ARRAYFORMULA cells), `jsonResponse`. |
 | `Transactions.gs` | `api_createTransaction/listTransactions/updateTransaction/deleteTransaction/createTransfer`; validation; idempotent by `ID`. |
 | `Accounts.gs` | `api_getAccounts` (derived balances vs stored) + `api_updateAccount`. |
-| `Reads.gs` / `Dashboard.gs` | `api_getBootstrap/getBudgets/getCalendar/getLedger/getCategories`; `api_getDashboard/getInvestments` aggregations. |
+| `Budgets.gs` | `api_getBudgets` — targets-only Budgets sheet → resolves hybrid targets (Percent of income / USD cap at live FX) + computes actuals/remaining/% from the ledger, period-aware (month or calendar quarter). |
+| `Reads.gs` / `Dashboard.gs` | `api_getBootstrap/getRecurring/getCalendar/getLedger/getCategories`; `api_getDashboard/getInvestments` aggregations. |
 | `Fx.gs` | Live USD→PHP fetch (cached 6h) to stamp the static `ExchangeRate` input; per-tx override wins. |
 | `Interest.gs` | `addDailyInterestTransactions` job, now routed through the service layer (input-only writes). |
 | `Read.gs` | Raw sheet-dump debug helpers (behind the read guard in Router). |
 | `Tests.gs` | Editor-runnable verification + balance reconciliation. |
-| `Migration.gs` | One-shot Phase 1 schema migration (`ID` column + ARRAYFORMULA derivation). See `MIGRATION.md`. |
+| `Migration.gs` | One-shot schema migrations: `setupMigration`/`applyDerivationFormulas` (`ID` + ARRAYFORMULAs), `setupAccountType`, `setupDataValidation`, `setupBudgets` (targets-only Budgets + `Recurring` split). See `MIGRATION.md`. |
 | `appsscript.json` | Apps Script manifest (runtime, timezone, web app access). |
 | `.clasp.json` | Links repo to the Apps Script project (`scriptId`). |
 | `.claspignore` | Restricts clasp pushes (only `.gs`/`.js`/`.html` + manifest). |
@@ -33,11 +34,12 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 
 ## How the backend works (service layer — Phase 1)
 **Architecture:** one **service layer** owns every write + all rules; the UI and n8n both call it through the `?action=` JSON API. `Router.gs` is the sole `doGet`/`doPost` and dispatches to `api_*` handlers. **Schema invariant (post-migration):** derived columns (Month, Type, Segment, Currency, Amount (PHP), ToCurrency, the `.` index) are header-anchored **ARRAYFORMULA**s; the service writes **input columns only** (`SheetUtil.su_*InputRow_`) so a stray write never `#REF!`s a spill. `appendRow` is banned — it would clobber the derivation band.
-**JSON API (`?action=`):** reads — `getBootstrap`, `listTransactions` (filters month/account/category/segment/search + `limit`/`offset`), `getAccounts`, `getDashboard`, `getInvestments`, `getBudgets`/`getCalendar`/`getLedger`/`getCategories`. writes (POST) — `createTransaction`, `createTransfer`, `updateTransaction`, `deleteTransaction`, `updateAccount`. Every tx has a stable server-assigned **`ID`**; `createTransaction` is idempotent if the caller passes an existing `ID`.
+**JSON API (`?action=`):** reads — `getBootstrap`, `listTransactions` (filters month/account/category/segment/search + `limit`/`offset`), `getAccounts`, `getDashboard`, `getInvestments`, `getBudgets` (optional `month=`), `getRecurring`/`getCalendar`/`getLedger`/`getCategories`. writes (POST) — `createTransaction`, `createTransfer`, `updateTransaction`, `deleteTransaction`, `updateAccount`. Every tx has a stable server-assigned **`ID`**; `createTransaction` is idempotent if the caller passes an existing `ID`.
 **Backward compat (n8n unbroken):** POST with no `action` and a bare transaction body → `createTransaction`; GET with no `action` → the old `{Categories, Accounts}` `/sync` payload; `?sheets`/`?sheet=` raw dumps still work (now behind the read guard). So **the live deployment behaves the same for n8n** until we redeploy + cut over auth in Phase 3.
 **Auth (`Auth.gs`):** writes pass `auth_requireWrite_` — allowed if the active user is `OWNER_EMAIL` (restricted deploy) **or** token enforcement is off (`ENFORCE_TOKEN` default false) **or** a valid `API_TOKEN` is supplied. The manifest is **intentionally still `ANYONE_ANONYMOUS`** in Phase 1; flipping to `MYSELF` happens with the n8n OAuth cutover (Phase 3) to avoid breaking the bot.
 **FX (`Fx.gs`):** `ExchangeRate` is a **static stamped input** — per-tx override wins, else PHP→blank (formula treats blank as 1), else a cached live USD→PHP fetch, else `USD_PHP_FALLBACK`. History never reprices.
 **Balances (`Accounts.gs`):** balances are **read from the sheet, not recomputed in code** — the Accounts tab already derives `Current Balance` (native) and `Current Balance (PHP)` by formula (Starting Balance + Σ transactions, live FX for non-PHP, Google Finance for Shares), and those SUMIFs update the instant the API appends a row. Same principle as the Transactions ARRAYFORMULAs: derivation lives in the Sheet. Each account exposes `balancePhp` (as shown — liabilities positive), `balanceNative` (Shares: this is the quantity), `netWorthPhp` (signed; liabilities negative), `availableCredit`, `isLiability`, `isShares`. The JS ledger sum survives only as `Tests.gs test_balanceReconciliation`, an independent **native-currency** integrity check (does the ledger agree with the sheet's balance formula?).
+**Budgets (`Budgets.gs`):** the `Budgets` sheet holds the **plan only** (one row per segment: Segment, Period, Target Type, Target, Currency, Notes). Actuals/remaining/% are **computed in code** from the ledger (Σ `Expense` `Amount (PHP)` by Segment over the period window — current month, or the **calendar quarter** for `Period=Quarterly`), never stored — same spirit as derivation-in-the-sheet, but period/quarter logic is cleaner in code and matches Dashboard's `spendBySegment`. Hybrid targets: `Percent` rows resolve against `MONTHLY_INCOME_PHP` (×3 for Quarterly); `Amount` rows with `Currency=USD` convert at the **same live FX** as the rest of the app (no second pinned rate). `api_getBudgets` also returns an `essentialsRewards` roll-up. Recurring bills/installments live on a separate `Recurring` sheet (`api_getRecurring`), pure reference notes.
 **`addDailyInterestTransactions()` (`Interest.gs`):** unchanged math (`gross = balance*rate/365` − 20% withholding), but now routes through `api_createTransaction` (input-only write, auto-derived, stable ID). Daily time-based trigger, configured in the GAS UI.
 
 ## Google Sheet structure (source of truth)
@@ -46,6 +48,8 @@ Code depends on these sheets/headers; keep them in sync.
 - **`Accounts`** — `Name`, `Currency`, `Subtype`, `Type` (**derived** = VLOOKUP of Subtype in `AccountType`; not hand-entered), `Starting Balance` (native), `Current Balance`/`Current Balance (PHP)` (formula = Starting + Σ tx, FX/Google-Finance), `Available Credit`, `Interest Frequency`, `Interest Rate`, `Credit Limit`, `Notes`. Liabilities store balance **positive** (amount owed). `Name` is the immutable FK used by Transactions — never rename.
 - **`AccountType`** — reference: `Subtype → Type` (Credit→Liability, else Asset). Drives the derived Accounts `Type`. Created by `Migration.setupAccountType`.
 - **`Categories`** — `Category`, `Type`, `Segment`, `Description`. `Category` is the immutable FK used by Transactions.
+- **`Budgets`** — plan only, one row per segment: `Segment`, `Period` (Monthly/Quarterly), `Target Type` (Percent/Amount), `Target`, `Currency` (USD→live FX; blank/PHP passes through), `Notes`. **No** stored actuals/derived columns — those are computed in `Budgets.gs`. Rebuilt by `Migration.setupBudgets`.
+- **`Recurring`** — recurring bills / installment notes (split out of the old Budgets sheet): `Description`, `Currency`, `Amount`, `Transaction Fee`, `Months Left`, `Group`. Reference only; not used in any calc.
 
 ## clasp workflow (push/deploy to Apps Script)
 Linked via `.clasp.json` (`scriptId` is committed; the auth token is not).

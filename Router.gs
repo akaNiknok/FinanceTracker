@@ -19,7 +19,8 @@ const ROUTES_READ_ = {
   getAccounts:      function (e, b) { return api_getAccounts(); },
   getDashboard:     function (e, b) { return api_getDashboard(rt_args_(e, b)); },
   getInvestments:   function (e, b) { return api_getInvestments(); },
-  getBudgets:       function (e, b) { return api_getBudgets(); },
+  getBudgets:       function (e, b) { return api_getBudgets(rt_args_(e, b)); },
+  getRecurring:     function (e, b) { return api_getRecurring(); },
   getCalendar:      function (e, b) { return api_getCalendar(); },
   getLedger:        function (e, b) { return api_getLedger(); }
 };

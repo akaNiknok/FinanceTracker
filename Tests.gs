@@ -11,6 +11,7 @@ function test_all() {
   test_fx();
   test_bootstrap();
   test_listTransactions();
+  test_budgets();
   test_balanceReconciliation();
   test_createReadDelete();
   Logger.log("== test_all complete ==");
@@ -60,6 +61,27 @@ function test_balanceReconciliation() {
                " diff=" + diff + " | PHP=" + a.balancePhp + flag);
   });
   Logger.log("Flagged rows = ledger and sheet disagree. Clean = the sheet's balance formula matches the Transactions ledger.");
+}
+
+/** Budget targets resolve and actuals roll up. Prints each segment + the
+ *  Essentials+Rewards combined figure. Flags any percent row that couldn't resolve
+ *  (MONTHLY_INCOME_PHP unset) or USD cap with no FX. */
+function test_budgets() {
+  const b = api_getBudgets();
+  Logger.log("== Budgets (month=%s, incomePHP=%s, fx=%s) ==", b.month, b.incomePhp, b.fxUsdPhp);
+  b.budgets.forEach(function (x) {
+    const flag = (x.targetPhp === null) ? "  <-- target unresolved" : "";
+    Logger.log(x.segment + " [" + x.period + " " + x.targetType + " " + x.targetValue +
+      (x.currency ? " " + x.currency : "") + "] target=" + x.targetPhp +
+      " actual=" + x.actualPhp + " remaining=" + x.remainingPhp + " used=" + x.pctUsed + "%" +
+      (x.isOver ? " OVER" : "") + flag);
+  });
+  if (b.essentialsRewards) {
+    const er = b.essentialsRewards;
+    Logger.log("Essentials+Rewards: target=" + er.targetPhp + " actual=" + er.actualPhp +
+      " remaining=" + er.remainingPhp + " used=" + er.pctUsed + "%" + (er.isOver ? " OVER" : ""));
+  }
+  if (!b.budgets.length) Logger.log("FAIL: no budget rows — run Migration.setupBudgets() and check the Budgets sheet.");
 }
 
 /** Create a throwaway transaction with real category/account, read it, delete it. */
