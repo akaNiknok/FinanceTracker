@@ -30,6 +30,10 @@ const MIG_ACCTTYPE_SEED = [
   ["For Investment", "Asset"], ["Stocks", "Asset"], ["Credit", "Liability"]
 ];
 
+// Data-validation dropdowns (setupDataValidation).
+const MIG_VALIDATION_STRICT = false; // false = warn on bad entry; true = reject it outright
+const MIG_INTEREST_FREQS = ["Daily", "Weekly", "Monthly", "Quarterly", "Annually"];
+
 // Derived columns that become ARRAYFORMULAs (input columns are left untouched).
 // ExchangeRate is intentionally NOT here — it stays a static, stamped input so FX
 // history never drifts. Amount (PHP) = Amount × ExchangeRate (frozen per row).
@@ -177,7 +181,74 @@ function setupAccountType() {
   Logger.log("== setupAccountType done. (If Accounts is a Table, new rows auto-fill the formula.) ==");
 }
 
+// ── 4. Data-validation dropdowns (optional, re-runnable) ───────────────────────
+// Controlled vocabularies so a manual typo can't silently break a VLOOKUP / SUMIF:
+//   • Accounts.Subtype          ← the AccountType reference list
+//   • Accounts.Interest Frequency ← a fixed list
+//   • Transactions.Category     ← the Categories list
+// Lenient by default (MIG_VALIDATION_STRICT=false): invalid entries are flagged
+// (not blocked), so legacy values and service-layer writes aren't rejected. The
+// dropdown still nudges correct manual entry; the service layer remains the hard
+// validator. Range-backed dropdowns auto-extend as you add subtypes/categories.
+function setupDataValidation() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const allowInvalid = !MIG_VALIDATION_STRICT;
+  Logger.log("== setupDataValidation (strict=%s) ==", MIG_VALIDATION_STRICT);
+
+  // 1. Accounts.Subtype ← AccountType!A2:A
+  const acct = ss.getSheetByName(MIG_ACCT_SHEET);
+  if (!acct) throw new Error("Sheet not found: " + MIG_ACCT_SHEET);
+  const ah = mig_headerMap_(acct);
+  const ref = ss.getSheetByName(MIG_ACCTTYPE_SHEET);
+  if (ref && ah["Subtype"]) {
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInRange(ref.getRange("A2:A100"), true)
+      .setAllowInvalid(allowInvalid)
+      .setHelpText("Pick a Subtype from the AccountType tab.").build();
+    mig_applyValidationToColumn_(acct, ah["Subtype"], rule);
+    Logger.log("Accounts.Subtype dropdown ← AccountType!A2:A100");
+  } else {
+    Logger.log("Skipped Subtype dropdown (need AccountType tab + Subtype column — run setupAccountType first).");
+  }
+
+  // 2. Accounts.'Interest Frequency' ← fixed list
+  if (ah["Interest Frequency"]) {
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(MIG_INTEREST_FREQS, true)
+      .setAllowInvalid(allowInvalid)
+      .setHelpText("Daily / Weekly / Monthly / Quarterly / Annually (blank = none).").build();
+    mig_applyValidationToColumn_(acct, ah["Interest Frequency"], rule);
+    Logger.log("Accounts.'Interest Frequency' dropdown ← %s", MIG_INTEREST_FREQS.join("/"));
+  } else {
+    Logger.log("Skipped Interest Frequency dropdown (column not found).");
+  }
+
+  // 3. Transactions.Category ← Categories!A2:A
+  const tx   = ss.getSheetByName(MIG_TX_SHEET);
+  const cats = ss.getSheetByName("Categories");
+  const th = tx ? mig_headerMap_(tx) : {};
+  if (tx && cats && th["Category"]) {
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInRange(cats.getRange("A2:A300"), true)
+      .setAllowInvalid(allowInvalid)
+      .setHelpText("Pick a Category from the Categories tab.").build();
+    mig_applyValidationToColumn_(tx, th["Category"], rule);
+    Logger.log("Transactions.Category dropdown ← Categories!A2:A300");
+  } else {
+    Logger.log("Skipped Category dropdown (need Transactions + Categories tabs and a Category column).");
+  }
+
+  Logger.log("== setupDataValidation done. Cells with a red corner = existing value not in the list (a typo to fix). ==");
+}
+
 // ── private helpers (trailing underscore = not web-exposed) ────────────────────
+/** Apply a validation rule to a whole column (row 2 → last allocated row). */
+function mig_applyValidationToColumn_(sheet, col, rule) {
+  const last = sheet.getMaxRows();
+  if (last < 2) return;
+  sheet.getRange(2, col, last - 1, 1).setDataValidation(rule);
+}
+
 function mig_acctTypeMap_(ref) {
   const vals = ref.getDataRange().getValues();
   const map = {};

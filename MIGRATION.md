@@ -94,6 +94,21 @@ though Accounts is a Table — Tables auto-fill the formula on new rows. Idempot
 Subtype so reports group correctly; they default to `Asset` meanwhile. A present-but-
 unmatched Subtype shows blank `Type` on purpose — add it to `AccountType` to fix.
 
+## Phase 1c (optional) — data-validation dropdowns (typo guard)
+
+Adds dropdowns so a misspelling can't silently break a VLOOKUP / balance SUMIF:
+`Accounts.Subtype` ← the `AccountType` list, `Accounts.Interest Frequency` ← a fixed
+list, `Transactions.Category` ← the `Categories` list. The range-backed ones auto-extend
+as you add subtypes/categories.
+
+**Run:** editor → **`setupDataValidation`** → **Run**. Re-runnable.
+
+**Lenient by default** (`MIG_VALIDATION_STRICT = false`): bad entries are *flagged*
+(red corner) but not blocked — so existing legacy values and service-layer/n8n writes
+aren't rejected; the service layer stays the hard validator. Flip the constant to `true`
+to reject invalid manual entries outright. After running, scan for red-cornered cells —
+those are existing typos worth fixing.
+
 ---
 
 ## Manual fallback — paste the ARRAYFORMULAs yourself
