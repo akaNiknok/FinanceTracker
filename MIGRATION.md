@@ -73,6 +73,29 @@ backup sheet for a few days, then delete it.
 
 ---
 
+## Phase 1b (optional) — derive Accounts `Type` from `Subtype`
+
+Removes the hand-maintained Asset/Liability column so it can't drift: `Type` becomes
+a lookup of `Subtype` against a small `AccountType` reference tab (same pattern as
+Transactions deriving Type/Segment from Categories). The service layer reads `Type`
+either way — no code change.
+
+**Run:** editor → function dropdown → **`setupAccountType`** → **Run**. It will:
+1. Create an **`AccountType`** sheet seeded `Subtype → Type` (Liquid/EF/Receivable/For
+   Investment/Stocks → Asset; Credit → Liability). Edit it anytime to add rows.
+2. Auto-append any Subtype found in `Accounts` but missing from the reference (guessed
+   Asset/Liability) and **log it for review**.
+3. Back up `Accounts`, then set each row's `Type` to
+   `=IFERROR(VLOOKUP($<Subtype>, AccountType!$A:$B, 2, FALSE), IF($<Subtype>="","Asset",""))`.
+
+**Notes:** uses **per-row** formulas (not a whole-column ARRAYFORMULA) so it works even
+though Accounts is a Table — Tables auto-fill the formula on new rows. Idempotent.
+**Check the log** for `BLANK Subtype` accounts (e.g. some receivables) and set their
+Subtype so reports group correctly; they default to `Asset` meanwhile. A present-but-
+unmatched Subtype shows blank `Type` on purpose — add it to `AccountType` to fix.
+
+---
+
 ## Manual fallback — paste the ARRAYFORMULAs yourself
 
 If you'd rather not run `applyDerivationFormulas()`, do this per derived column:

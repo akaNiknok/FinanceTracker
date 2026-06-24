@@ -43,8 +43,9 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 ## Google Sheet structure (source of truth)
 Code depends on these sheets/headers; keep them in sync.
 - **`Transactions`** — header row drives `doPost`. Known columns: `Date`, `Category`, `Account`, `Amount`.
-- **`Accounts`** — `Name`, `Currency` (col B), `Interest Frequency`, `Current Balance (PHP)`, `Interest Rate`.
-- **`Categories`** — `Category`, `Type`, `Segment`, `Description`.
+- **`Accounts`** — `Name`, `Currency`, `Subtype`, `Type` (**derived** = VLOOKUP of Subtype in `AccountType`; not hand-entered), `Starting Balance` (native), `Current Balance`/`Current Balance (PHP)` (formula = Starting + Σ tx, FX/Google-Finance), `Available Credit`, `Interest Frequency`, `Interest Rate`, `Credit Limit`, `Notes`. Liabilities store balance **positive** (amount owed). `Name` is the immutable FK used by Transactions — never rename.
+- **`AccountType`** — reference: `Subtype → Type` (Credit→Liability, else Asset). Drives the derived Accounts `Type`. Created by `Migration.setupAccountType`.
+- **`Categories`** — `Category`, `Type`, `Segment`, `Description`. `Category` is the immutable FK used by Transactions.
 
 ## clasp workflow (push/deploy to Apps Script)
 Linked via `.clasp.json` (`scriptId` is committed; the auth token is not).

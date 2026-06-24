@@ -20,6 +20,16 @@ const MIG_TX_SHEET    = "Transactions";
 const MIG_ID_HEADER   = "ID";
 const MIG_MONTH_FORMAT = "yyyy-mm"; // e.g. "yyyy-mm" → 2026-06 · "mmm-yyyy" → Jun-2026 · "mmmm" → June
 
+// AccountType migration (setupAccountType): derive Accounts.Type from Subtype.
+const MIG_ACCT_SHEET     = "Accounts";
+const MIG_ACCTTYPE_SHEET = "AccountType"; // reference tab (no spaces — used in a formula ref)
+// Seed Subtype → Type. Extend/edit in the sheet after running; new Subtypes found
+// in Accounts are auto-appended (guessed) and logged for review.
+const MIG_ACCTTYPE_SEED = [
+  ["Liquid", "Asset"], ["EF", "Asset"], ["Receivable", "Asset"],
+  ["For Investment", "Asset"], ["Stocks", "Asset"], ["Credit", "Liability"]
+];
+
 // Derived columns that become ARRAYFORMULAs (input columns are left untouched).
 // ExchangeRate is intentionally NOT here — it stays a static, stamped input so FX
 // history never drifts. Amount (PHP) = Amount × ExchangeRate (frozen per row).
@@ -103,7 +113,81 @@ function applyDerivationFormulas() {
   Logger.log("== applyDerivationFormulas done. Spot-check a few rows, then redeploy the SAME deploymentId. ==");
 }
 
+// ── 3. Derive Accounts.Type from Subtype (optional, run once) ──────────────────
+// Removes the hand-maintained Asset/Liability column: Type becomes a VLOOKUP of
+// Subtype against the AccountType reference. Robust to the Accounts tab being a
+// Google Sheets Table — uses per-row formulas (which Tables auto-fill on new rows)
+// instead of a whole-column ARRAYFORMULA (which Tables reject). Idempotent + backs
+// up Accounts first. The service layer reads Type either way — no code change.
+function setupAccountType() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  Logger.log("== setupAccountType ==");
+
+  // 3a. Ensure the AccountType reference tab exists + is seeded.
+  let ref = ss.getSheetByName(MIG_ACCTTYPE_SHEET);
+  if (!ref) {
+    ref = ss.insertSheet(MIG_ACCTTYPE_SHEET);
+    ref.getRange(1, 1, 1, 2).setValues([["Subtype", "Type"]]);
+    ref.getRange(2, 1, MIG_ACCTTYPE_SEED.length, 2).setValues(MIG_ACCTTYPE_SEED);
+    Logger.log("Created '%s' with %s seed mapping(s).", MIG_ACCTTYPE_SHEET, MIG_ACCTTYPE_SEED.length);
+  } else {
+    Logger.log("'%s' already exists — leaving its mappings as-is.", MIG_ACCTTYPE_SHEET);
+  }
+
+  const acctSheet = ss.getSheetByName(MIG_ACCT_SHEET);
+  if (!acctSheet) throw new Error("Sheet not found: " + MIG_ACCT_SHEET);
+  const h = mig_headerMap_(acctSheet);
+  const subCol = h["Subtype"], typeCol = h["Type"], nameCol = h["Name"] || 1;
+  if (!subCol)  throw new Error("Accounts has no 'Subtype' column.");
+  if (!typeCol) throw new Error("Accounts has no 'Type' column.");
+
+  // 3b. Backfill any Subtypes used in Accounts but missing from the reference.
+  const map = mig_acctTypeMap_(ref);
+  const lastRow = acctSheet.getLastRow();
+  const subs  = lastRow >= 2 ? acctSheet.getRange(2, subCol, lastRow - 1, 1).getValues() : [];
+  const names = lastRow >= 2 ? acctSheet.getRange(2, nameCol, lastRow - 1, 1).getValues() : [];
+  const added = [], blanks = [];
+  subs.forEach(function (rowv, i) {
+    const sub = String(rowv[0]).trim();
+    if (sub === "") { blanks.push(names[i][0]); return; }
+    if (map[sub.toLowerCase()] === undefined) {
+      const guess = /credit|loan|liab|payable|debt|mortgage/i.test(sub) ? "Liability" : "Asset";
+      ref.appendRow([sub, guess]);
+      map[sub.toLowerCase()] = guess;
+      added.push(sub + "→" + guess);
+    }
+  });
+  if (added.length)  Logger.log("Added unseen Subtype(s) — REVIEW in %s: %s", MIG_ACCTTYPE_SHEET, added.join(", "));
+  if (blanks.length) Logger.log("Accounts with BLANK Subtype (will default to Asset; set a Subtype for correct reports): %s", blanks.join(", "));
+
+  // 3c. Backup Accounts, then write the per-row Type formula.
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
+  acctSheet.copyTo(ss).setName(MIG_ACCT_SHEET + "_backup_" + stamp);
+  Logger.log("Backup created: %s_backup_%s", MIG_ACCT_SHEET, stamp);
+
+  const subL = mig_colLetter_(subCol);
+  let n = 0;
+  for (let r = 2; r <= lastRow; r++) {
+    // matched Subtype → its Type · blank Subtype → "Asset" · present-but-unmatched → "" (visible).
+    const f = '=IFERROR(VLOOKUP($' + subL + r + ', ' + MIG_ACCTTYPE_SHEET + '!$A:$B, 2, FALSE), IF($' + subL + r + '="","Asset",""))';
+    acctSheet.getRange(r, typeCol).setFormula(f);
+    n++;
+  }
+  Logger.log("Type now derives from Subtype on %s account row(s).", n);
+  Logger.log("== setupAccountType done. (If Accounts is a Table, new rows auto-fill the formula.) ==");
+}
+
 // ── private helpers (trailing underscore = not web-exposed) ────────────────────
+function mig_acctTypeMap_(ref) {
+  const vals = ref.getDataRange().getValues();
+  const map = {};
+  for (let i = 1; i < vals.length; i++) {
+    const sub = String(vals[i][0]).trim();
+    if (sub !== "") map[sub.toLowerCase()] = vals[i][1];
+  }
+  return map; // lowercased Subtype → Type
+}
+
 function mig_getTxSheet_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MIG_TX_SHEET);
   if (!sheet) throw new Error("Sheet not found: " + MIG_TX_SHEET);
