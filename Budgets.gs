@@ -19,7 +19,9 @@
 function api_getBudgets(args) {
   args = args || {};
   const incomePhp = cfgMonthlyIncomePhp_();
-  const fx = fx_liveRate_("USD", BASE_CURRENCY) || cfgUsdPhpFallback_() || null;
+  // Cache-only (no network) so the Dashboard/Budgets load can't stall on FX;
+  // getBootstrap warms the cache live in the background. Falls back if cold.
+  const fx = fx_cachedRate_("USD", BASE_CURRENCY) || cfgUsdPhpFallback_() || null;
   const ref = args.month ? bud_parseMonth_(String(args.month)) : new Date();
   const tz = Session.getScriptTimeZone();
 

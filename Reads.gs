@@ -41,6 +41,6 @@ function api_getBootstrap() {
 
 function reads_clean_(rows) {
   return rows.map(function (r) {
-    const c = {}; Object.keys(r).forEach(function (k) { if (k !== "__row") c[k] = r[k]; }); return c;
+    const c = {}; Object.keys(r).forEach(function (k) { if (k !== "__row") c[k] = su_dateStr_(r[k]); }); return c;
   });
 }

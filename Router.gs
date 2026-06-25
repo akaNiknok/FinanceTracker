@@ -46,8 +46,13 @@ function doGet(e) {
       return jsonResponse(readSheetPayload(params.sheet, limit));
     }
 
-    // ── Legacy default: the /sync reference payload ──
-    return jsonResponse(rt_legacyBootstrap_());
+    // ── Legacy /sync reference payload (kept behind an explicit ?sync flag) ──
+    // n8n no longer GETs this (its /sync reads come straight from Sheets nodes),
+    // but anything that relied on the bare-GET JSON can still reach it via ?sync.
+    if (params.sync !== undefined) return jsonResponse(rt_legacyBootstrap_());
+
+    // ── Default: serve the responsive Web App UI (Phase 2). ──
+    return ui_serveApp_();
   } catch (err) {
     return jsonError_(err && err.message ? err.message : err);
   }

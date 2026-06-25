@@ -1,0 +1,680 @@
+<script>
+/* ============================================================================
+ * App.html — the FinanceTracker SPA (Phase 2).
+ * Vanilla JS. Talks to the Phase 1 service layer via google.script.run (so no
+ * fetch URL / token — calls run as the deploying owner). Six screens:
+ * Dashboard · Transactions · Accounts · Budgets · Investments · Tax.
+ * ========================================================================== */
+
+/* ── server bridge: google.script.run → Promise ──────────────────────────── */
+function gs(fn, arg){
+  return new Promise(function(resolve, reject){
+    google.script.run
+      .withSuccessHandler(function(r){
+        if (r == null) reject(new Error('Empty response from server (a Date may have leaked into the payload).'));
+        else if (r.status === 'error') reject(new Error(r.message || 'Server error'));
+        else resolve(r);
+      })
+      .withFailureHandler(function(e){ reject(e); })
+      [fn](arg);
+  });
+}
+
+/* ── app state ───────────────────────────────────────────────────────────── */
+var S = {
+  boot:null,            // getBootstrap payload
+  month:null,           // selected period "yyyy-MMM"
+  screen:'dashboard',
+  cache:{},             // per-screen last payload
+  tx:{ rows:[], total:0, offset:0, limit:50, filters:{} }
+};
+
+var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
+var PHP0 = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:0});
+var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+/* ── tiny DOM helpers ────────────────────────────────────────────────────── */
+function $(s,r){return (r||document).querySelector(s);}
+function el(tag,cls,html){var e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;return e;}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function money(n,big){if(n==null||n==='')return '—';return (big?PHP0:PHP).format(Number(n));}
+function num(n){return n==null?'—':Number(n).toLocaleString('en-PH',{maximumFractionDigits:4});}
+function pct(n){return n==null?'—':(Math.round(n*10)/10)+'%';}
+
+/* ── toast ───────────────────────────────────────────────────────────────── */
+function toast(msg,kind){
+  var t=el('div','toast '+(kind||''),esc(msg));
+  $('#toastRoot').appendChild(t);
+  setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(function(){t.remove();},300);},2400);
+}
+
+/* ── month helpers ───────────────────────────────────────────────────────── */
+function monthKey(d){return d.getFullYear()+'-'+MONTHS[d.getMonth()];}      // "2026-Jun"
+function buildMonthList(){
+  var out=[], now=new Date();
+  for(var i=0;i<15;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
+  return out;
+}
+
+/* ── boot ────────────────────────────────────────────────────────────────── */
+window.addEventListener('DOMContentLoaded', boot);
+
+// getBootstrap (categories/accounts for modals & filters) loads in the BACKGROUND
+// so the first screen can paint without waiting on it / on the live FX fetch.
+var _bootPromise=null;
+function ensureBoot(){
+  if(S.boot) return Promise.resolve(S.boot);
+  if(!_bootPromise) _bootPromise=gs('api_getBootstrap').then(function(b){S.boot=b;return b;});
+  return _bootPromise;
+}
+/** Run cb once reference data is available (used by modals/filters that need it). */
+function withBoot(cb){
+  if(S.boot) return cb();
+  toast('Loading…');
+  return ensureBoot().then(cb).catch(function(e){ toast(e.message||e,'err'); });
+}
+
+function boot(){
+  S.month = monthKey(new Date());
+  document.querySelectorAll('.nav-item').forEach(function(b){
+    b.addEventListener('click', function(){ go(b.dataset.screen); });
+  });
+  $('#refreshBtn').addEventListener('click', refresh);
+  $('#fab').addEventListener('click', function(){ withBoot(function(){ openTxModal(null); }); });
+  var mp=$('#monthPicker');
+  buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=m;mp.appendChild(o);});
+  mp.value=S.month;
+  mp.addEventListener('change', function(){ S.month=mp.value; S.cache={}; render(); });
+
+  // Paint the first screen right away (it fetches its own data); hydrate the
+  // reference data in parallel, then re-render so warm FX / counts are reflected.
+  render();
+  ensureBoot().then(function(){
+    if(S.screen==='dashboard'||S.screen==='budgets') render();
+  }).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
+}
+
+function refresh(){
+  var btn=$('#refreshBtn'); btn.classList.add('spin');
+  S.cache={}; S.boot=null; _bootPromise=null;
+  ensureBoot().then(function(){ return render(); }).finally(function(){ btn.classList.remove('spin'); });
+}
+
+function go(screen){
+  S.screen=screen;
+  document.querySelectorAll('.nav-item').forEach(function(b){b.classList.toggle('active', b.dataset.screen===screen);});
+  $('#fab').hidden = (screen!=='transactions');
+  render();
+}
+
+/* ── render dispatcher ───────────────────────────────────────────────────── */
+function render(){
+  var fns={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
+           budgets:renderBudgets,investments:renderInvestments,tax:renderTax};
+  return (fns[S.screen]||renderDashboard)();
+}
+function loading(){ $('#main').innerHTML='<div class="boot-loader"><div class="spinner"></div></div>'; }
+function paint(node){ var m=$('#main'); m.innerHTML=''; m.appendChild(node); }
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  DASHBOARD
+ * ════════════════════════════════════════════════════════════════════════ */
+function renderDashboard(){
+  loading();
+  return gs('api_getDashboard',{month:S.month}).then(function(d){
+    var w=el('div','screen');
+    w.appendChild(el('div','screen-title','Dashboard'));
+    w.appendChild(el('div','screen-sub','Period '+esc(S.month)));
+
+    // hero net worth + assets/liabilities
+    var hero=el('div','stat hero');
+    hero.innerHTML='<div class="stat-label">Net worth</div><div class="stat-value">'+money(d.netWorth)+
+      '</div><div class="stat-sub"><span class="pos">'+money(d.assets)+' assets</span> · <span class="neg">'+
+      money(d.liabilities)+' liabilities</span></div>';
+    w.appendChild(hero);
+
+    var stats=el('div','grid grid-3');
+    stats.appendChild(tile('Investments', money(d.sharesValue), 'shares & funds'));
+    var monthSpend=0; Object.keys(d.spendBySegment||{}).forEach(function(k){monthSpend+=d.spendBySegment[k];});
+    stats.appendChild(tile('Spent this period', money(monthSpend), Object.keys(d.spendBySegment||{}).length+' segments'));
+    var accts=(S.boot&&S.boot.accounts?S.boot.accounts.length:'…');
+    stats.appendChild(tile('Accounts', accts, 'tracked'));
+    w.appendChild(stats);
+
+    // budgets vs actual
+    if (d.budgets && d.budgets.length){
+      var bc=el('div','card');
+      bc.appendChild(el('div','card-h','Budget vs actual'));
+      d.budgets.forEach(function(b){ bc.appendChild(budgetRow(b)); });
+      w.appendChild(bc);
+    }
+
+    // balances by type
+    var byType=d.balancesByType||{};
+    if (Object.keys(byType).length){
+      var tc=el('div','card');
+      tc.appendChild(el('div','card-h','Balances by type'));
+      var l=el('div','list');
+      Object.keys(byType).forEach(function(k){
+        var v=byType[k];
+        var r=el('div','litem');
+        r.innerHTML='<div class="grow"><div class="t1">'+esc(k)+'</div></div><div class="amt '+(v<0?'neg':'')+'">'+money(v)+'</div>';
+        l.appendChild(r);
+      });
+      tc.appendChild(l); w.appendChild(tc);
+    }
+
+    // recent transactions
+    var rc=el('div','card');
+    var rh=el('div','row-between'); rh.innerHTML='<div class="card-h" style="margin:0">Recent</div>';
+    var more=el('button','btn sm ghost','View all →'); more.onclick=function(){go('transactions');};
+    rh.appendChild(more); rc.appendChild(rh);
+    var rl=el('div','list'); rl.style.marginTop='8px';
+    (d.recentTransactions||[]).forEach(function(t){ rl.appendChild(txRow(t,true)); });
+    if(!(d.recentTransactions||[]).length) rl.appendChild(el('div','empty','No transactions yet.'));
+    rc.appendChild(rl); w.appendChild(rc);
+
+    paint(w);
+  }).catch(showErr);
+}
+
+function tile(label,val,sub){
+  return el('div','stat','<div class="stat-label">'+esc(label)+'</div><div class="stat-value">'+
+    (typeof val==='string'?val:esc(val))+'</div>'+(sub?'<div class="stat-sub">'+esc(sub)+'</div>':''));
+}
+
+function budgetRow(b){
+  var r=el('div'); r.style.marginBottom='14px';
+  var p = b.pctUsed==null?0:b.pctUsed;
+  var cls = b.isOver?'over':(p>=85?'warn':'');
+  r.innerHTML='<div class="row-between"><div><strong>'+esc(b.segment)+'</strong> <span class="pill">'+esc(b.period)+'</span></div>'+
+    '<div class="mono">'+money(b.actualPhp)+' <span class="faint">/ '+money(b.targetPhp)+'</span></div></div>'+
+    '<div class="bar"><div class="bar-fill '+cls+'" style="width:'+Math.min(100,p)+'%"></div></div>'+
+    '<div class="row-between" style="margin-top:4px;font-size:12px"><span class="dim">'+pct(b.pctUsed)+' used</span>'+
+    '<span class="'+(b.isOver?'neg':'dim')+'">'+(b.remainingPhp==null?'':money(b.remainingPhp)+' left')+'</span></div>';
+  return r;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  TRANSACTIONS
+ * ════════════════════════════════════════════════════════════════════════ */
+function renderTransactions(){
+  if(!S.boot){ loading(); ensureBoot().then(renderTransactions).catch(showErr); return; }
+  var w=el('div','screen');
+  w.appendChild(el('div','screen-title','Transactions'));
+
+  // filters
+  var f=el('div','filters');
+  var fMonth=selectEl(['(all months)'].concat(buildMonthList()), S.tx.filters.month||S.month);
+  var cats=Object.keys((S.boot.categories)||{}).sort();
+  var fCat=selectEl(['(all categories)'].concat(cats), S.tx.filters.category||'');
+  var accNames=(S.boot.accounts||[]).map(function(a){return a.name;});
+  var fAcc=selectEl(['(all accounts)'].concat(accNames), S.tx.filters.account||'');
+  var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
+  [fMonth,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
+  var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
+  f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fCat); f.appendChild(fAcc);
+  var addBtn=el('button','btn primary sm','+ Add'); addBtn.onclick=function(){openTxModal(null);};
+  var xferBtn=el('button','btn sm','⇄ Transfer'); xferBtn.onclick=function(){openTransferModal();};
+  f.appendChild(addBtn); f.appendChild(xferBtn);
+  w.appendChild(f);
+
+  function applyFilters(){
+    S.tx.filters={
+      month: fMonth.value.indexOf('(all')===0?'':fMonth.value,
+      category: fCat.value.indexOf('(all')===0?'':fCat.value,
+      account: fAcc.value.indexOf('(all')===0?'':fAcc.value,
+      search: fSearch.value.trim()
+    };
+    S.tx.offset=0; loadTx(w);
+  }
+
+  var listCard=el('div','card'); listCard.id='txListCard';
+  listCard.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  w.appendChild(listCard);
+  paint(w);
+
+  // default filter month to selected period on first open
+  if (S.tx.filters.month===undefined) S.tx.filters.month=S.month;
+  loadTx(w);
+}
+
+function loadTx(w){
+  var card=$('#txListCard'); if(card) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  var args={limit:S.tx.limit,offset:S.tx.offset};
+  var fl=S.tx.filters||{};
+  if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
+  if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
+  return gs('api_listTransactions',args).then(function(res){
+    S.tx.total=res.total; S.tx.rows=res.transactions;
+    var c=$('#txListCard'); if(!c) return; c.innerHTML='';
+    var head=el('div','row-between'); head.style.marginBottom='6px';
+    head.innerHTML='<div class="card-h" style="margin:0">'+res.total+' transaction'+(res.total===1?'':'s')+'</div>';
+    c.appendChild(head);
+    var l=el('div','list');
+    res.transactions.forEach(function(t){ l.appendChild(txRow(t,true)); });
+    if(!res.transactions.length) l.appendChild(el('div','empty','No transactions match.'));
+    c.appendChild(l);
+    // pager
+    if(res.total>S.tx.limit){
+      var pg=el('div','row-between'); pg.style.marginTop='12px';
+      var prev=el('button','btn sm','← Prev'); prev.disabled=S.tx.offset<=0;
+      prev.onclick=function(){S.tx.offset=Math.max(0,S.tx.offset-S.tx.limit);loadTx(w);};
+      var next=el('button','btn sm','Next →'); next.disabled=S.tx.offset+S.tx.limit>=res.total;
+      next.onclick=function(){S.tx.offset+=S.tx.limit;loadTx(w);};
+      var info=el('div','dim','Showing '+(res.offset+1)+'–'+Math.min(res.offset+S.tx.limit,res.total));
+      info.style.fontSize='12px';
+      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
+      c.appendChild(pg);
+    }
+  }).catch(showErr);
+}
+
+function txRow(t,clickable){
+  var type=String(t.Type||'');
+  var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
+  var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
+  var icCh=isXfer?'⇄':(type==='Expense'?'−':(type==='Income'?'+':'•'));
+  var amtPhp=t['Amount (PHP)'];
+  var sign=type==='Expense'?'-':(type==='Income'?'+':'');
+  var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
+  var sub=esc(t.Account||'')+(isXfer?(' → '+esc(t.ToAccount||'')):'')+' · '+esc(t.Category||'');
+  var date=fmtDate(t.Date);
+  var r=el('div','litem'+(clickable?' click':''));
+  r.innerHTML='<div class="ic '+icCls+'">'+icCh+'</div>'+
+    '<div class="grow"><div class="t1">'+esc(t.Description||t.Category||'(no description)')+'</div>'+
+    '<div class="t2">'+sub+' · '+esc(date)+'</div></div>'+
+    '<div class="amt '+amtCls+'">'+sign+money(amtPhp)+'</div>';
+  if(clickable) r.onclick=function(){ openTxModal(t); };
+  return r;
+}
+
+function fmtDate(d){
+  if(!d) return '';
+  var dt = (d instanceof Date)?d:new Date(d);
+  if(isNaN(dt.getTime())) return String(d);
+  return dt.getDate()+' '+MONTHS[dt.getMonth()]+' '+dt.getFullYear();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  ACCOUNTS
+ * ════════════════════════════════════════════════════════════════════════ */
+function renderAccounts(){
+  loading();
+  return gs('api_getAccounts').then(function(res){
+    var accs=res.accounts||[];
+    var w=el('div','screen');
+    w.appendChild(el('div','screen-title','Accounts'));
+
+    var assets=0,liab=0;
+    accs.forEach(function(a){ if(a.isLiability)liab+=(a.balancePhp||0); else assets+=(a.netWorthPhp||0); });
+    var top=el('div','grid grid-2');
+    top.appendChild(tile('Total assets', money(assets)));
+    top.appendChild(tile('Total liabilities', money(liab)));
+    w.appendChild(top);
+
+    // group by type
+    var groups={};
+    accs.forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
+    Object.keys(groups).sort().forEach(function(t){
+      var card=el('div','card');
+      card.appendChild(el('div','card-h',esc(t)));
+      var l=el('div','list');
+      groups[t].forEach(function(a){ l.appendChild(accountRow(a)); });
+      card.appendChild(l); w.appendChild(card);
+    });
+    paint(w);
+  }).catch(showErr);
+}
+
+function accountRow(a){
+  var r=el('div','litem click');
+  var native='';
+  if(a.isShares) native=num(a.balanceNative)+' shares';
+  else if(a.currency&&a.currency!=='PHP') native=num(a.balanceNative)+' '+esc(a.currency);
+  var meta=esc(a.subtype||'')+(native?(' · '+native):'');
+  var credit = a.creditLimit?(' · '+money(a.availableCredit)+' avail'):'';
+  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
+    '<div class="grow"><div class="t1">'+esc(a.name)+'</div><div class="t2">'+meta+credit+'</div></div>'+
+    '<div class="amt '+(a.isLiability?'neg':'')+'">'+money(a.balancePhp)+'</div>';
+  r.onclick=function(){ openAccountModal(a); };
+  return r;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  BUDGETS
+ * ════════════════════════════════════════════════════════════════════════ */
+function renderBudgets(){
+  loading();
+  return Promise.all([gs('api_getBudgets',{month:S.month}), gs('api_getRecurring')]).then(function(arr){
+    var bg=arr[0], rec=arr[1];
+    var w=el('div','screen');
+    w.appendChild(el('div','screen-title','Budgets'));
+    w.appendChild(el('div','screen-sub','Period '+esc(bg.month)+' · planning income '+money(bg.incomePhp,true)+'/mo'));
+
+    if(bg.essentialsRewards){
+      var er=bg.essentialsRewards;
+      var card=el('div','card hero');
+      card.innerHTML='<div class="card-h">Essentials + Rewards</div>'+
+        '<div class="row-between"><div class="stat-value" style="font-size:22px">'+money(er.actualPhp)+'</div>'+
+        '<div class="dim">of '+money(er.targetPhp)+'</div></div>'+
+        '<div class="bar"><div class="bar-fill '+(er.isOver?'over':'')+'" style="width:'+Math.min(100,er.pctUsed||0)+'%"></div></div>';
+      w.appendChild(card);
+    }
+
+    var bc=el('div','card');
+    bc.appendChild(el('div','card-h','Segment targets'));
+    (bg.budgets||[]).forEach(function(b){ bc.appendChild(budgetRow(b)); });
+    if(!(bg.budgets||[]).length) bc.appendChild(el('div','empty','No budget rows.'));
+    w.appendChild(bc);
+
+    // recurring obligations
+    var rows=(rec.rows||[]);
+    if(rows.length){
+      var rcard=el('div','card');
+      rcard.appendChild(el('div','card-h','Recurring & installments'));
+      var l=el('div','list');
+      rows.forEach(function(o){
+        var amt=o.Amount, ml=o['Months Left'];
+        var r=el('div','litem');
+        r.innerHTML='<div class="ic">⟳</div><div class="grow"><div class="t1">'+esc(o.Description||'')+'</div>'+
+          '<div class="t2">'+esc(o.Group||'')+(ml!=null&&ml!==''?(' · '+esc(ml)+' mo left'):'')+'</div></div>'+
+          '<div class="amt">'+(amt!=null&&amt!==''?money(amt):'—')+'</div>';
+        l.appendChild(r);
+      });
+      rcard.appendChild(l); w.appendChild(rcard);
+    }
+    paint(w);
+  }).catch(showErr);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  INVESTMENTS
+ * ════════════════════════════════════════════════════════════════════════ */
+function renderInvestments(){
+  loading();
+  return gs('api_getInvestments').then(function(inv){
+    var w=el('div','screen');
+    w.appendChild(el('div','screen-title','Investments'));
+    w.appendChild(el('div','screen-sub','Read-only · valued in PHP via the sheet'));
+
+    var hero=el('div','stat hero');
+    hero.innerHTML='<div class="stat-label">Portfolio value</div><div class="stat-value">'+money(inv.totalValuePhp)+'</div>'+
+      '<div class="stat-sub">'+(inv.positions||[]).length+' positions</div>';
+    w.appendChild(hero);
+
+    var card=el('div','card');
+    card.appendChild(el('div','card-h','Holdings'));
+    var l=el('div','list');
+    (inv.positions||[]).forEach(function(p){
+      var r=el('div','litem');
+      var q=p.quantity!=null?(num(p.quantity)+' · '):'';
+      r.innerHTML='<div class="ic">▲</div><div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
+        '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of port.</div></div>'+
+        '<div class="amt">'+money(p.valuePhp)+'</div>';
+      l.appendChild(r);
+      var br=el('div'); br.style.padding='0 4px 10px'; br.style.borderBottom='1px solid var(--border)';
+      br.innerHTML='<div class="bar" style="margin-top:0"><div class="bar-fill" style="width:'+(p.weightPct||0)+'%"></div></div>';
+      l.appendChild(br);
+    });
+    if(!(inv.positions||[]).length) l.appendChild(el('div','empty','No investment positions found.'));
+    card.appendChild(l); w.appendChild(card);
+
+    // targets reference
+    var tc=el('div','card');
+    tc.appendChild(el('div','card-h','Strategy targets (reference)'));
+    var seg=inv.segmentTargets||{}, core=inv.coreTargets||{};
+    var html='<div class="dim" style="font-size:13px">Core allocation: ';
+    html+=Object.keys(core).map(function(k){return esc(core[k])+' '+esc(k)+'%';}).join(' · ');
+    html+='</div><div class="dim" style="font-size:13px;margin-top:6px">Segments: ';
+    html+=Object.keys(seg).map(function(k){return esc(k)+' '+esc(seg[k])+'%';}).join(' · ');
+    html+='</div>';
+    tc.innerHTML+=html; w.appendChild(tc);
+
+    paint(w);
+  }).catch(showErr);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  TAX / BIR (Ledger)
+ * ════════════════════════════════════════════════════════════════════════ */
+function renderTax(){
+  loading();
+  return gs('api_getLedger').then(function(res){
+    var rows=res.rows||[];
+    var w=el('div','screen');
+    w.appendChild(el('div','screen-title','Tax · BIR Ledger'));
+    w.appendChild(el('div','screen-sub','8% gross-income regime tracker'));
+
+    if(!rows.length){ w.appendChild(el('div','empty','Ledger is empty.')); paint(w); return; }
+    var cols=Object.keys(rows[0]);
+    var card=el('div','card');
+    var wrap=el('div','tbl-wrap');
+    var t=el('table','tbl');
+    var thead='<thead><tr>'+cols.map(function(c){return '<th>'+esc(c)+'</th>';}).join('')+'</tr></thead>';
+    var tbody='<tbody>'+rows.map(function(r){
+      return '<tr>'+cols.map(function(c){
+        var v=r[c]; if(v instanceof Date) v=fmtDate(v);
+        return '<td>'+esc(v==null?'':v)+'</td>';
+      }).join('')+'</tr>';
+    }).join('')+'</tbody>';
+    t.innerHTML=thead+tbody;
+    wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
+    paint(w);
+  }).catch(showErr);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  MODALS — transaction, transfer, account
+ * ════════════════════════════════════════════════════════════════════════ */
+function openModal(node){
+  var root=$('#modalRoot'); var card=$('#modalCard');
+  card.innerHTML=''; card.appendChild(node); root.hidden=false;
+  $('.modal-backdrop',root).onclick=closeModal;
+}
+function closeModal(){ $('#modalRoot').hidden=true; }
+
+function modalShell(title,bodyNode,footerNodes){
+  var c=el('div');
+  var h=el('div','modal-h'); h.innerHTML='<h3>'+esc(title)+'</h3>';
+  var x=el('button','icon-btn','✕'); x.onclick=closeModal; h.appendChild(x);
+  var b=el('div','modal-b'); b.appendChild(bodyNode);
+  var f=el('div','modal-f'); (footerNodes||[]).forEach(function(n){f.appendChild(n);});
+  c.appendChild(h); c.appendChild(b); c.appendChild(f);
+  return c;
+}
+
+function fieldEl(label,inputNode,hint){
+  var f=el('div','field');
+  f.appendChild(el('label',null,esc(label)));
+  f.appendChild(inputNode);
+  if(hint) f.appendChild(el('div','hint',esc(hint)));
+  return f;
+}
+function selectEl(options,value){
+  var s=el('select');
+  options.forEach(function(o){
+    var op=el('option'); var val=(typeof o==='object')?o.value:o; var lab=(typeof o==='object')?o.label:o;
+    op.value=val; op.textContent=lab; if(String(val)===String(value))op.selected=true; s.appendChild(op);
+  });
+  return s;
+}
+function inputEl(type,value,ph){var i=el('input');i.type=type||'text';if(value!=null)i.value=value;if(ph)i.placeholder=ph;return i;}
+
+/* —— add / edit a normal transaction —— */
+function openTxModal(t){
+  if(!S.boot){ withBoot(function(){ openTxModal(t); }); return; }
+  var isEdit=!!(t&&t.ID);
+  var isXfer = t && (String(t.Type)==='Transfer' || (t.ToAccount&&String(t.ToAccount).trim()));
+  if(isXfer){ openTransferModal(t); return; }
+
+  var cats=Object.keys(S.boot.categories||{}).filter(function(c){
+    return String((S.boot.categories[c]||{}).Type)!=='Transfer';
+  }).sort();
+  var accs=(S.boot.accounts||[]).map(function(a){return a.name;});
+
+  var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fCat=selectEl(cats, t?t.Category:'');
+  var fAcc=selectEl(accs, t?t.Account:'');
+  var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
+  var fDesc=inputEl('text', t?t.Description:'', 'Description');
+  var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
+
+  var body=el('div');
+  body.appendChild(fieldEl('Date', fDate));
+  body.appendChild(fieldEl('Category', fCat));
+  body.appendChild(fieldEl('Account', fAcc));
+  var rowAmt=el('div','field-row');
+  rowAmt.appendChild(fieldEl('Amount', fAmt));
+  rowAmt.appendChild(fieldEl('Exchange rate', fFx, 'PHP per 1 unit; blank = auto'));
+  body.appendChild(rowAmt);
+  body.appendChild(fieldEl('Description', fDesc));
+
+  var save=el('button','btn primary', isEdit?'Save':'Add');
+  save.onclick=function(){
+    var payload={
+      Date:new Date(fDate.value), Category:fCat.value, Account:fAcc.value,
+      Amount:parseFloat(fAmt.value), Description:fDesc.value
+    };
+    if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
+    if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
+    save.disabled=true; save.textContent='Saving…';
+    var call = isEdit
+      ? gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
+      : gs('api_createTransaction', payload);
+    call.then(function(){ closeModal(); toast(isEdit?'Updated':'Added','ok'); afterMutation(); })
+        .catch(function(e){ save.disabled=false; save.textContent=isEdit?'Save':'Add'; toast(e.message||e,'err'); });
+  };
+  var foot=[save];
+  if(isEdit){
+    var del=el('button','btn danger','Delete'); del.style.marginRight='auto';
+    del.onclick=function(){ confirmDelete(t); };
+    foot.unshift(del);
+  }
+  openModal(modalShell(isEdit?'Edit transaction':'Add transaction', body, foot));
+}
+
+/* —— transfer —— */
+function openTransferModal(t){
+  if(!S.boot){ withBoot(function(){ openTransferModal(t); }); return; }
+  var isEdit=!!(t&&t.ID);
+  var xferCats=Object.keys(S.boot.categories||{}).filter(function(c){
+    return String((S.boot.categories[c]||{}).Type)==='Transfer';
+  }).sort();
+  var accs=(S.boot.accounts||[]).map(function(a){return a.name;});
+
+  var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fCat=selectEl(xferCats.length?xferCats:['(no transfer category)'], t?t.Category:'');
+  var fFrom=selectEl(accs, t?t.Account:'');
+  var fTo=selectEl(accs, t?t.ToAccount:'');
+  var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
+  var fToAmt=inputEl('number', t&&t.ToAmount?Math.abs(Number(t.ToAmount)):'', 'same as amount'); fToAmt.step='0.01';
+  var fDesc=inputEl('text', t?t.Description:'', 'Description');
+
+  var body=el('div');
+  body.appendChild(fieldEl('Date', fDate));
+  body.appendChild(fieldEl('Category', fCat));
+  var rowAcc=el('div','field-row');
+  rowAcc.appendChild(fieldEl('From', fFrom));
+  rowAcc.appendChild(fieldEl('To', fTo));
+  body.appendChild(rowAcc);
+  var rowAmt=el('div','field-row');
+  rowAmt.appendChild(fieldEl('Amount', fAmt));
+  rowAmt.appendChild(fieldEl('To amount', fToAmt, 'cross-currency only'));
+  body.appendChild(rowAmt);
+  body.appendChild(fieldEl('Description', fDesc));
+
+  var save=el('button','btn primary', isEdit?'Save':'Add transfer');
+  save.onclick=function(){
+    if(fFrom.value===fTo.value){toast('From and To must differ','err');return;}
+    var amount=parseFloat(fAmt.value);
+    if(isNaN(amount)){toast('Enter an amount','err');return;}
+    var payload={Date:new Date(fDate.value),Category:fCat.value,Account:fFrom.value,
+                 ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
+    if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
+    save.disabled=true; save.textContent='Saving…';
+    var call = isEdit
+      ? gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
+      : gs('api_createTransfer', payload);
+    call.then(function(){ closeModal(); toast(isEdit?'Updated':'Transfer added','ok'); afterMutation(); })
+        .catch(function(e){ save.disabled=false; save.textContent=isEdit?'Save':'Add transfer'; toast(e.message||e,'err'); });
+  };
+  var foot=[save];
+  if(isEdit){
+    var del=el('button','btn danger','Delete'); del.style.marginRight='auto';
+    del.onclick=function(){ confirmDelete(t); };
+    foot.unshift(del);
+  }
+  openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, foot));
+}
+
+function confirmDelete(t){
+  var body=el('div','dim','Delete this transaction permanently? This cannot be undone.');
+  var yes=el('button','btn danger','Delete');
+  yes.onclick=function(){
+    yes.disabled=true; yes.textContent='Deleting…';
+    gs('api_deleteTransaction',{ID:t.ID}).then(function(){
+      closeModal(); toast('Deleted','ok'); afterMutation();
+    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
+  };
+  var no=el('button','btn','Cancel'); no.onclick=function(){ openTxModal(t); };
+  openModal(modalShell('Confirm delete', body, [no,yes]));
+}
+
+/* —— edit account —— */
+function openAccountModal(a){
+  var body=el('div');
+  var info=el('div','card'); info.style.marginBottom='14px';
+  info.innerHTML='<div class="row-between"><span class="dim">Balance</span><strong>'+money(a.balancePhp)+'</strong></div>'+
+    '<div class="row-between"><span class="dim">Type</span><span>'+esc(a.type||'—')+' · '+esc(a.subtype||'—')+'</span></div>'+
+    (a.currency?'<div class="row-between"><span class="dim">Currency</span><span>'+esc(a.currency)+'</span></div>':'');
+  body.appendChild(info);
+
+  var fFreq=selectEl(['','Daily','Monthly','Yearly','None'], a.interestFrequency||'');
+  var fRate=inputEl('number', a.interestRate!=null?a.interestRate:'', 'e.g. 0.04'); fRate.step='0.0001';
+  var fLimit=inputEl('number', a.creditLimit!=null?a.creditLimit:'', ''); fLimit.step='0.01';
+  var fNotes=el('textarea'); fNotes.rows=2; fNotes.value=a.notes||'';
+
+  var rowI=el('div','field-row');
+  rowI.appendChild(fieldEl('Interest freq.', fFreq));
+  rowI.appendChild(fieldEl('Interest rate', fRate));
+  body.appendChild(rowI);
+  if(a.isLiability||a.creditLimit!=null) body.appendChild(fieldEl('Credit limit', fLimit));
+  body.appendChild(fieldEl('Notes', fNotes));
+
+  var save=el('button','btn primary','Save');
+  save.onclick=function(){
+    var payload={Name:a.name};
+    if(fFreq.value!==(a.interestFrequency||'')) payload['Interest Frequency']=fFreq.value;
+    if(fRate.value!=='') payload['Interest Rate']=parseFloat(fRate.value);
+    if(fLimit.value!=='') payload['Credit Limit']=parseFloat(fLimit.value);
+    if(fNotes.value!==(a.notes||'')) payload['Notes']=fNotes.value;
+    if(Object.keys(payload).length===1){toast('No changes','err');return;}
+    save.disabled=true; save.textContent='Saving…';
+    gs('api_updateAccount',payload).then(function(){
+      closeModal(); toast('Account updated','ok'); S.cache={}; renderAccounts();
+    }).catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
+  };
+  openModal(modalShell(a.name, body, [save]));
+}
+
+/* ── shared ──────────────────────────────────────────────────────────────── */
+function isoDate(d){
+  if(!d) return '';
+  var dt=(d instanceof Date)?d:new Date(d);
+  if(isNaN(dt.getTime())) return '';
+  var m=String(dt.getMonth()+1).padStart(2,'0'), day=String(dt.getDate()).padStart(2,'0');
+  return dt.getFullYear()+'-'+m+'-'+day;
+}
+function afterMutation(){
+  // Each screen re-fetches its own fresh balances/budgets; account & category
+  // names are unchanged by a tx write, so no need to re-hydrate getBootstrap.
+  S.cache={};
+  if(S.screen==='transactions'){ S.tx.offset=0; renderTransactions(); }
+  else render();
+}
+function showErr(e){
+  $('#main').innerHTML='<div class="empty">'+esc(e&&e.message?e.message:e)+
+    '<br><button class="btn" style="margin-top:12px" onclick="render()">Retry</button></div>';
+}
+</script>

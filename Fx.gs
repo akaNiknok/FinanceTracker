@@ -38,6 +38,22 @@ function fx_resolveRate_(currency, overrideRate) {
            warning: "Could not fetch live FX for " + currency + "; ExchangeRate left blank (=1)." };
 }
 
+/**
+ * Cache-only rate — NEVER hits the network. Used by hot read paths (Dashboard /
+ * Budgets) so a page load can't stall on a slow FX fetch. Returns a warm cached
+ * live rate if present, else USD_PHP_FALLBACK for USD→PHP, else 0. The cache is
+ * warmed by getBootstrap (background) and by write-time fx_resolveRate_, both of
+ * which still fetch live.
+ */
+function fx_cachedRate_(from, to) {
+  const hit = CacheService.getScriptCache().get("fx_" + from + "_" + to);
+  if (hit) return parseFloat(hit) || 0;
+  if (String(from).toUpperCase() === "USD" && String(to).toUpperCase() === BASE_CURRENCY) {
+    return cfgUsdPhpFallback_() || 0;
+  }
+  return 0;
+}
+
 /** from→to rate, cached 6h. Returns a number or 0 on failure. */
 function fx_liveRate_(from, to) {
   const cache = CacheService.getScriptCache();

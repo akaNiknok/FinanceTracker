@@ -193,8 +193,10 @@ function tx_rowObject_(sheet, headerMap, row) {
   return tx_clean_(obj);
 }
 
-/** Strip the internal __row marker before returning to a client. */
+/** Strip the internal __row marker + stringify Dates (google.script.run-safe). */
 function tx_clean_(obj) {
-  if (obj && obj.__row !== undefined) { const c = {}; Object.keys(obj).forEach(function (k) { if (k !== "__row") c[k] = obj[k]; }); return c; }
-  return obj;
+  if (!obj) return obj;
+  const c = {};
+  Object.keys(obj).forEach(function (k) { if (k !== "__row") c[k] = su_dateStr_(obj[k]); });
+  return c;
 }

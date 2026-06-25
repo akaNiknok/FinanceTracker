@@ -1,8 +1,12 @@
 # FinanceTracker — System Overhaul Plan
 
-Status: **Phase 1 implemented** (2026-06-24) — migration done owner-side; service
-layer + `?action=` JSON API built (see `CLAUDE.md` and the 2026-06-24 MEMORY note).
-Pending owner verification (`Tests.gs test_balanceReconciliation`) before Phase 2.
+Status: **Phase 1 verified + Phase 2 implemented** (2026-06-25). Phase 1: migration
+done owner-side; service layer + `?action=` JSON API; owner ran `test_all`/
+`test_balanceReconciliation` (all 26 accounts reconcile). Phase 2: responsive
+`HtmlService` SPA (`WebApp.gs` + `Index/Stylesheet/App.html`) served on bare GET,
+talking to the service layer via `google.script.run` — see `CLAUDE.md` "Web App
+frontend (Phase 2)" + the 2026-06-25 MEMORY note. **Pending:** owner `npm run push`
++ redeploy same `deploymentId`. **Next: Phase 3** (auth cutover + bot upgrades).
 All five open items resolved (§8).
 
 ## 1. Goal

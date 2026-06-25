@@ -92,6 +92,18 @@ function su_findRowById_(sheet, headerMap, id) {
   return 0;
 }
 
+// ── Serialization safety for google.script.run ───────────────────────────────
+// The HtmlService UI calls api_* DIRECTLY via google.script.run, whose return
+// values may NOT contain Date objects — a single nested Date makes the ENTIRE
+// response arrive as null on the client. Sheet reads hand back Date cells, so any
+// payload built from su_readObjects_ must pass its values through this first.
+// (The JSON `?action=` path doesn't need it — JSON.stringify handles Dates.)
+function su_dateStr_(v) {
+  return (v instanceof Date)
+    ? Utilities.formatDate(v, Session.getScriptTimeZone(), "yyyy-MM-dd")
+    : v;
+}
+
 // ── JSON response (canonical; used by Router + Read) ──────────────────────────
 function jsonResponse(obj) {
   return ContentService

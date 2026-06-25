@@ -1,0 +1,190 @@
+<style>
+/* ── Design tokens ───────────────────────────────────────────────────────── */
+:root{
+  --bg:#0f1115; --surface:#171a21; --surface-2:#1f232c; --surface-3:#272c37;
+  --border:#2c313d; --border-2:#3a4150;
+  --text:#e7eaf0; --text-dim:#9aa3b2; --text-faint:#6b7484;
+  --accent:#5b8cff; --accent-2:#7aa2ff;
+  --pos:#3ecf8e; --neg:#ff6b6b; --warn:#ffb454; --info:#5b8cff;
+  --shadow:0 6px 24px rgba(0,0,0,.35);
+  --radius:14px; --radius-sm:10px;
+  --nav-w:212px;
+  --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.45}
+button{font-family:inherit;cursor:pointer}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:8px}
+::-webkit-scrollbar-track{background:transparent}
+
+#app{min-height:100vh;display:grid;grid-template-columns:1fr;grid-template-rows:auto 1fr auto;grid-template-areas:"topbar" "main" "nav"}
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.topbar{grid-area:topbar;display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.2px}
+.brand-dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--pos));box-shadow:0 0 12px var(--accent)}
+.brand-name{font-size:16px}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.month-picker{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:7px 10px;font-size:13px;outline:none}
+.icon-btn{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);
+  width:36px;height:36px;font-size:17px;display:grid;place-items:center;transition:.15s}
+.icon-btn:hover{background:var(--surface-3)}
+.icon-btn.spin{animation:spin .8s linear infinite}
+
+/* ── Nav (bottom on mobile, sidebar on desktop) ──────────────────────────── */
+.nav{grid-area:nav;display:flex;justify-content:space-around;background:var(--surface);
+  border-top:1px solid var(--border);position:sticky;bottom:0;z-index:20;padding:6px 4px env(safe-area-inset-bottom)}
+.nav-item{background:none;border:none;color:var(--text-faint);display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:6px 8px;border-radius:10px;font-size:10.5px;font-weight:600;transition:.15s;flex:1}
+.nav-item .nav-ico{font-size:17px;line-height:1}
+.nav-item.active{color:var(--accent-2)}
+.nav-item.active .nav-ico{filter:drop-shadow(0 0 8px var(--accent))}
+.nav-item:hover{color:var(--text)}
+
+/* ── Main ────────────────────────────────────────────────────────────────── */
+.main{grid-area:main;padding:16px;max-width:1100px;width:100%;margin:0 auto}
+.screen{animation:fade .25s ease}
+.screen-title{font-size:20px;font-weight:700;margin:2px 0 14px}
+.screen-sub{color:var(--text-dim);font-size:13px;margin:-8px 0 16px}
+
+/* ── Cards / grid ────────────────────────────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+.card-h{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-dim);margin:0 0 12px}
+.grid{display:grid;gap:14px}
+.grid-2{grid-template-columns:repeat(2,1fr)}
+.grid-3{grid-template-columns:repeat(3,1fr)}
+.grid-auto{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+
+/* ── Stat tiles ──────────────────────────────────────────────────────────── */
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.stat-label{font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-faint);font-weight:600}
+.stat-value{font-size:23px;font-weight:750;margin-top:4px;letter-spacing:-.3px}
+.stat-sub{font-size:12px;color:var(--text-dim);margin-top:2px}
+.hero{background:linear-gradient(135deg,#1b2030,#171a21);border:1px solid var(--border-2)}
+.hero .stat-value{font-size:30px}
+
+/* ── Misc text ───────────────────────────────────────────────────────────── */
+.pos{color:var(--pos)} .neg{color:var(--neg)} .warn{color:var(--warn)} .dim{color:var(--text-dim)} .faint{color:var(--text-faint)}
+.mono{font-variant-numeric:tabular-nums}
+.row-between{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;background:var(--surface-3);color:var(--text-dim)}
+.pill.pos{background:rgba(62,207,142,.14);color:var(--pos)}
+.pill.neg{background:rgba(255,107,107,.14);color:var(--neg)}
+.pill.warn{background:rgba(255,180,84,.14);color:var(--warn)}
+
+/* ── Progress bars ───────────────────────────────────────────────────────── */
+.bar{height:8px;border-radius:6px;background:var(--surface-3);overflow:hidden;margin-top:8px}
+.bar-fill{height:100%;border-radius:6px;background:var(--accent);transition:width .4s ease}
+.bar-fill.over{background:var(--neg)}
+.bar-fill.warn{background:var(--warn)}
+
+/* ── Lists / rows ────────────────────────────────────────────────────────── */
+.list{display:flex;flex-direction:column}
+.litem{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border)}
+.litem:last-child{border-bottom:none}
+.litem .ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:16px;flex:none;
+  background:var(--surface-3);color:var(--text-dim)}
+.litem .ic.in{background:rgba(62,207,142,.13);color:var(--pos)}
+.litem .ic.out{background:rgba(255,107,107,.13);color:var(--neg)}
+.litem .ic.xfer{background:rgba(91,140,255,.13);color:var(--accent-2)}
+.litem .grow{flex:1;min-width:0}
+.litem .t1{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.litem .t2{font-size:12px;color:var(--text-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.litem .amt{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+.litem.click{cursor:pointer;border-radius:10px}
+.litem.click:hover{background:var(--surface-2)}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:9px 14px;font-size:14px;font-weight:600;transition:.15s}
+.btn:hover{background:var(--surface-3)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#0b1020}
+.btn.primary:hover{background:var(--accent-2)}
+.btn.danger{color:var(--neg);border-color:rgba(255,107,107,.4)}
+.btn.danger:hover{background:rgba(255,107,107,.1)}
+.btn.sm{padding:6px 10px;font-size:12.5px}
+.btn.ghost{background:none;border-color:transparent}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ── Filters ─────────────────────────────────────────────────────────────── */
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.filters input,.filters select{background:var(--surface-2);color:var(--text);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;outline:none;min-width:0}
+.filters input:focus,.filters select:focus{border-color:var(--accent)}
+.filters .search{flex:1;min-width:140px}
+
+/* ── Forms / modal ───────────────────────────────────────────────────────── */
+.modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:16px}
+.modal-root[hidden]{display:none}
+.modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(2px)}
+.modal-card{position:relative;background:var(--surface);border:1px solid var(--border-2);border-radius:16px;
+  width:100%;max-width:460px;max-height:90vh;overflow:auto;box-shadow:var(--shadow);animation:pop .2s ease}
+.modal-h{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)}
+.modal-h h3{margin:0;font-size:16px}
+.modal-b{padding:18px}
+.modal-f{padding:14px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
+.field{margin-bottom:13px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:5px}
+.field input,.field select,.field textarea{width:100%;background:var(--surface-2);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 11px;font-size:14px;outline:none;font-family:inherit}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--accent)}
+.field .hint{font-size:11px;color:var(--text-faint);margin-top:4px}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.seg-toggle{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;margin-bottom:14px}
+.seg-toggle button{flex:1;background:none;border:none;color:var(--text-dim);padding:8px;border-radius:8px;font-weight:600;font-size:13px}
+.seg-toggle button.on{background:var(--accent);color:#0b1020}
+
+/* ── FAB ─────────────────────────────────────────────────────────────────── */
+.fab{position:fixed;right:18px;bottom:78px;width:54px;height:54px;border-radius:50%;border:none;z-index:30;
+  background:var(--accent);color:#0b1020;font-size:28px;font-weight:400;line-height:1;box-shadow:var(--shadow);transition:.15s}
+.fab:hover{background:var(--accent-2);transform:translateY(-2px)}
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+.toast-root{position:fixed;left:0;right:0;bottom:90px;z-index:60;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+.toast{background:var(--surface-3);border:1px solid var(--border-2);color:var(--text);padding:10px 16px;border-radius:999px;
+  font-size:13px;font-weight:600;box-shadow:var(--shadow);animation:pop .2s ease}
+.toast.ok{border-color:rgba(62,207,142,.5)} .toast.err{border-color:rgba(255,107,107,.5)}
+
+/* ── Table (Tax / wide lists) ────────────────────────────────────────────── */
+.tbl-wrap{overflow-x:auto}
+table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+table.tbl th{text-align:left;color:var(--text-faint);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.4px;
+  padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+table.tbl td{padding:9px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+table.tbl tr:hover td{background:var(--surface-2)}
+
+/* ── Loaders / empty ─────────────────────────────────────────────────────── */
+.boot-loader{display:grid;place-items:center;gap:14px;padding:80px 0;color:var(--text-dim)}
+.spinner{width:34px;height:34px;border:3px solid var(--border-2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+.empty{text-align:center;color:var(--text-faint);padding:34px 14px;font-size:14px}
+.skeleton{background:linear-gradient(90deg,var(--surface-2),var(--surface-3),var(--surface-2));background-size:200% 100%;
+  animation:shimmer 1.2s infinite;border-radius:8px;height:14px}
+
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+@keyframes shimmer{to{background-position:-200% 0}}
+
+/* ── Responsive: tablet & up → sidebar layout ────────────────────────────── */
+@media(min-width:860px){
+  #app{grid-template-columns:var(--nav-w) 1fr;grid-template-rows:auto 1fr;
+    grid-template-areas:"nav topbar" "nav main"}
+  .nav{flex-direction:column;justify-content:flex-start;gap:4px;border-top:none;border-right:1px solid var(--border);
+    padding:16px 12px;position:sticky;top:0;height:100vh}
+  .nav::before{content:"";display:block;height:8px}
+  .nav-item{flex-direction:row;justify-content:flex-start;gap:12px;font-size:14px;padding:11px 13px;width:100%}
+  .nav-item .nav-ico{font-size:18px}
+  .nav-item.active{background:var(--surface-2)}
+  .fab{display:none}
+  .main{padding:22px 26px}
+}
+@media(max-width:520px){
+  .grid-2,.grid-3{grid-template-columns:1fr}
+  .field-row{grid-template-columns:1fr}
+  .stat-value{font-size:21px}
+  .main{padding:14px 12px}
+}
+</style>

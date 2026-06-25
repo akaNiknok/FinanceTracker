@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <?!= include('Stylesheet'); ?>
+  </head>
+  <body>
+    <div id="app">
+      <!-- Top bar (shown on every screen) -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <span class="brand-name">FinanceTracker</span>
+        </div>
+        <div class="topbar-right">
+          <select id="monthPicker" class="month-picker" title="Period"></select>
+          <button id="refreshBtn" class="icon-btn" title="Refresh">&#x21bb;</button>
+        </div>
+      </header>
+
+      <!-- Desktop sidebar / mobile bottom-nav share the same buttons -->
+      <nav id="nav" class="nav">
+        <button class="nav-item active" data-screen="dashboard"><span class="nav-ico">&#9737;</span><span class="nav-label">Dashboard</span></button>
+        <button class="nav-item" data-screen="transactions"><span class="nav-ico">&#8645;</span><span class="nav-label">Transactions</span></button>
+        <button class="nav-item" data-screen="accounts"><span class="nav-ico">&#127974;</span><span class="nav-label">Accounts</span></button>
+        <button class="nav-item" data-screen="budgets"><span class="nav-ico">&#9678;</span><span class="nav-label">Budgets</span></button>
+        <button class="nav-item" data-screen="investments"><span class="nav-ico">&#9650;</span><span class="nav-label">Invest</span></button>
+        <button class="nav-item" data-screen="tax"><span class="nav-ico">&#167;</span><span class="nav-label">Tax</span></button>
+      </nav>
+
+      <!-- Screens render here -->
+      <main id="main" class="main">
+        <div id="bootLoader" class="boot-loader"><div class="spinner"></div><p>Loading your finances…</p></div>
+      </main>
+
+      <!-- Floating quick-add (Transactions) -->
+      <button id="fab" class="fab" title="Add transaction" hidden>+</button>
+
+      <!-- Modal host -->
+      <div id="modalRoot" class="modal-root" hidden>
+        <div class="modal-backdrop"></div>
+        <div class="modal-card" id="modalCard"></div>
+      </div>
+
+      <!-- Toasts -->
+      <div id="toastRoot" class="toast-root"></div>
+    </div>
+
+    <?!= include('App'); ?>
+  </body>
+</html>
