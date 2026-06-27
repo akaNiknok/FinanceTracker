@@ -62,6 +62,7 @@ function api_createTransaction(args) {
 
   const row = su_appendInputRow_(sheet, h, input);
   const created = tx_rowObject_(sheet, h, row);
+  cache_bumpVersion_();
   const res = { status: "success", message: "Transaction created.", transaction: created };
   if (fx.warning) res.warning = fx.warning;
   return res;
@@ -106,6 +107,7 @@ function api_createTransfer(args) {
   if (!fx.blank) input.ExchangeRate = fx.rate;
 
   const row = su_appendInputRow_(sheet, h, input);
+  cache_bumpVersion_();
   return { status: "success", message: "Transfer created.",
            transaction: tx_rowObject_(sheet, h, row) };
 }
@@ -166,6 +168,7 @@ function api_updateTransaction(args) {
 
   su_setInputCells_(sheet, h, row, patch);
   SpreadsheetApp.flush();
+  cache_bumpVersion_();
   return { status: "success", message: "Transaction updated.",
            transaction: tx_rowObject_(sheet, h, row) };
 }
@@ -180,10 +183,93 @@ function api_deleteTransaction(args) {
   if (!row) throw new Error("No transaction with ID: " + args.ID);
   const snapshot = tx_rowObject_(sheet, h, row);
   sheet.deleteRow(row);
+  cache_bumpVersion_();
   return { status: "success", message: "Transaction deleted.", transaction: snapshot };
 }
 
+// ── bulk update / delete (one read, one flush, one version bump) ──────────────
+/**
+ * Patch many transactions at once. args = { ids:[...], patch:{Category|Account|
+ * Date|...} }. The patch is validated + coerced ONCE, the ID column is read ONCE
+ * into an id→row map, every row is written via su_setInputCells_ (input-cols only),
+ * then a single flush + version bump. Returns { updated, skipped:[ids not found] }.
+ */
+function api_bulkUpdateTransactions(args) {
+  args = args || {};
+  const ids = (args.ids || []).map(String);
+  const patch = args.patch || {};
+  if (!ids.length) throw new Error("bulkUpdate requires a non-empty ids[].");
+
+  const cats = tx_categoriesMap_();
+  const accts = tx_accountsMap_();
+  if (patch.Category !== undefined && !cats[patch.Category]) throw new Error("Unknown Category: " + patch.Category);
+  if (patch.Account  !== undefined && !accts[patch.Account]) throw new Error("Unknown Account: " + patch.Account);
+  if (patch.ToAccount !== undefined && patch.ToAccount !== "" && !accts[patch.ToAccount])
+    throw new Error("Unknown ToAccount: " + patch.ToAccount);
+
+  const p = {};
+  TX_CLIENT_FIELDS.forEach(function (f) { if (patch[f] !== undefined) p[f] = patch[f]; });
+  if (Object.keys(p).length === 0) throw new Error("Nothing to update.");
+  if (p.Date !== undefined) p.Date = tx_parseDate_(p.Date);
+  if (p.Amount !== undefined) p.Amount = parseFloat(p.Amount);
+  if (p.ToAmount !== undefined && p.ToAmount !== "") p.ToAmount = parseFloat(p.ToAmount);
+
+  const sheet = su_sheet_(SHEET_TX);
+  const h = su_headerMap_(sheet);
+  const rowById = tx_idRowMap_(sheet, h);
+
+  let updated = 0; const skipped = [];
+  ids.forEach(function (id) {
+    const row = rowById[id];
+    if (!row) { skipped.push(id); return; }
+    su_setInputCells_(sheet, h, row, p);
+    updated++;
+  });
+  SpreadsheetApp.flush();
+  cache_bumpVersion_();
+  return { status: "success", message: "Bulk update complete.", updated: updated, skipped: skipped };
+}
+
+/**
+ * Delete many transactions at once. args = { ids:[...] }. Rows are resolved from a
+ * single ID-column read, then deleted in DESCENDING row order so earlier deletes
+ * don't shift the indices of later ones. One version bump at the end.
+ */
+function api_bulkDeleteTransactions(args) {
+  args = args || {};
+  const ids = (args.ids || []).map(String);
+  if (!ids.length) throw new Error("bulkDelete requires a non-empty ids[].");
+
+  const sheet = su_sheet_(SHEET_TX);
+  const h = su_headerMap_(sheet);
+  const rowById = tx_idRowMap_(sheet, h);
+
+  const rows = []; const skipped = [];
+  ids.forEach(function (id) {
+    const row = rowById[id];
+    if (!row) { skipped.push(id); return; }
+    rows.push(row);
+  });
+  rows.sort(function (a, b) { return b - a; }); // bottom-up so indices stay valid
+  rows.forEach(function (row) { sheet.deleteRow(row); });
+  SpreadsheetApp.flush();
+  cache_bumpVersion_();
+  return { status: "success", message: "Bulk delete complete.", deleted: rows.length, skipped: skipped };
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
+/** id (string) → 1-based sheet row, from a single read of the ID column. */
+function tx_idRowMap_(sheet, headerMap) {
+  const idCol = headerMap["ID"];
+  if (!idCol) throw new Error("Transactions has no 'ID' column — run the migration first.");
+  const last = su_lastDataRow_(sheet, headerMap);
+  const map = {};
+  if (last < 2) return map;
+  const ids = sheet.getRange(2, idCol, last - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) map[String(ids[i][0])] = i + 2;
+  return map;
+}
+
 /**
  * Coerce a client-supplied Date into a real Date the sheet can derive Month from.
  * The UI sends an ISO "yyyy-MM-dd" STRING (google.script.run rejects a Date nested

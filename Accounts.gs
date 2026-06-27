@@ -107,6 +107,7 @@ function api_updateAccount(args) {
   });
   if (!wrote) throw new Error("No editable fields supplied. Editable: " + ACCOUNT_EDITABLE.join(", "));
   SpreadsheetApp.flush();
+  cache_bumpVersion_();
   return { status: "success", message: "Account updated.", name: args.Name, fieldsWritten: wrote };
 }
 

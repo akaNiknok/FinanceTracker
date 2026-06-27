@@ -25,11 +25,21 @@ function su_headerMap_(sheet) {
   return map;
 }
 
+// Request-scoped read memo: one full sheet read is reused across the many
+// su_readObjects_ calls inside a single execution (e.g. api_getDashboard reads
+// Accounts + Transactions several times). GAS gives each google.script.run call a
+// fresh global scope, so this never leaks across requests; write helpers below
+// invalidate the entry for the sheet they touch so a write→read in one execution
+// can't see stale rows. The `limit` variant bypasses the memo (rare, small).
+var _suMemo = {};
+function su_invalidateMemo_(name) { delete _suMemo[name]; }
+
 /** Whole sheet → array of row objects keyed by header (blank rows skipped). */
 function su_readObjects_(name, limit) {
+  if (!limit && _suMemo[name]) return _suMemo[name];
   const sheet = su_sheet_(name);
   const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
+  if (values.length < 2) { if (!limit) _suMemo[name] = []; return []; }
   const headers = values[0];
   const out = [];
   for (let i = 1; i < values.length; i++) {
@@ -41,6 +51,7 @@ function su_readObjects_(name, limit) {
     out.push(obj);
     if (limit && out.length >= limit) break;
   }
+  if (!limit) _suMemo[name] = out;
   return out;
 }
 
@@ -61,6 +72,7 @@ function su_lastDataRow_(sheet, headerMap) {
  * stray field can never land in a formula cell.
  */
 function su_setInputCells_(sheet, headerMap, row, obj) {
+  su_invalidateMemo_(sheet.getName());
   Object.keys(obj).forEach(function (header) {
     if (TX_INPUT_COLS.indexOf(header) === -1) return;     // not an input column
     const col = headerMap[header];

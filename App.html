@@ -20,13 +20,51 @@ function gs(fn, arg){
   });
 }
 
+/* ── stale-while-revalidate cache, gated by the server data version ──────────
+ * cachedCall(key, loader, onData): paint instantly from cache, then check the
+ * tiny api_getDataVersion; only re-run `loader` (the big payload) when the
+ * version moved. onData may fire twice: once from cache, once after a refetch.
+ * Cold keys fetch data + version in parallel (no extra latency vs. today).
+ * `loader` is a thunk returning a Promise (so callers can Promise.all). */
+function cachedCall(key, loader, onData){
+  var cached = S.cache[key];
+  if (!cached){
+    return Promise.all([loader(), gs('api_getDataVersion')]).then(function(r){
+      S.cache[key] = { data:r[0], version:r[1].version };
+      S.dataVersion = r[1].version;
+      onData(r[0]);
+    });
+  }
+  onData(cached.data); // instant paint from cache
+  return gs('api_getDataVersion').then(function(v){
+    S.dataVersion = v.version;
+    if (v.version === cached.version) return;          // unchanged → no big fetch
+    return loader().then(function(data){
+      S.cache[key] = { data:data, version:v.version };
+      onData(data);                                    // repaint with fresh data
+    });
+  }).catch(function(){ /* keep showing stale on a revalidation hiccup */ });
+}
+
+/* Shared transaction-page fetch (Transactions + Review). st = {filters,offset,limit}. */
+function fetchTxPage(st){
+  var args={ limit:st.limit, offset:st.offset };
+  var fl=st.filters||{};
+  if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
+  if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
+  if(fl.segment)args.segment=fl.segment;
+  return gs('api_listTransactions',args);
+}
+
 /* ── app state ───────────────────────────────────────────────────────────── */
 var S = {
   boot:null,            // getBootstrap payload
   month:null,           // selected period "yyyy-MMM"
   screen:'dashboard',
-  cache:{},             // per-screen last payload
-  tx:{ rows:[], total:0, offset:0, limit:50, filters:{} }
+  dataVersion:null,     // last server data version we hold cache against
+  cache:{},             // key → { data, version } (stale-while-revalidate)
+  tx:{ rows:[], total:0, offset:0, limit:50, filters:{} },
+  review:{ sel:{}, filters:{}, rows:[], total:0, offset:0, limit:50 }
 };
 
 var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
@@ -93,7 +131,7 @@ window.addEventListener('DOMContentLoaded', boot);
 var _bootPromise=null;
 function ensureBoot(){
   if(S.boot) return Promise.resolve(S.boot);
-  if(!_bootPromise) _bootPromise=gs('api_getBootstrap').then(function(b){S.boot=b;return b;});
+  if(!_bootPromise) _bootPromise=gs('api_getBootstrap').then(function(b){S.boot=b;if(b.version!=null)S.dataVersion=b.version;return b;});
   return _bootPromise;
 }
 /** Run cb once reference data is available (used by modals/filters that need it). */
@@ -139,7 +177,7 @@ function go(screen){
 /* ── render dispatcher ───────────────────────────────────────────────────── */
 function render(){
   var fns={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
-           budgets:renderBudgets,investments:renderInvestments,tax:renderTax};
+           review:renderReview,budgets:renderBudgets,investments:renderInvestments,tax:renderTax};
   return (fns[S.screen]||renderDashboard)();
 }
 function loading(){ $('#main').innerHTML='<div class="boot-loader"><div class="spinner"></div></div>'; }
@@ -149,8 +187,9 @@ function paint(node){ var m=$('#main'); m.innerHTML=''; m.appendChild(node); }
  *  DASHBOARD
  * ════════════════════════════════════════════════════════════════════════ */
 function renderDashboard(){
-  loading();
-  return gs('api_getDashboard',{month:S.month}).then(function(d){
+  var key='dashboard|'+S.month;
+  if(!S.cache[key]) loading();
+  return cachedCall(key, function(){return gs('api_getDashboard',{month:S.month});}, function(d){
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Dashboard'));
     w.appendChild(el('div','screen-sub','Period '+esc(S.month)));
@@ -268,12 +307,10 @@ function renderTransactions(){
 }
 
 function loadTx(w){
-  var card=$('#txListCard'); if(card) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
-  var args={limit:S.tx.limit,offset:S.tx.offset};
-  var fl=S.tx.filters||{};
-  if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
-  if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
-  return gs('api_listTransactions',args).then(function(res){
+  var st={filters:S.tx.filters, offset:S.tx.offset, limit:S.tx.limit};
+  var key='tx|'+JSON.stringify(S.tx.filters||{})+'|'+S.tx.offset+'|'+S.tx.limit;
+  var card=$('#txListCard'); if(card && !S.cache[key]) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
     S.tx.total=res.total; S.tx.rows=res.transactions;
     var c=$('#txListCard'); if(!c) return; c.innerHTML='';
     var head=el('div','row-between'); head.style.marginBottom='6px';
@@ -345,8 +382,8 @@ function fmtDate(d){
  *  ACCOUNTS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderAccounts(){
-  loading();
-  return gs('api_getAccounts').then(function(res){
+  if(!S.cache['accounts']) loading();
+  return cachedCall('accounts', function(){return gs('api_getAccounts');}, function(res){
     var accs=res.accounts||[];
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Accounts'));
@@ -394,9 +431,13 @@ function accountRow(a){
  *  BUDGETS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderBudgets(){
-  loading();
-  return Promise.all([gs('api_getBudgets',{month:S.month}), gs('api_getRecurring')]).then(function(arr){
-    var bg=arr[0], rec=arr[1];
+  var key='budgets|'+S.month;
+  if(!S.cache[key]) loading();
+  return cachedCall(key,
+    function(){ return Promise.all([gs('api_getBudgets',{month:S.month}), gs('api_getRecurring')])
+                  .then(function(arr){ return {bg:arr[0], rec:arr[1]}; }); },
+    function(payload){
+    var bg=payload.bg, rec=payload.rec;
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Budgets'));
     w.appendChild(el('div','screen-sub','Period '+esc(bg.month)+' · planning income '+money(bg.incomePhp,true)+'/mo'));
@@ -441,8 +482,8 @@ function renderBudgets(){
  *  INVESTMENTS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderInvestments(){
-  loading();
-  return gs('api_getInvestments').then(function(inv){
+  if(!S.cache['investments']) loading();
+  return cachedCall('investments', function(){return gs('api_getInvestments');}, function(inv){
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Investments'));
     w.appendChild(el('div','screen-sub','Read-only · valued in PHP via the sheet'));
@@ -490,8 +531,8 @@ function renderInvestments(){
  *  TAX / BIR (Ledger)
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTax(){
-  loading();
-  return gs('api_getLedger').then(function(res){
+  if(!S.cache['tax']) loading();
+  return cachedCall('tax', function(){return gs('api_getLedger');}, function(res){
     var rows=res.rows||[];
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Tax · BIR Ledger'));
@@ -513,6 +554,297 @@ function renderTax(){
     wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
     paint(w);
   }).catch(showErr);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  REVIEW — accounts + transactions side-by-side, multi-select bulk edit,
+ *  inline single-field edit. Reuses fetchTxPage / comboEl / acctOptions.
+ * ════════════════════════════════════════════════════════════════════════ */
+function reviewTxKey(){ return 'revtx|'+JSON.stringify(S.review.filters||{})+'|'+S.review.offset+'|'+S.review.limit; }
+
+function renderReview(){
+  if(!S.boot){ loading(); ensureBoot().then(renderReview).catch(showErr); return; }
+  if(S.review.filters.month===undefined) S.review.filters.month=S.month;
+
+  var w=el('div','screen');
+  w.appendChild(el('div','screen-title','Review'));
+
+  // sticky bulk-action bar (hidden until a selection exists)
+  var bar=el('div','bulk-bar'); bar.id='bulkBar'; bar.hidden=true;
+  w.appendChild(bar);
+
+  // right-pane filters
+  var f=el('div','filters');
+  var fMonth=comboEl(['(all months)'].concat(buildMonthList()), S.review.filters.month||'(all months)');
+  var cats=Object.keys((S.boot.categories)||{}).sort();
+  var fCat=comboEl(['(all categories)'].concat(cats), S.review.filters.category||'(all categories)');
+  var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.review.filters.search||'';
+  [fMonth,fCat].forEach(function(s){s.onchange=applyRevFilters;});
+  var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyRevFilters,350);};
+  f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fCat);
+  w.appendChild(f);
+
+  function applyRevFilters(){
+    S.review.filters.month=fMonth.value.indexOf('(all')===0?'':fMonth.value;
+    S.review.filters.category=fCat.value.indexOf('(all')===0?'':fCat.value;
+    S.review.filters.search=fSearch.value.trim();
+    S.review.offset=0; loadReviewTx();
+  }
+
+  var split=el('div','review-split');
+  var left=el('div','rev-accts card'); left.id='revAccts';
+  left.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  var right=el('div','rev-tx card'); right.id='revTxCard';
+  right.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  split.appendChild(left); split.appendChild(right);
+  w.appendChild(split);
+  paint(w);
+
+  loadReviewAccts();
+  loadReviewTx();
+  updateBulkBar();
+}
+
+function loadReviewAccts(){
+  return cachedCall('accounts', function(){return gs('api_getAccounts');}, function(res){
+    var host=$('#revAccts'); if(!host) return;
+    host.innerHTML='';
+    host.appendChild(el('div','card-h','Accounts'));
+    var all=el('div','litem click rail'+(!S.review.filters.account?' sel':''));
+    all.innerHTML='<div class="grow"><div class="t1">All accounts</div></div>';
+    all.onclick=function(){ S.review.filters.account=''; S.review.offset=0; loadReviewAccts(); loadReviewTx(); };
+    host.appendChild(all);
+    var groups={};
+    (res.accounts||[]).forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
+    Object.keys(groups).sort().forEach(function(t){
+      host.appendChild(el('div','rail-grp',esc(t)));
+      groups[t].forEach(function(a){ host.appendChild(reviewAcctRow(a)); });
+    });
+  }).catch(showErr);
+}
+
+function reviewAcctRow(a){
+  var sel=S.review.filters.account===a.name;
+  var r=el('div','litem click rail'+(sel?' sel':''));
+  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
+    '<div class="grow"><div class="t1">'+esc(a.name)+'</div></div>'+
+    '<div class="amt '+(a.isLiability?'neg':'')+'">'+money(a.balancePhp)+'</div>';
+  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
+    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
+    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
+  }
+  r.onclick=function(){ S.review.filters.account=a.name; S.review.offset=0; loadReviewAccts(); loadReviewTx(); };
+  return r;
+}
+
+function loadReviewTx(){
+  var st={filters:S.review.filters, offset:S.review.offset, limit:S.review.limit};
+  var key=reviewTxKey();
+  var card=$('#revTxCard'); if(card && !S.cache[key]) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
+    S.review.total=res.total; S.review.rows=res.transactions;
+    var c=$('#revTxCard'); if(!c) return; c.innerHTML='';
+    var head=el('div','row-between'); head.style.marginBottom='6px';
+    var lbl=el('label','sel-all');
+    var selAll=el('input'); selAll.type='checkbox';
+    selAll.checked=res.transactions.length>0 && res.transactions.every(function(t){return S.review.sel[t.ID];});
+    selAll.onclick=function(){
+      res.transactions.forEach(function(t){ if(selAll.checked)S.review.sel[t.ID]=true; else delete S.review.sel[t.ID]; });
+      loadReviewTx();
+    };
+    lbl.appendChild(selAll);
+    lbl.appendChild(document.createTextNode(' '+res.total+' transaction'+(res.total===1?'':'s')));
+    head.appendChild(lbl); c.appendChild(head);
+
+    var l=el('div','list');
+    res.transactions.forEach(function(t){ l.appendChild(reviewTxRow(t)); });
+    if(!res.transactions.length) l.appendChild(el('div','empty','No transactions match.'));
+    c.appendChild(l);
+
+    if(res.total>S.review.limit){
+      var pg=el('div','row-between'); pg.style.marginTop='12px';
+      var prev=el('button','btn sm','← Prev'); prev.disabled=S.review.offset<=0;
+      prev.onclick=function(){S.review.offset=Math.max(0,S.review.offset-S.review.limit);loadReviewTx();};
+      var next=el('button','btn sm','Next →'); next.disabled=S.review.offset+S.review.limit>=res.total;
+      next.onclick=function(){S.review.offset+=S.review.limit;loadReviewTx();};
+      var info=el('div','dim','Showing '+(res.offset+1)+'–'+Math.min(res.offset+S.review.limit,res.total));
+      info.style.fontSize='12px';
+      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
+      c.appendChild(pg);
+    }
+    updateBulkBar();
+  }).catch(showErr);
+}
+
+function reviewTxRow(t){
+  var type=String(t.Type||'');
+  var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
+  var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
+  var icCh=isXfer?'⇄':(type==='Expense'?'−':(type==='Income'?'+':'•'));
+  var amtPhp=t['Amount (PHP)'], cur=t.Currency||'PHP', isForeign=cur!=='PHP';
+  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(amtPhp);
+  var sign=type==='Expense'?'-':(type==='Income'?'+':'');
+  var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
+  var fromC=acctColor(t.Account);
+
+  var r=el('div','litem rev'+(S.review.sel[t.ID]?' sel':''));
+  var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.review.sel[t.ID];
+  chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID, chk.checked); r.classList.toggle('sel', chk.checked); };
+  r.appendChild(chk);
+  // icon = open the full modal (date / FX / transfer / delete)
+  var ic=el('div','ic ic-edit '+icCls, icCh);
+  ic.title='Open details'; ic.onclick=function(e){ e.stopPropagation(); openTxModal(t); };
+  r.appendChild(ic);
+
+  var grow=el('div','grow');
+  // description — inline editable
+  var t1=el('div','t1 t1-edit', esc(t.Description||'(no description)'));
+  t1.title='Edit description';
+  t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(v){ commitInline(t,'Description',v); }); };
+  grow.appendChild(t1);
+  var sub=el('div','t2');
+  // account — inline editable
+  sub.appendChild(editableSpan(dotHTML(fromC)+esc(t.Account||'(account)'), function(host){
+    inlineCombo(host, acctOptions(), t.Account, function(val){ commitInline(t,'Account',val); });
+  }));
+  if(isXfer){ sub.appendChild(document.createTextNode(' → '+(t.ToAccount||''))); }
+  sub.appendChild(document.createTextNode(' · '));
+  // category — inline editable
+  sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
+    var cats=Object.keys(S.boot.categories||{}).sort();
+    inlineCombo(host, cats, t.Category, function(val){ commitInline(t,'Category',val); });
+  }));
+  sub.appendChild(document.createTextNode(' · '+fmtDate(t.Date)));
+  if(isForeign) sub.appendChild(document.createTextNode(' · '+money(amtPhp)));
+  grow.appendChild(sub);
+  r.appendChild(grow);
+
+  // amount — inline editable (edits the native Amount magnitude; sign derives from Type)
+  var amt=el('div','amt amt-edit '+amtCls, sign+mainAmt);
+  amt.title='Edit amount';
+  amt.onclick=function(){ inlineInput(amt,'number', Math.abs(Number(t.Amount)), function(v){ commitInline(t,'Amount',v); }); };
+  r.appendChild(amt);
+  if(fromC){ r.style.borderLeft='3px solid '+fromC; r.style.paddingLeft='9px'; }
+  return r;
+}
+
+/* —— inline single-field edit (Category / Account / Description / Amount) —— */
+// Plain text/number input editor (Description, Amount). Commits on Enter or blur,
+// cancels on Escape. The `done` guard stops the blur firing a second commit after
+// Enter (which reloads the list and tears the input down).
+function inlineInput(host, type, value, onPick){
+  host.innerHTML=''; host.onclick=null;
+  var inp=el('input','inline-edit-input'); inp.type=type||'text';
+  if(type==='number') inp.step='0.01';
+  if(value!=null && value!=='') inp.value=value;
+  var done=false;
+  function commit(){ if(done) return; done=true; onPick(inp.value); }
+  inp.onkeydown=function(e){
+    if(e.key==='Enter'){ e.preventDefault(); commit(); }
+    else if(e.key==='Escape'){ done=true; loadReviewTx(); }
+  };
+  inp.onblur=function(){ commit(); };
+  host.appendChild(inp); inp.focus(); inp.select();
+}
+function editableSpan(html, onEdit){
+  var s=el('span','ed'); s.innerHTML=html;
+  s.onclick=function(e){ e.stopPropagation(); onEdit(s); };
+  return s;
+}
+function inlineCombo(host, options, value, onPick){
+  host.innerHTML=''; host.onclick=null;
+  // .t2 clips with overflow:hidden — relax it so the dropdown can escape the row.
+  var t2=host.parentNode; if(t2&&t2.classList&&t2.classList.contains('t2')){ t2.style.overflow='visible'; t2.style.whiteSpace='normal'; }
+  var combo=comboEl(options, value||'', {placeholder:'…'});
+  combo.classList.add('inline-edit');
+  combo.onchange=function(){ if(combo.value) onPick(combo.value); };
+  host.appendChild(combo);
+  var inp=combo.querySelector('.combo-input'); if(inp){ inp.focus(); inp.select(); }
+}
+function commitInline(t, field, val){
+  var patch={ID:t.ID};
+  if(field==='Amount'){
+    var n=parseFloat(val);
+    if(isNaN(n)){ toast('Enter a valid amount','err'); loadReviewTx(); return; }
+    if(n===Math.abs(Number(t.Amount))){ loadReviewTx(); return; }  // no-op
+    patch.Amount=n;
+  } else {
+    var cur=(t[field]==null?'':String(t[field]));
+    if(String(val)===cur){ loadReviewTx(); return; }               // no-op → restore the row
+    patch[field]=val;
+  }
+  gs('api_updateTransaction', patch).then(function(){
+    toast(field+' updated','ok'); afterReviewMutation();
+  }).catch(function(e){ toast(e.message||e,'err'); loadReviewTx(); });
+}
+
+/* —— selection + bulk bar —— */
+function toggleSel(id,on){ if(on) S.review.sel[id]=true; else delete S.review.sel[id]; updateBulkBar(); }
+function selCount(){ return Object.keys(S.review.sel).length; }
+function bulkSelectedIds(){ return Object.keys(S.review.sel); }
+function clearSel(){ S.review.sel={}; }
+
+function updateBulkBar(){
+  var bar=$('#bulkBar'); if(!bar) return;
+  var n=selCount();
+  if(!n){ bar.hidden=true; bar.innerHTML=''; return; }
+  bar.hidden=false; bar.innerHTML='';
+  bar.appendChild(el('span','bulk-count',n+' selected'));
+  function add(label,cls,fn){ var b=el('button','btn sm '+(cls||''),label); b.onclick=fn; bar.appendChild(b); }
+  add('Recategorize','',openBulkRecat);
+  add('Reassign','',openBulkReassign);
+  add('Set date','',openBulkDate);
+  add('Delete','danger',openBulkDelete);
+  add('Clear','ghost',function(){ clearSel(); loadReviewTx(); });
+}
+
+function afterReviewMutation(){
+  S.cache={};                    // version bumped server-side → drop stale payloads
+  loadReviewAccts(); loadReviewTx();
+}
+
+function bulkApply(patch){
+  var ids=bulkSelectedIds(); if(!ids.length) return;
+  gs('api_bulkUpdateTransactions',{ids:ids, patch:patch}).then(function(res){
+    closeModal();
+    toast('Updated '+res.updated+((res.skipped&&res.skipped.length)?(' · '+res.skipped.length+' skipped'):''),'ok');
+    clearSel(); afterReviewMutation();
+  }).catch(function(e){ toast(e.message||e,'err'); });
+}
+function openBulkRecat(){
+  withBoot(function(){
+    var cats=Object.keys(S.boot.categories||{}).sort();
+    var c=comboEl(cats,'',{placeholder:'Select category'});
+    var save=el('button','btn primary','Apply to '+selCount());
+    save.onclick=function(){ if(!c.value){toast('Pick a category','err');return;} bulkApply({Category:c.value}); };
+    openModal(modalShell('Recategorize '+selCount()+' transactions', fieldEl('New category',c), [save]));
+  });
+}
+function openBulkReassign(){
+  withBoot(function(){
+    var c=comboEl(acctOptions(),'',{placeholder:'Select account'});
+    var save=el('button','btn primary','Apply to '+selCount());
+    save.onclick=function(){ if(!c.value){toast('Pick an account','err');return;} bulkApply({Account:c.value}); };
+    openModal(modalShell('Reassign '+selCount()+' transactions', fieldEl('New account',c), [save]));
+  });
+}
+function openBulkDate(){
+  var d=inputEl('date', isoDate(new Date()));
+  var save=el('button','btn primary','Apply to '+selCount());
+  save.onclick=function(){ if(!d.value){toast('Pick a date','err');return;} bulkApply({Date:d.value}); };
+  openModal(modalShell('Set date on '+selCount()+' transactions', fieldEl('New date',d), [save]));
+}
+function openBulkDelete(){
+  var body=el('div','dim','Delete '+selCount()+' transactions permanently? This cannot be undone.');
+  var yes=el('button','btn danger','Delete '+selCount());
+  yes.onclick=function(){
+    yes.disabled=true; yes.textContent='Deleting…';
+    gs('api_bulkDeleteTransactions',{ids:bulkSelectedIds()}).then(function(res){
+      closeModal(); toast('Deleted '+res.deleted,'ok'); clearSel(); afterReviewMutation();
+    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
+  };
+  var no=el('button','btn','Cancel'); no.onclick=closeModal;
+  openModal(modalShell('Confirm bulk delete', body, [no,yes]));
 }
 
 /* ════════════════════════════════════════════════════════════════════════

@@ -35,7 +35,8 @@ function api_getBootstrap() {
     budgets: api_getBudgets().budgets,
     recurring: api_getRecurring().rows,
     calendar: reads_clean_(su_readObjects_(SHEET_CALENDAR)),
-    fxUsdPhp: fx_liveRate_("USD", BASE_CURRENCY) || null
+    fxUsdPhp: fx_liveRate_("USD", BASE_CURRENCY) || null,
+    version: cache_getVersion_()
   };
 }
 
