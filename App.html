@@ -38,6 +38,17 @@ function $(s,r){return (r||document).querySelector(s);}
 function el(tag,cls,html){var e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;return e;}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function money(n,big){if(n==null||n==='')return '—';return (big?PHP0:PHP).format(Number(n));}
+// Currency-aware format — used for non-PHP transactions so a USD amount renders
+// as $ (narrow symbol), not ₱. Falls back to "CUR 1,234.56" on unknown codes.
+var _curFmt={};
+function moneyCur(n,cur){
+  if(n==null||n==='')return '—';
+  cur=cur||'PHP';
+  if(cur==='PHP')return PHP.format(Number(n));
+  try{ if(!_curFmt[cur])_curFmt[cur]=new Intl.NumberFormat('en-PH',{style:'currency',currency:cur,currencyDisplay:'narrowSymbol',maximumFractionDigits:2});
+       return _curFmt[cur].format(Number(n)); }
+  catch(e){ return cur+' '+Number(n).toLocaleString('en-PH',{maximumFractionDigits:2}); }
+}
 function num(n){return n==null?'—':Number(n).toLocaleString('en-PH',{maximumFractionDigits:4});}
 function pct(n){return n==null?'—':(Math.round(n*10)/10)+'%';}
 
@@ -276,15 +287,21 @@ function txRow(t,clickable){
   var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
   var icCh=isXfer?'⇄':(type==='Expense'?'−':(type==='Income'?'+':'•'));
   var amtPhp=t['Amount (PHP)'];
+  var cur=t.Currency||'PHP';
+  var isForeign=cur!=='PHP';
+  // Foreign-currency tx: show the NATIVE amount in its own symbol; keep the PHP
+  // equivalent in the meta line so nothing is lost.
+  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(amtPhp);
   var sign=type==='Expense'?'-':(type==='Income'?'+':'');
   var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
   var sub=esc(t.Account||'')+(isXfer?(' → '+esc(t.ToAccount||'')):'')+' · '+esc(t.Category||'');
+  if(isForeign) sub+=' · '+money(amtPhp);
   var date=fmtDate(t.Date);
   var r=el('div','litem'+(clickable?' click':''));
   r.innerHTML='<div class="ic '+icCls+'">'+icCh+'</div>'+
     '<div class="grow"><div class="t1">'+esc(t.Description||t.Category||'(no description)')+'</div>'+
     '<div class="t2">'+sub+' · '+esc(date)+'</div></div>'+
-    '<div class="amt '+amtCls+'">'+sign+money(amtPhp)+'</div>';
+    '<div class="amt '+amtCls+'">'+sign+mainAmt+'</div>';
   if(clickable) r.onclick=function(){ openTxModal(t); };
   return r;
 }
