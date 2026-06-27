@@ -64,13 +64,22 @@ function bud_resolveTarget_(r, period, incomePhp, fx) {
   return bud_round_(val);                                      // PHP / base passes through
 }
 
-/** Σ |Amount (PHP)| of Type="Expense" rows for this segment within the months set. */
+/**
+ * Σ |Amount (PHP)| of this segment's OUTFLOW rows within the months set.
+ * Counts Type="Expense" (regular spend) AND Type="Transfer" — the latter is how a
+ * segment like "Growth" is actually funded (cash → investment account), so an
+ * "Investment: Growth" transfer must draw down the Growth budget. Income / other
+ * types never count. Segment compared trimmed so a stray trailing space can't drop
+ * a row silently.
+ */
 function bud_actualForSegment_(tx, segment, months) {
   const inWindow = {}; months.forEach(function (m) { inWindow[m] = true; });
+  const seg = String(segment).trim();
   let sum = 0;
   tx.forEach(function (r) {
-    if (String(r.Segment) !== String(segment)) return;
-    if (String(r.Type) !== "Expense") return;
+    if (String(r.Segment).trim() !== seg) return;
+    const type = String(r.Type);
+    if (type !== "Expense" && type !== "Transfer") return;
     if (!inWindow[String(r.Month)]) return;
     sum += Math.abs(acct_num_(r["Amount (PHP)"]));
   });

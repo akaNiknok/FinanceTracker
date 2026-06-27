@@ -16,7 +16,7 @@
  */
 
 // Editable Account columns (never write a formula/derived column like Current Balance).
-const ACCOUNT_EDITABLE = ["Starting Balance", "Interest Frequency", "Interest Rate", "Credit Limit", "Notes"];
+const ACCOUNT_EDITABLE = ["Starting Balance", "Interest Frequency", "Interest Rate", "Credit Limit", "Notes", "Color"];
 // Header candidates we tolerate for the same concept.
 const ACCT_START_HEADERS  = ["Starting Balance", "Starting Balance (PHP)", "Start Balance"];
 const ACCT_NATIVE_HEADERS = ["Current Balance"];                                  // native currency
@@ -47,7 +47,8 @@ function api_getAccounts() {
       interestFrequency: a["Interest Frequency"] || null,
       interestRate: a["Interest Rate"] || null,
       creditLimit: acct_pickNum_(a, ["Credit Limit"]),
-      notes: a.Notes || null
+      notes: a.Notes || null,
+      color: a.Color || null   // optional hex for color-coding (blank before setupAccountColor)
     };
   });
   return { status: "success", accounts: out };

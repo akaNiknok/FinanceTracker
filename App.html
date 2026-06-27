@@ -32,6 +32,7 @@ var S = {
 var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
 var PHP0 = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:0});
 var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var MONTHS_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 /* ── tiny DOM helpers ────────────────────────────────────────────────────── */
 function $(s,r){return (r||document).querySelector(s);}
@@ -216,11 +217,11 @@ function renderTransactions(){
 
   // filters
   var f=el('div','filters');
-  var fMonth=selectEl(['(all months)'].concat(buildMonthList()), S.tx.filters.month||S.month);
+  var fMonth=comboEl(['(all months)'].concat(buildMonthList()), S.tx.filters.month||S.month);
   var cats=Object.keys((S.boot.categories)||{}).sort();
-  var fCat=selectEl(['(all categories)'].concat(cats), S.tx.filters.category||'');
+  var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
   var accNames=(S.boot.accounts||[]).map(function(a){return a.name;});
-  var fAcc=selectEl(['(all accounts)'].concat(accNames), S.tx.filters.account||'');
+  var fAcc=comboEl(['(all accounts)'].concat(accNames), S.tx.filters.account||'(all accounts)');
   var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
   [fMonth,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
   var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
@@ -306,11 +307,20 @@ function txRow(t,clickable){
   return r;
 }
 
+// Parse a Date or "yyyy-MM-dd" string. ISO date strings are read as a LOCAL date
+// (not UTC) so the day never shifts; other inputs fall back to native parsing.
+function parseDate(d){
+  if(d instanceof Date) return d;
+  var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d).trim());
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  var dt=new Date(d); return isNaN(dt.getTime())?null:dt;
+}
+// Intuitive display format, e.g. "June 6, 2026".
 function fmtDate(d){
   if(!d) return '';
-  var dt = (d instanceof Date)?d:new Date(d);
-  if(isNaN(dt.getTime())) return String(d);
-  return dt.getDate()+' '+MONTHS[dt.getMonth()]+' '+dt.getFullYear();
+  var dt=parseDate(d);
+  if(!dt||isNaN(dt.getTime())) return String(d);
+  return MONTHS_FULL[dt.getMonth()]+' '+dt.getDate()+', '+dt.getFullYear();
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -354,6 +364,10 @@ function accountRow(a){
   r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
     '<div class="grow"><div class="t1">'+esc(a.name)+'</div><div class="t2">'+meta+credit+'</div></div>'+
     '<div class="amt '+(a.isLiability?'neg':'')+'">'+money(a.balancePhp)+'</div>';
+  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
+    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
+    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
+  }
   r.onclick=function(){ openAccountModal(a); };
   return r;
 }
@@ -508,15 +522,84 @@ function fieldEl(label,inputNode,hint){
   if(hint) f.appendChild(el('div','hint',esc(hint)));
   return f;
 }
-function selectEl(options,value){
-  var s=el('select');
-  options.forEach(function(o){
-    var op=el('option'); var val=(typeof o==='object')?o.value:o; var lab=(typeof o==='object')?o.label:o;
-    op.value=val; op.textContent=lab; if(String(val)===String(value))op.selected=true; s.appendChild(op);
-  });
-  return s;
-}
 function inputEl(type,value,ph){var i=el('input');i.type=type||'text';if(value!=null)i.value=value;if(ph)i.placeholder=ph;return i;}
+
+/* —— fuzzy combobox (searchable replacement for <select>) ——————————————————
+ * comboEl(options, value, opts) returns a wrapper element that exposes a `.value`
+ * (selected option value) and `.onchange` handler — drop-in for selectEl's API.
+ * Options are strings or {value,label}. Typing fuzzy-filters; ↑/↓/Enter navigate.
+ */
+function fuzzyScore(q,s){              // subsequence match → score (≥0), or -1 (no match)
+  q=q.toLowerCase(); s=s.toLowerCase();
+  if(!q) return 0;
+  var si=0, score=0, streak=0;
+  for(var qi=0; qi<q.length; qi++){
+    var c=q[qi], found=-1;
+    for(var k=si;k<s.length;k++){ if(s[k]===c){found=k;break;} }
+    if(found===-1) return -1;
+    streak=(found===si)?streak+1:0;
+    score += 10 + streak*5 - Math.min(found-si,8);  // reward contiguous + early hits
+    si=found+1;
+  }
+  if(s.indexOf(q)===0) score+=30; else if(s.indexOf(q)!==-1) score+=15; // prefix/substring bonus
+  return score;
+}
+function comboEl(options,value,opts){
+  opts=opts||{};
+  var items=options.map(function(o){return (typeof o==='object')?{value:String(o.value),label:String(o.label)}:{value:String(o),label:String(o)};});
+  var wrap=el('div','combo');
+  var input=el('input','combo-input'); input.type='text'; input.autocomplete='off'; input.spellcheck=false;
+  if(opts.placeholder) input.placeholder=opts.placeholder;
+  var list=el('div','combo-list'); list.hidden=true;
+  wrap.appendChild(input); wrap.appendChild(list);
+
+  var _value='', _label='', _onchange=null, active=-1, filtered=items.slice();
+
+  function setValue(v){
+    var it=items.filter(function(i){return i.value===String(v);})[0];
+    _value=it?it.value:''; _label=it?it.label:''; input.value=_label;
+  }
+  function renderList(q){
+    list.innerHTML='';
+    if(!q){ filtered=items.slice(); }
+    else {
+      filtered=items.map(function(it){return {it:it,sc:fuzzyScore(q,it.label)};})
+        .filter(function(x){return x.sc>=0;}).sort(function(a,b){return b.sc-a.sc;})
+        .map(function(x){return x.it;});
+    }
+    active=filtered.length?0:-1;
+    if(!filtered.length){ list.appendChild(el('div','combo-empty','No match')); return; }
+    filtered.forEach(function(it,idx){
+      var row=el('div','combo-opt'+(idx===active?' active':'')+(it.value===_value?' sel':''));
+      row.textContent=it.label;
+      row.onmousedown=function(e){ e.preventDefault(); choose(it); };
+      row.onmouseenter=function(){ active=idx; highlight(); };
+      list.appendChild(row);
+    });
+  }
+  function highlight(){ Array.prototype.forEach.call(list.children,function(c,i){ c.classList.toggle('active', i===active); }); }
+  function scrollActive(){ var c=list.children[active]; if(c&&c.scrollIntoView)c.scrollIntoView({block:'nearest'}); }
+  function open(){ renderList(''); list.hidden=false; wrap.classList.add('open'); }
+  function close(){ list.hidden=true; wrap.classList.remove('open'); }
+  function choose(it){ _value=it.value; _label=it.label; input.value=it.label; close(); if(_onchange)_onchange(); }
+
+  input.onfocus=function(){ input.select(); open(); };
+  input.oninput=function(){ renderList(input.value.trim()); list.hidden=false; };
+  input.onkeydown=function(e){
+    if(e.key==='ArrowDown'){ e.preventDefault(); if(list.hidden){open();} else {active=Math.min(filtered.length-1,active+1);highlight();scrollActive();} }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(0,active-1); highlight(); scrollActive(); }
+    else if(e.key==='Enter'){ if(!list.hidden&&active>=0&&filtered[active]){ e.preventDefault(); choose(filtered[active]); } }
+    else if(e.key==='Escape'){ close(); input.value=_label; }
+  };
+  // Strict picker: on blur, snap the text back to the last valid label.
+  input.onblur=function(){ setTimeout(function(){ if(input.value!==_label)input.value=_label; close(); },120); };
+
+  Object.defineProperty(wrap,'value',{get:function(){return _value;},set:function(v){setValue(v);},configurable:true});
+  Object.defineProperty(wrap,'onchange',{get:function(){return _onchange;},set:function(fn){_onchange=fn;},configurable:true});
+
+  setValue(value==null?'':value);
+  return wrap;
+}
 
 /* —— add / edit a normal transaction —— */
 function openTxModal(t){
@@ -531,8 +614,8 @@ function openTxModal(t){
   var accs=(S.boot.accounts||[]).map(function(a){return a.name;});
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
-  var fCat=selectEl(cats, t?t.Category:'');
-  var fAcc=selectEl(accs, t?t.Account:'');
+  var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
+  var fAcc=comboEl(accs, t?t.Account:'', {placeholder:'Select account'});
   var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
   var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
@@ -550,7 +633,7 @@ function openTxModal(t){
   var save=el('button','btn primary', isEdit?'Save':'Add');
   save.onclick=function(){
     var payload={
-      Date:new Date(fDate.value), Category:fCat.value, Account:fAcc.value,
+      Date:fDate.value, Category:fCat.value, Account:fAcc.value,
       Amount:parseFloat(fAmt.value), Description:fDesc.value
     };
     if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
@@ -581,9 +664,9 @@ function openTransferModal(t){
   var accs=(S.boot.accounts||[]).map(function(a){return a.name;});
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
-  var fCat=selectEl(xferCats.length?xferCats:['(no transfer category)'], t?t.Category:'');
-  var fFrom=selectEl(accs, t?t.Account:'');
-  var fTo=selectEl(accs, t?t.ToAccount:'');
+  var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], t?t.Category:'', {placeholder:'Select category'});
+  var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
+  var fTo=comboEl(accs, t?t.ToAccount:'', {placeholder:'To account'});
   var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
   var fToAmt=inputEl('number', t&&t.ToAmount?Math.abs(Number(t.ToAmount)):'', 'same as amount'); fToAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
@@ -606,7 +689,7 @@ function openTransferModal(t){
     if(fFrom.value===fTo.value){toast('From and To must differ','err');return;}
     var amount=parseFloat(fAmt.value);
     if(isNaN(amount)){toast('Enter an amount','err');return;}
-    var payload={Date:new Date(fDate.value),Category:fCat.value,Account:fFrom.value,
+    var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
     if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
     save.disabled=true; save.textContent='Saving…';
@@ -647,17 +730,42 @@ function openAccountModal(a){
     (a.currency?'<div class="row-between"><span class="dim">Currency</span><span>'+esc(a.currency)+'</span></div>':'');
   body.appendChild(info);
 
-  var fFreq=selectEl(['','Daily','Monthly','Yearly','None'], a.interestFrequency||'');
+  var fFreq=comboEl(['','Daily','Weekly','Monthly','Quarterly','Annually','None'], a.interestFrequency||'', {placeholder:'— none —'});
   var fRate=inputEl('number', a.interestRate!=null?a.interestRate:'', 'e.g. 0.04'); fRate.step='0.0001';
   var fLimit=inputEl('number', a.creditLimit!=null?a.creditLimit:'', ''); fLimit.step='0.01';
   var fNotes=el('textarea'); fNotes.rows=2; fNotes.value=a.notes||'';
+
+  // ── color picker ──
+  var colorSet = !!(a.color && /^#[0-9a-fA-F]{6}$/i.test(a.color));
+  var fColor=el('input'); fColor.type='color'; fColor.value=colorSet?a.color:'#5b8cff';
+  fColor.oninput=function(){ colorSet=true; paintSwatches(); };
+  var swatchRow=el('div','swatches');
+  ['#5b8cff','#3ecf8e','#ff6b6b','#ffb454','#a78bfa','#f472b6','#22d3ee','#e7eaf0'].forEach(function(c){
+    var s=el('button','swatch'); s.type='button'; s.style.background=c; s.title=c; s.dataset.hex=c;
+    s.onclick=function(){ fColor.value=c; colorSet=true; paintSwatches(); };
+    swatchRow.appendChild(s);
+  });
+  var noneBtn=el('button','swatch none','✕'); noneBtn.type='button'; noneBtn.title='No color';
+  noneBtn.onclick=function(){ colorSet=false; paintSwatches(); };
+  swatchRow.appendChild(noneBtn);
+  function paintSwatches(){
+    Array.prototype.forEach.call(swatchRow.children,function(s){
+      var isNone=s.classList.contains('none');
+      var on=isNone?!colorSet:(colorSet&&(s.dataset.hex||'').toLowerCase()===fColor.value.toLowerCase());
+      s.classList.toggle('on', on);
+    });
+    fColor.style.opacity=colorSet?'1':'.45';
+  }
+  var colorRow=el('div','color-row'); colorRow.appendChild(fColor); colorRow.appendChild(swatchRow);
 
   var rowI=el('div','field-row');
   rowI.appendChild(fieldEl('Interest freq.', fFreq));
   rowI.appendChild(fieldEl('Interest rate', fRate));
   body.appendChild(rowI);
   if(a.isLiability||a.creditLimit!=null) body.appendChild(fieldEl('Credit limit', fLimit));
+  body.appendChild(fieldEl('Color', colorRow));
   body.appendChild(fieldEl('Notes', fNotes));
+  paintSwatches();
 
   var save=el('button','btn primary','Save');
   save.onclick=function(){
@@ -666,6 +774,8 @@ function openAccountModal(a){
     if(fRate.value!=='') payload['Interest Rate']=parseFloat(fRate.value);
     if(fLimit.value!=='') payload['Credit Limit']=parseFloat(fLimit.value);
     if(fNotes.value!==(a.notes||'')) payload['Notes']=fNotes.value;
+    var newColor = colorSet ? fColor.value : '';
+    if(newColor !== (a.color||'')) payload['Color']=newColor;
     if(Object.keys(payload).length===1){toast('No changes','err');return;}
     save.disabled=true; save.textContent='Saving…';
     gs('api_updateAccount',payload).then(function(){
@@ -678,8 +788,8 @@ function openAccountModal(a){
 /* ── shared ──────────────────────────────────────────────────────────────── */
 function isoDate(d){
   if(!d) return '';
-  var dt=(d instanceof Date)?d:new Date(d);
-  if(isNaN(dt.getTime())) return '';
+  var dt=parseDate(d);
+  if(!dt||isNaN(dt.getTime())) return '';
   var m=String(dt.getMonth()+1).padStart(2,'0'), day=String(dt.getDate()).padStart(2,'0');
   return dt.getFullYear()+'-'+m+'-'+day;
 }

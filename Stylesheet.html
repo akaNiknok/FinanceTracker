@@ -138,6 +138,28 @@ button{font-family:inherit;cursor:pointer}
 .seg-toggle button{flex:1;background:none;border:none;color:var(--text-dim);padding:8px;border-radius:8px;font-weight:600;font-size:13px}
 .seg-toggle button.on{background:var(--accent);color:#0b1020}
 
+/* ── Combobox (fuzzy picker, replaces <select>) ──────────────────────────── */
+.combo{position:relative}
+.combo-input{width:100%}
+.filters .combo{flex:1;min-width:130px}
+.combo-list{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:70;max-height:240px;overflow:auto;
+  background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);box-shadow:var(--shadow);padding:4px}
+.combo-opt{padding:8px 10px;border-radius:8px;font-size:14px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.combo-opt.active{background:var(--surface-3)}
+.combo-opt.sel{color:var(--accent-2)}
+.combo-empty{padding:8px 10px;color:var(--text-faint);font-size:13px}
+
+/* ── Color picker (account color-coding) ─────────────────────────────────── */
+.color-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.color-row input[type=color]{width:46px;height:38px;padding:2px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:var(--surface-2);cursor:pointer;flex:none}
+.swatches{display:flex;gap:7px;flex-wrap:wrap}
+.swatch{width:24px;height:24px;border-radius:50%;border:2px solid var(--border);padding:0;cursor:pointer;transition:.12s}
+.swatch.none{background:var(--surface-2);color:var(--text-faint);font-size:11px;display:grid;place-items:center;border-style:dashed}
+.swatch.on{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--accent);border-color:transparent}
+.swatch:hover{transform:scale(1.12)}
+
 /* ── FAB ─────────────────────────────────────────────────────────────────── */
 .fab{position:fixed;right:18px;bottom:78px;width:54px;height:54px;border-radius:50%;border:none;z-index:30;
   background:var(--accent);color:#0b1020;font-size:28px;font-weight:400;line-height:1;box-shadow:var(--shadow);transition:.15s}

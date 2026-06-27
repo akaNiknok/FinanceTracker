@@ -348,6 +348,24 @@ function mig_writeRecurring_(ss, rows) {
   sheet.autoResizeColumns(1, MIG_RECURRING_HEADERS.length);
 }
 
+// ── 6. Account color column (optional, run once) ───────────────────────────────
+// Adds a 'Color' input column to Accounts so the Web App can color-code accounts.
+// Stores a hex string per account (e.g. "#5b8cff"); blank = no color. Idempotent —
+// does nothing if the column already exists. Edit colors via the Web App account
+// modal or by typing a hex into the cell. (api_getAccounts reads it as `color`.)
+const MIG_ACCT_COLOR_HEADER = "Color";
+function setupAccountColor() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(MIG_ACCT_SHEET);
+  if (!sheet) throw new Error("Sheet not found: " + MIG_ACCT_SHEET);
+  const h = mig_headerMap_(sheet);
+  if (h[MIG_ACCT_COLOR_HEADER]) { Logger.log("'%s' column already present at %s — nothing to do.", MIG_ACCT_COLOR_HEADER, h[MIG_ACCT_COLOR_HEADER]); return; }
+  const lastCol = sheet.getLastColumn();
+  if (sheet.getMaxColumns() === lastCol) sheet.insertColumnAfter(lastCol);
+  sheet.getRange(1, lastCol + 1).setValue(MIG_ACCT_COLOR_HEADER);
+  Logger.log("Added '%s' column at position %s. Set a hex color per account (or use the Web App).", MIG_ACCT_COLOR_HEADER, lastCol + 1);
+}
+
 // ── private helpers (trailing underscore = not web-exposed) ────────────────────
 /** Apply a validation rule to a whole column (row 2 → last allocated row). */
 function mig_applyValidationToColumn_(sheet, col, rule) {

@@ -52,7 +52,7 @@ function api_createTransaction(args) {
 
   const input = {
     ID:          args.ID || Utilities.getUuid(),
-    Date:        args.Date || new Date(),
+    Date:        tx_parseDate_(args.Date),
     Category:    category,
     Description: args.Description || "",
     Account:     account,
@@ -95,7 +95,7 @@ function api_createTransfer(args) {
 
   const input = {
     ID:          args.ID || Utilities.getUuid(),
-    Date:        args.Date || new Date(),
+    Date:        tx_parseDate_(args.Date),
     Category:    category,
     Description: args.Description || "",
     Account:     account,
@@ -160,6 +160,7 @@ function api_updateTransaction(args) {
   const patch = {};
   TX_CLIENT_FIELDS.forEach(function (f) { if (args[f] !== undefined) patch[f] = args[f]; });
   if (Object.keys(patch).length === 0) throw new Error("Nothing to update.");
+  if (patch.Date !== undefined) patch.Date = tx_parseDate_(patch.Date);
   if (patch.Amount !== undefined) patch.Amount = parseFloat(patch.Amount);
   if (patch.ToAmount !== undefined && patch.ToAmount !== "") patch.ToAmount = parseFloat(patch.ToAmount);
 
@@ -183,6 +184,22 @@ function api_deleteTransaction(args) {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+/**
+ * Coerce a client-supplied Date into a real Date the sheet can derive Month from.
+ * The UI sends an ISO "yyyy-MM-dd" STRING (google.script.run rejects a Date nested
+ * in an object — "illegal property"), so parse that as a LOCAL date (script tz) to
+ * avoid the UTC-midnight day-shift `new Date("yyyy-MM-dd")` would introduce. Also
+ * tolerates a real Date (n8n/JSON path) or any other parseable value; blank → now.
+ */
+function tx_parseDate_(v) {
+  if (v instanceof Date) return v;
+  if (v === undefined || v === null || v === "") return new Date();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v).trim());
+  if (m) return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? new Date() : d;
+}
+
 /** Read one transaction row (incl. derived values) as a clean object. */
 function tx_rowObject_(sheet, headerMap, row) {
   const lastCol = sheet.getLastColumn();
