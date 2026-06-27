@@ -53,6 +53,23 @@ function moneyCur(n,cur){
 function num(n){return n==null?'—':Number(n).toLocaleString('en-PH',{maximumFractionDigits:4});}
 function pct(n){return n==null?'—':(Math.round(n*10)/10)+'%';}
 
+/* ── account color helpers (color-coding across screens) ─────────────────── */
+function isHex6(c){return !!c && /^#[0-9a-fA-F]{6}$/.test(c);}
+// Look up an account's color by name from the bootstrap (null if boot not loaded).
+function acctColor(name){
+  if(!S.boot||!name) return null;
+  var a=(S.boot.accounts||[]).filter(function(x){return x.name===name;})[0];
+  return (a && isHex6(a.color))?a.color:null;
+}
+// A small colored dot (validated hex, so safe to inline into innerHTML).
+function dotHTML(c){ return isHex6(c)?'<span class="acct-dot" style="background:'+c+'"></span>':''; }
+// Account options for comboEl, carrying each account's color for the dropdown dots.
+function acctOptions(){
+  return (S.boot&&S.boot.accounts?S.boot.accounts:[]).map(function(a){
+    return {value:a.name,label:a.name,color:a.color};
+  });
+}
+
 /* ── toast ───────────────────────────────────────────────────────────────── */
 function toast(msg,kind){
   var t=el('div','toast '+(kind||''),esc(msg));
@@ -220,8 +237,7 @@ function renderTransactions(){
   var fMonth=comboEl(['(all months)'].concat(buildMonthList()), S.tx.filters.month||S.month);
   var cats=Object.keys((S.boot.categories)||{}).sort();
   var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
-  var accNames=(S.boot.accounts||[]).map(function(a){return a.name;});
-  var fAcc=comboEl(['(all accounts)'].concat(accNames), S.tx.filters.account||'(all accounts)');
+  var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
   var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
   [fMonth,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
   var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
@@ -295,7 +311,8 @@ function txRow(t,clickable){
   var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(amtPhp);
   var sign=type==='Expense'?'-':(type==='Income'?'+':'');
   var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
-  var sub=esc(t.Account||'')+(isXfer?(' → '+esc(t.ToAccount||'')):'')+' · '+esc(t.Category||'');
+  var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
+  var sub=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+' · '+esc(t.Category||'');
   if(isForeign) sub+=' · '+money(amtPhp);
   var date=fmtDate(t.Date);
   var r=el('div','litem'+(clickable?' click':''));
@@ -303,6 +320,7 @@ function txRow(t,clickable){
     '<div class="grow"><div class="t1">'+esc(t.Description||t.Category||'(no description)')+'</div>'+
     '<div class="t2">'+sub+' · '+esc(date)+'</div></div>'+
     '<div class="amt '+amtCls+'">'+sign+mainAmt+'</div>';
+  if(fromC){ r.style.borderLeft='3px solid '+fromC; r.style.paddingLeft='9px'; }
   if(clickable) r.onclick=function(){ openTxModal(t); };
   return r;
 }
@@ -440,9 +458,11 @@ function renderInvestments(){
     (inv.positions||[]).forEach(function(p){
       var r=el('div','litem');
       var q=p.quantity!=null?(num(p.quantity)+' · '):'';
-      r.innerHTML='<div class="ic">▲</div><div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
+      var pc=acctColor(p.name);
+      r.innerHTML='<div class="ic">▲</div><div class="grow"><div class="t1">'+dotHTML(pc)+esc(p.name)+'</div>'+
         '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of port.</div></div>'+
         '<div class="amt">'+money(p.valuePhp)+'</div>';
+      if(pc){ r.style.borderLeft='3px solid '+pc; r.style.paddingLeft='9px'; }
       l.appendChild(r);
       var br=el('div'); br.style.padding='0 4px 10px'; br.style.borderBottom='1px solid var(--border)';
       br.innerHTML='<div class="bar" style="margin-top:0"><div class="bar-fill" style="width:'+(p.weightPct||0)+'%"></div></div>';
@@ -546,7 +566,7 @@ function fuzzyScore(q,s){              // subsequence match → score (≥0), or
 }
 function comboEl(options,value,opts){
   opts=opts||{};
-  var items=options.map(function(o){return (typeof o==='object')?{value:String(o.value),label:String(o.label)}:{value:String(o),label:String(o)};});
+  var items=options.map(function(o){return (typeof o==='object')?{value:String(o.value),label:String(o.label),color:o.color}:{value:String(o),label:String(o)};});
   var wrap=el('div','combo');
   var input=el('input','combo-input'); input.type='text'; input.autocomplete='off'; input.spellcheck=false;
   if(opts.placeholder) input.placeholder=opts.placeholder;
@@ -571,7 +591,8 @@ function comboEl(options,value,opts){
     if(!filtered.length){ list.appendChild(el('div','combo-empty','No match')); return; }
     filtered.forEach(function(it,idx){
       var row=el('div','combo-opt'+(idx===active?' active':'')+(it.value===_value?' sel':''));
-      row.textContent=it.label;
+      if(isHex6(it.color)){ var dot=el('span','acct-dot'); dot.style.background=it.color; row.appendChild(dot); }
+      var lab=el('span','combo-lab'); lab.textContent=it.label; row.appendChild(lab);
       row.onmousedown=function(e){ e.preventDefault(); choose(it); };
       row.onmouseenter=function(){ active=idx; highlight(); };
       list.appendChild(row);
@@ -611,7 +632,7 @@ function openTxModal(t){
   var cats=Object.keys(S.boot.categories||{}).filter(function(c){
     return String((S.boot.categories[c]||{}).Type)!=='Transfer';
   }).sort();
-  var accs=(S.boot.accounts||[]).map(function(a){return a.name;});
+  var accs=acctOptions();
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
   var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
@@ -661,7 +682,7 @@ function openTransferModal(t){
   var xferCats=Object.keys(S.boot.categories||{}).filter(function(c){
     return String((S.boot.categories[c]||{}).Type)==='Transfer';
   }).sort();
-  var accs=(S.boot.accounts||[]).map(function(a){return a.name;});
+  var accs=acctOptions();
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
   var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], t?t.Category:'', {placeholder:'Select category'});

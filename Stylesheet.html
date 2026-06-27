@@ -144,11 +144,14 @@ button{font-family:inherit;cursor:pointer}
 .filters .combo{flex:1;min-width:130px}
 .combo-list{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:70;max-height:240px;overflow:auto;
   background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);box-shadow:var(--shadow);padding:4px}
-.combo-opt{padding:8px 10px;border-radius:8px;font-size:14px;cursor:pointer;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.combo-opt{padding:8px 10px;border-radius:8px;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:8px}
+.combo-opt .combo-lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .combo-opt.active{background:var(--surface-3)}
 .combo-opt.sel{color:var(--accent-2)}
 .combo-empty{padding:8px 10px;color:var(--text-faint);font-size:13px}
+
+/* small colored dot used to identify accounts across screens */
+.acct-dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:5px;flex:none}
 
 /* ── Color picker (account color-coding) ─────────────────────────────────── */
 .color-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
