@@ -29,7 +29,9 @@ const ROUTES_WRITE_ = {
   createTransfer:    function (e, b) { return api_createTransfer(rt_args_(e, b)); },
   updateTransaction: function (e, b) { return api_updateTransaction(rt_args_(e, b)); },
   deleteTransaction: function (e, b) { return api_deleteTransaction(rt_args_(e, b)); },
-  updateAccount:     function (e, b) { return api_updateAccount(rt_args_(e, b)); }
+  updateAccount:     function (e, b) { return api_updateAccount(rt_args_(e, b)); },
+  bulkUpdateTransactions: function (e, b) { return api_bulkUpdateTransactions(rt_args_(e, b)); },
+  bulkDeleteTransactions: function (e, b) { return api_bulkDeleteTransactions(rt_args_(e, b)); }
 };
 
 function doGet(e) {
@@ -49,7 +51,7 @@ function doGet(e) {
     // ── Legacy /sync reference payload (kept behind an explicit ?sync flag) ──
     // n8n no longer GETs this (its /sync reads come straight from Sheets nodes),
     // but anything that relied on the bare-GET JSON can still reach it via ?sync.
-    if (params.sync !== undefined) return jsonResponse(rt_legacyBootstrap_());
+    if (params.sync !== undefined) { auth_requireRead_(e, null); return jsonResponse(rt_legacyBootstrap_()); }
 
     // ── Default: serve the responsive Web App UI (Phase 2). ──
     return ui_serveApp_();

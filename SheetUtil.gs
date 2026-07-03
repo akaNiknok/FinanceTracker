@@ -65,6 +65,18 @@ function su_lastDataRow_(sheet, headerMap) {
   return 1; // header only
 }
 
+// ── Write serialization ───────────────────────────────────────────────────────
+/**
+ * Serialize mutations: two concurrent writes (n8n POST + UI + interest trigger)
+ * must not compute the same "next row" or write against shifting row indices.
+ * Called at the top of every api_* write handler.
+ * ponytail: no explicit release — GAS auto-releases the lock when the execution
+ * ends, and write handlers are short. Add try/finally release if handlers grow.
+ */
+function su_lock_() {
+  LockService.getScriptLock().waitLock(20000);
+}
+
 // ── Input-only writes (protect the formula spill) ─────────────────────────────
 /**
  * Write the given {header: value} pairs into `row`, ONLY for headers that are
@@ -93,15 +105,14 @@ function su_appendInputRow_(sheet, headerMap, obj) {
 
 /** Find the 1-based row for a transaction ID, or 0 if not found. */
 function su_findRowById_(sheet, headerMap, id) {
-  const idCol = headerMap["ID"];
-  if (!idCol) throw new Error("Transactions has no 'ID' column — run the migration first.");
-  const last = su_lastDataRow_(sheet, headerMap);
-  if (last < 2) return 0;
-  const ids = sheet.getRange(2, idCol, last - 1, 1).getValues();
-  for (let i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(id)) return i + 2;
-  }
-  return 0;
+  return tx_idRowMap_(sheet, headerMap)[String(id)] || 0;
+}
+
+/** (row, col) → A1 notation, e.g. (3, 28) → "AB3". Used by RangeList bulk writes. */
+function su_a1_(row, col) {
+  let s = "";
+  while (col > 0) { s = String.fromCharCode(65 + ((col - 1) % 26)) + s; col = Math.floor((col - 1) / 26); }
+  return s + row;
 }
 
 // ── Serialization safety for google.script.run ───────────────────────────────

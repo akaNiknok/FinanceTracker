@@ -7,6 +7,7 @@
  */
 
 function test_all() {
+  test_a1();
   test_referenceData();
   test_fx();
   test_bootstrap();
@@ -15,6 +16,16 @@ function test_all() {
   test_balanceReconciliation();
   test_createReadDelete();
   Logger.log("== test_all complete ==");
+}
+
+/** su_a1_ column-letter math (drives the RangeList bulk writes). */
+function test_a1() {
+  const cases = { "A1": [1, 1], "Z9": [9, 26], "AA10": [10, 27], "AZ2": [2, 52], "BA3": [3, 53] };
+  Object.keys(cases).forEach(function (want) {
+    const got = su_a1_(cases[want][0], cases[want][1]);
+    if (got !== want) throw new Error("su_a1_ FAIL: expected " + want + ", got " + got);
+  });
+  Logger.log("test_a1 OK");
 }
 
 function test_referenceData() {

@@ -27,6 +27,10 @@ function addDailyInterestTransactions() {
       if (!net) return;
 
       api_createTransaction({
+        // Deterministic ID → api_createTransaction's idempotency check makes a
+        // re-fired trigger a no-op: at most one interest row per account per day.
+        ID: "interest-" + a.Name + "-" +
+            Utilities.formatDate(today, Session.getScriptTimeZone(), "yyyy-MM-dd"),
         Date: today,
         Category: "Income: Interest",
         Account: a.Name,

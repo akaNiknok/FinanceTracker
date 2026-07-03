@@ -25,6 +25,7 @@ function tx_accountsMap_() {
 // ── create ────────────────────────────────────────────────────────────────────
 function api_createTransaction(args) {
   args = args || {};
+  su_lock_(); // serialize writes: covers the idempotency check + append row calc
   const cats = tx_categoriesMap_();
   const accts = tx_accountsMap_();
 
@@ -71,6 +72,7 @@ function api_createTransaction(args) {
 // ── transfer (one row: source Account + ToAccount/ToAmount) ───────────────────
 function api_createTransfer(args) {
   args = args || {};
+  su_lock_();
   const cats = tx_categoriesMap_();
   const accts = tx_accountsMap_();
 
@@ -146,6 +148,7 @@ function api_listTransactions(args) {
 function api_updateTransaction(args) {
   args = args || {};
   if (!args.ID) throw new Error("update requires an ID.");
+  su_lock_(); // row index resolved by ID must not shift under a concurrent delete
   const sheet = su_sheet_(SHEET_TX);
   const h = su_headerMap_(sheet);
   const row = su_findRowById_(sheet, h, args.ID);
@@ -177,6 +180,7 @@ function api_updateTransaction(args) {
 function api_deleteTransaction(args) {
   args = args || {};
   if (!args.ID) throw new Error("delete requires an ID.");
+  su_lock_();
   const sheet = su_sheet_(SHEET_TX);
   const h = su_headerMap_(sheet);
   const row = su_findRowById_(sheet, h, args.ID);
@@ -199,6 +203,7 @@ function api_bulkUpdateTransactions(args) {
   const ids = (args.ids || []).map(String);
   const patch = args.patch || {};
   if (!ids.length) throw new Error("bulkUpdate requires a non-empty ids[].");
+  su_lock_();
 
   const cats = tx_categoriesMap_();
   const accts = tx_accountsMap_();
@@ -218,16 +223,26 @@ function api_bulkUpdateTransactions(args) {
   const h = su_headerMap_(sheet);
   const rowById = tx_idRowMap_(sheet, h);
 
-  let updated = 0; const skipped = [];
+  const rows = []; const skipped = [];
   ids.forEach(function (id) {
     const row = rowById[id];
     if (!row) { skipped.push(id); return; }
-    su_setInputCells_(sheet, h, row, p);
-    updated++;
+    rows.push(row);
   });
+  if (rows.length) {
+    su_invalidateMemo_(sheet.getName());
+    // One RangeList write per patched field (not one setValue per cell): N rows ×
+    // F fields costs F Sheets calls instead of N×F.
+    Object.keys(p).forEach(function (header) {
+      if (TX_INPUT_COLS.indexOf(header) === -1) return;   // never touch derived cols
+      const col = h[header];
+      if (!col || p[header] === undefined) return;
+      sheet.getRangeList(rows.map(function (r) { return su_a1_(r, col); })).setValue(p[header]);
+    });
+  }
   SpreadsheetApp.flush();
   cache_bumpVersion_();
-  return { status: "success", message: "Bulk update complete.", updated: updated, skipped: skipped };
+  return { status: "success", message: "Bulk update complete.", updated: rows.length, skipped: skipped };
 }
 
 /**
@@ -239,6 +254,7 @@ function api_bulkDeleteTransactions(args) {
   args = args || {};
   const ids = (args.ids || []).map(String);
   if (!ids.length) throw new Error("bulkDelete requires a non-empty ids[].");
+  su_lock_();
 
   const sheet = su_sheet_(SHEET_TX);
   const h = su_headerMap_(sheet);

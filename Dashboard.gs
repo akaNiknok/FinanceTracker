@@ -58,7 +58,7 @@ function api_getInvestments() {
   const accounts = api_getAccounts().accounts;
   const positions = accounts.filter(function (a) {
     return String(a.currency).toUpperCase() === "SHARES" ||
-           /share|stock|invest|ef/i.test(String(a.subtype || ""));
+           /share|stock|invest|etf/i.test(String(a.subtype || ""));
   }).map(function (a) {
     return {
       name: a.name, subtype: a.subtype, currency: a.currency,

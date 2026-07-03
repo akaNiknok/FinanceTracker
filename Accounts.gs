@@ -91,6 +91,7 @@ function acct_computeDeltas_() {
 function api_updateAccount(args) {
   args = args || {};
   if (!args.Name) throw new Error("updateAccount requires Name.");
+  su_lock_();
   const sheet = su_sheet_(SHEET_ACCOUNTS);
   const h = su_headerMap_(sheet);
   const all = su_readObjects_(SHEET_ACCOUNTS);
