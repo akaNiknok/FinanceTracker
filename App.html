@@ -773,7 +773,7 @@ function exCalc(){
 
   out.innerHTML=
     '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">Fair rate</div>'+
-      '<div class="stat-value">'+num(fairRate)+' <span style="font-size:14px;color:var(--text-dim)">₱ per $1</span></div>'+
+      '<div class="stat-value"><span style="font-size:14px;color:var(--text-dim)">₱</span> '+num(fairRate)+' <span style="font-size:14px;color:var(--text-dim)">per $1</span></div>'+
       '<div class="stat-sub" style="font-size:15px;font-weight:650;color:var(--text);margin-top:8px">Brother pays '+money(dealPhp)+' for '+moneyCur(usd,'USD')+' — you receive '+money(dealPhp)+'</div></div>'+
     '<div class="grid grid-3">'+
       stat('Mid-market value', money(midPhp), num(rate)+' ₱/$') +
