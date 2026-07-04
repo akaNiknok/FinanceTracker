@@ -773,17 +773,17 @@ function exCalc(){
 
   out.innerHTML=
     '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">Fair rate</div>'+
-      '<div class="stat-value">'+num(fairRate)+' <span style="font-size:14px;color:var(--text-dim)">₱ per $1</span></div>'+
-      '<div class="stat-sub">Brother pays '+money(dealPhp)+' for '+moneyCur(usd,'USD')+' — you receive '+money(dealPhp)+'</div></div>'+
-    '<div class="grid grid-3">'+
+      '<div class="stat-value"><span style="font-size:14px;color:var(--text-dim)">₱</span> '+num(fairRate)+' <span style="font-size:14px;color:var(--text-dim)">per $1</span></div>'+
+      '<div class="stat-sub" style="font-size:15px;font-weight:650;color:var(--text);margin-top:8px">Brother pays '+money(dealPhp)+' for '+moneyCur(usd,'USD')+' — you receive '+money(dealPhp)+'</div></div>'+
+    '<div class="grid grid-2">'+
       stat('Mid-market value', money(midPhp), num(rate)+' ₱/$') +
+      stat('Total saved', money(potPhp), 'both avoided Wise fees') +
       stat('Wise fee — you', money(yourFeePhp), moneyCur(feeYouUsd,'USD')+' cashing out USD→PHP') +
       stat('Wise fee — brother', money(broFeePhp), 'buying USD PHP→USD') +
       stat('If you used Wise', money(wiseNetPhp), 'you\'d receive this') +
       stat('If he used Wise', money(broWiseCostPhp), 'he\'d pay this') +
       stat('You save vs Wise', '<span class="pos">'+money(youSave)+'</span>', 'your '+split+'% share') +
       stat('Brother saves vs Wise', '<span class="pos">'+money(broSave)+'</span>', 'his '+(100-split)+'% share') +
-      stat('Total saved', money(potPhp), 'both avoided Wise fees') +
     '</div>'+
     '<div class="hint" style="margin-top:10px">Any rate between '+num(wiseNetPhp/usd)+
       ' (your Wise net) and '+num(broWiseCostPhp/usd)+' (his Wise cost) leaves you both better off than using Wise. '+
