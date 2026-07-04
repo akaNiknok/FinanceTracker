@@ -8,6 +8,7 @@
 
 function test_all() {
   test_a1();
+  test_ledgerCoerce();
   test_referenceData();
   test_fx();
   test_bootstrap();
@@ -16,6 +17,17 @@ function test_all() {
   test_balanceReconciliation();
   test_createReadDelete();
   Logger.log("== test_all complete ==");
+}
+
+/** ledger_coerce_ — numeric strings become numbers (feed SUM); rest stays text. */
+function test_ledgerCoerce() {
+  const cases = [["1234", 1234], ["1,234.50", 1234.5], ["-42", -42],
+                 ["2026-07-04", "2026-07-04"], ["Filed", "Filed"], ["", ""], [null, ""]];
+  cases.forEach(function (c) {
+    const got = ledger_coerce_(c[0]);
+    if (got !== c[1]) throw new Error("ledger_coerce_ FAIL: " + JSON.stringify(c[0]) + " → " + JSON.stringify(got));
+  });
+  Logger.log("test_ledgerCoerce OK");
 }
 
 /** su_a1_ column-letter math (drives the RangeList bulk writes). */

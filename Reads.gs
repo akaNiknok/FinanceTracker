@@ -7,7 +7,23 @@
 
 // api_getBudgets lives in Budgets.gs (it computes actuals, not a raw row dump).
 function api_getCalendar()  { return { status: "success", rows: reads_clean_(su_readObjects_(SHEET_CALENDAR)) }; }
-function api_getLedger()   { return { status: "success", rows: reads_clean_(su_readObjects_(SHEET_LEDGER)) }; }
+
+/**
+ * Ledger for the editable Tax screen: rows keep their 1-based `__row` (so the UI
+ * can target a cell), plus `cols` (sheet column order) and `derived` (formula
+ * headers the UI renders read-only). Writes live in Ledger.gs.
+ */
+function api_getLedger() {
+  const sheet = su_sheet_(SHEET_LEDGER);
+  const headerMap = su_headerMap_(sheet);
+  const cols = Object.keys(headerMap);
+  const rows = su_readObjects_(SHEET_LEDGER).map(function (r) {
+    const c = { __row: r.__row };
+    cols.forEach(function (k) { c[k] = su_dateStr_(r[k]); });
+    return c;
+  });
+  return { status: "success", rows: rows, cols: cols, derived: ledger_derivedHeaders_(sheet, headerMap) };
+}
 
 /** Recurring bills / installments (reference notes). Empty if the sheet is absent. */
 function api_getRecurring() {

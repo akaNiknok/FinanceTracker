@@ -574,26 +574,126 @@ function renderTax(){
   if(!S.cache['tax']) loading();
   return cachedCall('tax', function(){return gs('api_getLedger');}, function(res){
     var rows=res.rows||[];
-    var w=el('div','screen');
-    w.appendChild(el('div','screen-title','Tax · BIR Ledger'));
-    w.appendChild(el('div','screen-sub','8% gross-income regime tracker'));
+    var cols=res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]);
+    var derived={}; (res.derived||[]).forEach(function(h){derived[h]=true;});
 
-    if(!rows.length){ w.appendChild(el('div','empty','Ledger is empty.')); paint(w); return; }
-    var cols=Object.keys(rows[0]);
-    var card=el('div','card');
-    var wrap=el('div','tbl-wrap');
-    var t=el('table','tbl');
-    var thead='<thead><tr>'+cols.map(function(c){return '<th>'+esc(c)+'</th>';}).join('')+'</tr></thead>';
-    var tbody='<tbody>'+rows.map(function(r){
-      return '<tr>'+cols.map(function(c){
-        var v=r[c]; if(v instanceof Date) v=fmtDate(v);
-        return '<td>'+esc(v==null?'':v)+'</td>';
-      }).join('')+'</tr>';
-    }).join('')+'</tbody>';
-    t.innerHTML=thead+tbody;
-    wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
+    var w=el('div','screen');
+    var head=el('div','tax-head');
+    head.appendChild(el('div','screen-title','Tax · BIR Ledger'));
+    var addBtn=el('button','btn sm primary','+ Add row');
+    addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
+    head.appendChild(addBtn);
+    w.appendChild(head);
+    w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only)'));
+
+    if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); paint(w); return; }
+    var card=el('div','card'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
+    var thead=el('thead'), htr=el('tr');
+    cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(derived[c]?' <span class="faint">ƒ</span>':''))); });
+    htr.appendChild(el('th')); // delete column
+    thead.appendChild(htr); t.appendChild(thead);
+
+    var tb=el('tbody');
+    rows.forEach(function(r){
+      var tr=el('tr');
+      cols.forEach(function(c){
+        var td=el('td'), val=r[c];
+        if(derived[c]){ td.className='dim'; td.textContent=(val==null?'':String(val)); }
+        else if(isFiledCol(c)){
+          td.className='ck-cell';
+          var cb=el('input','tx-check'); cb.type='checkbox'; cb.checked=ledgerTruthy(val);
+          cb.onchange=function(){ ledgerSaveCell(r.__row, c, cb.checked, cb); };
+          td.appendChild(cb);
+        } else {
+          td.className='ed-cell'; td.title='Tap to edit'; td.textContent=(val==null?'':String(val));
+          td.onclick=function(){ ledgerCellEdit(td, r.__row, c, val); };
+        }
+        tr.appendChild(td);
+      });
+      var dtd=el('td'), del=el('button','icon-btn','✕'); del.title='Delete row';
+      del.onclick=function(){ ledgerDeleteRow(r.__row); };
+      dtd.appendChild(del); tr.appendChild(dtd);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
     paint(w);
   }).catch(showErr);
+}
+
+function isFiledCol(c){ return /^filed/i.test(c); }
+function ledgerTruthy(v){
+  if(v===true) return true;
+  if(v===false||v==null||v==='') return false;
+  return /^(true|yes|y|1|x|✓|filed|done)$/i.test(String(v).trim());
+}
+/* Save a single cell (checkbox toggle / inline edit) then re-render. */
+function ledgerSaveCell(row, header, value, ctl){
+  if(ctl) ctl.disabled=true;
+  return gs('api_updateLedgerCell',{row:row, header:header, value:value}).then(function(){
+    toast('Saved','ok'); S.cache={}; renderTax();
+  }).catch(function(e){ toast(e.message||e,'err'); renderTax(); });
+}
+
+/* Inline cell editor: swap the <td> for a text input that fills the cell (the
+ * .editing class drops the td padding so the row doesn't jump on edit). */
+function ledgerCellEdit(td, row, header, curVal){
+  var input=el('input','ledger-edit-input'); input.type='text';
+  if(curVal!=null) input.value=String(curVal);
+  td.classList.add('editing'); td.textContent=''; td.appendChild(input); input.focus(); input.select();
+  var done=false;
+  function commit(){
+    if(done) return; done=true;
+    var v=input.value;
+    if(v===String(curVal==null?'':curVal)){ renderTax(); return; }   // no-op → restore
+    ledgerSaveCell(row, header, v);
+  }
+  input.onblur=commit;
+  input.onkeydown=function(e){
+    if(e.key==='Enter'){ e.preventDefault(); commit(); }
+    else if(e.key==='Escape'){ done=true; renderTax(); }
+  };
+}
+
+function openLedgerAdd(cols, derived){
+  var inputs={}, body=el('div');
+  cols.forEach(function(c){
+    if(derived[c]) return;                 // formula columns fill themselves
+    if(isFiledCol(c)){
+      var cb=el('input','tx-check'); cb.type='checkbox'; inputs[c]=cb;
+      var row=el('label','ck-row'); row.appendChild(cb); row.appendChild(el('span',null,esc(c)));
+      body.appendChild(row);
+    } else {
+      var inp=inputEl('text',''); inputs[c]=inp;
+      body.appendChild(fieldEl(c, inp));
+    }
+  });
+  var save=el('button','btn primary','Add row');
+  save.onclick=function(){
+    var obj={}, any=false;
+    Object.keys(inputs).forEach(function(c){
+      var inp=inputs[c];
+      if(inp.type==='checkbox'){ if(inp.checked){ obj[c]=true; any=true; } }
+      else { var v=inp.value; if(v!==''){ obj[c]=v; any=true; } }
+    });
+    if(!any){ toast('Fill at least one field','err'); return; }
+    save.disabled=true; save.textContent='Adding…';
+    gs('api_appendLedgerRow',obj).then(function(){
+      closeModal(); toast('Row added','ok'); S.cache={}; renderTax();
+    }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
+  };
+  openModal(modalShell('Add ledger row', body, [save]));
+}
+
+function ledgerDeleteRow(row){
+  var yes=el('button','btn danger','Delete');
+  yes.onclick=function(){
+    yes.disabled=true; yes.textContent='Deleting…';
+    gs('api_deleteLedgerRow',{row:row}).then(function(){
+      closeModal(); toast('Row deleted','ok'); S.cache={}; renderTax();
+    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
+  };
+  var no=el('button','btn','Cancel'); no.onclick=closeModal;
+  openModal(modalShell('Delete this ledger row?', el('div','dim','This permanently removes the row from the Ledger sheet.'), [no,yes]));
 }
 
 /* ════════════════════════════════════════════════════════════════════════
