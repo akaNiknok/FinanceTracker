@@ -156,6 +156,23 @@ function boot(){
   mp.value=S.month;
   mp.addEventListener('change', function(){ S.month=mp.value; S.cache={}; render(); });
 
+  // Browser back/forward moves between screens. history.pushState is blocked in
+  // the GAS sandbox iframe; google.script.history is the sanctioned equivalent.
+  try{
+    google.script.history.setChangeHandler(function(ev){
+      var s=(ev.location.parameter||{}).screen||'dashboard';
+      if(s!==S.screen) go(s,true);
+    });
+    google.script.url.getLocation(function(loc){    // deep link: ?screen=budgets
+      var s=(loc.parameter||{}).screen;
+      if(s && s!==S.screen) go(s,true);
+    });
+  }catch(e){}
+  // Scroll-wheel over a focused number input silently changes the value — block it.
+  document.addEventListener('wheel',function(e){
+    if(e.target.type==='number' && document.activeElement===e.target) e.preventDefault();
+  },{passive:false});
+
   // Paint the first screen right away (it fetches its own data); hydrate the
   // reference data in parallel, then re-render so warm FX / counts are reflected.
   render();
@@ -170,9 +187,10 @@ function refresh(){
   ensureBoot().then(function(){ return render(); }).finally(function(){ btn.classList.remove('spin'); });
 }
 
-function go(screen){
+function go(screen, fromHistory){
   S.screen=screen;
   document.querySelectorAll('.nav-item').forEach(function(b){b.classList.toggle('active', b.dataset.screen===screen);});
+  if(!fromHistory){ try{ google.script.history.push(null,{screen:screen}); }catch(e){} }
   render();
 }
 
@@ -200,7 +218,7 @@ function renderDashboard(){
     // hero net worth + assets/liabilities
     var hero=el('div','stat hero');
     hero.innerHTML='<div class="stat-label">Net worth</div><div class="stat-value">'+money(d.netWorth)+
-      '</div><div class="stat-sub"><span class="pos">'+money(d.assets)+' assets</span> · <span class="neg">'+
+      '</div><div class="stat-sub"><span class="pill pos">'+money(d.assets)+' assets</span> <span class="pill neg">'+
       money(d.liabilities)+' liabilities</span></div>';
     w.appendChild(hero);
 
@@ -319,8 +337,12 @@ function loadTx(w){
     var head=el('div','row-between'); head.style.marginBottom='6px';
     head.innerHTML='<div class="card-h" style="margin:0">'+res.total+' transaction'+(res.total===1?'':'s')+'</div>';
     c.appendChild(head);
-    var l=el('div','list');
-    res.transactions.forEach(function(t){ l.appendChild(txRow(t,true)); });
+    var l=el('div','list'), lastDate=null;
+    res.transactions.forEach(function(t){
+      var d=fmtDate(t.Date);
+      if(d!==lastDate){ l.appendChild(el('div','list-date',esc(d))); lastDate=d; }
+      l.appendChild(txRow(t,true,true));
+    });
     if(!res.transactions.length) l.appendChild(el('div','empty','No transactions match.'));
     c.appendChild(l);
     // pager
@@ -338,7 +360,7 @@ function loadTx(w){
   }).catch(showErr);
 }
 
-function txRow(t,clickable){
+function txRow(t,clickable,hideDate){  // hideDate: the list already groups rows under date headers
   var type=String(t.Type||'');
   var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
   var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
@@ -358,7 +380,7 @@ function txRow(t,clickable){
   var r=el('div','litem'+(clickable?' click':''));
   r.innerHTML='<div class="ic '+icCls+'">'+icCh+'</div>'+
     '<div class="grow"><div class="t1">'+esc(t.Description||t.Category||'(no description)')+'</div>'+
-    '<div class="t2">'+sub+' · '+esc(date)+'</div></div>'+
+    '<div class="t2">'+sub+(hideDate?'':' · '+esc(date))+'</div></div>'+
     '<div class="amt '+amtCls+'">'+sign+mainAmt+'</div>';
   if(fromC){ r.style.borderLeft='3px solid '+fromC; r.style.paddingLeft='9px'; }
   if(clickable) r.onclick=function(){ openTxModal(t); };
@@ -403,7 +425,11 @@ function renderAccounts(){
     accs.forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
     Object.keys(groups).sort().forEach(function(t){
       var card=el('div','card');
-      card.appendChild(el('div','card-h',esc(t)));
+      var sum=0; groups[t].forEach(function(a){ sum+=(a.balancePhp||0); });
+      var h=el('div','row-between'); h.style.marginBottom='12px';
+      var ttl=el('div','card-h',esc(t)); ttl.style.margin='0'; h.appendChild(ttl);
+      h.appendChild(el('div','dim mono',money(sum)));
+      card.appendChild(h);
       var l=el('div','list');
       groups[t].forEach(function(a){ l.appendChild(accountRow(a)); });
       card.appendChild(l); w.appendChild(card);
@@ -426,6 +452,13 @@ function accountRow(a){
     var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
     r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
   }
+  // credit utilization at a glance for credit accounts
+  if(a.isLiability && a.creditLimit>0){
+    var u=Math.min(100,Math.round(100*(a.balancePhp||0)/a.creditLimit));
+    var b=el('div','bar thin');
+    b.innerHTML='<div class="bar-fill '+(u>=90?'over':(u>=60?'warn':''))+'" style="width:'+u+'%"></div>';
+    $('.grow',r).appendChild(b);
+  }
   r.onclick=function(){ openAccountModal(a); };
   return r;
 }
@@ -443,7 +476,10 @@ function renderBudgets(){
     var bg=payload.bg, rec=payload.rec;
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Budgets'));
-    w.appendChild(el('div','screen-sub','Period '+esc(monthLabel(bg.month))+' · planning income '+money(bg.incomePhp,true)+'/mo'));
+    var now=new Date(), daysLeft=(bg.month===monthKey(now))
+      ? (new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()) : null;
+    w.appendChild(el('div','screen-sub','Period '+esc(monthLabel(bg.month))+' · planning income '+money(bg.incomePhp,true)+'/mo'+
+      (daysLeft!=null?(' · '+daysLeft+' day'+(daysLeft===1?'':'s')+' left'):'')));
 
     if(bg.essentialsRewards){
       var er=bg.essentialsRewards;
@@ -509,7 +545,8 @@ function renderInvestments(){
       if(pc){ r.style.borderLeft='3px solid '+pc; r.style.paddingLeft='9px'; }
       l.appendChild(r);
       var br=el('div'); br.style.padding='0 4px 10px'; br.style.borderBottom='1px solid var(--border)';
-      br.innerHTML='<div class="bar" style="margin-top:0"><div class="bar-fill" style="width:'+(p.weightPct||0)+'%"></div></div>';
+      br.innerHTML='<div class="bar" style="margin-top:0"><div class="bar-fill" style="width:'+(p.weightPct||0)+'%'+
+        (pc?';background:'+pc:'')+'"></div></div>';
       l.appendChild(br);
     });
     if(!(inv.positions||[]).length) l.appendChild(el('div','empty','No investment positions found.'));
