@@ -9,3 +9,9 @@ npm-debug.log*
 # OS / editor
 .DS_Store
 *.log
+
+# Live web-app deploymentId (URL component = credential) — used by release.js
+.deploymentid
+
+# Session handoff notes (per-session artifact, not history)
+HANDOFF.md

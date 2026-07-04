@@ -1,6 +1,11 @@
 # CLAUDE.md
 Guidance for Claude Code (and humans) working in this repo. **Keep this file and MEMORY.md token-efficient: dense, minimal blank lines, no filler; lines may exceed 80 chars. Apply the same when editing them.**
 
+## Session protocol (read first)
+- **Start:** if `HANDOFF.md` exists at repo root, read it before anything else — it's the resume point from the previous session. Then check MEMORY.md "TODO / open questions".
+- **HANDOFF.md rule:** whenever a turn ends needing **human action** (owner-side migration/deploy/smoke-test, a decision, subagent output awaiting review), write/overwrite `HANDOFF.md`: ① what was done this session, ② exact pending human steps (commands verbatim), ③ how a fresh session resumes (files/memory entries to read). Purpose: owner can clear context and start a new session from it. Gitignored; superseded by the next handoff.
+- The big files are `App.html` and MEMORY.md — read targeted sections, not the whole file, when you know what you need.
+
 ## Project overview
 **FinanceTracker** is a **personal finance tracker**. Backend = **Google Apps Script (GAS)** over one Google Sheets workbook, published as a Web App exposing a small JSON API (record transactions, read accounts/categories) plus a scheduled daily-interest job.
 - **Use:** personal finance tracking — log transactions, accounts, interest into a private Google Sheet.
@@ -29,7 +34,9 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 | `appsscript.json` | Apps Script manifest (runtime, timezone, web app access). |
 | `.clasp.json` | Links repo to the Apps Script project (`scriptId`). |
 | `.claspignore` | Restricts clasp pushes (only `.gs`/`.js`/`.html` + manifest). |
-| `package.json` | npm scripts wrapping clasp. |
+| `package.json` | npm scripts wrapping clasp; `version` drives release tags. |
+| `release.js` | `npm run release`: clasp push + redeploy same `deploymentId` + git tag `vX.Y.Z` + GitHub Release. Main-branch only. Not pushed to GAS (`.claspignore`). |
+| `HANDOFF.md` | (when present, gitignored) previous session's handoff — read first. See "Session protocol". |
 | `MEMORY.md` | Durable notes, decisions, secrets-locations, TODOs (read it too). |
 
 > Apps Script has a **flat file namespace** (no folders/modules): all `.gs` files share one global scope, so function names must be unique across files.
@@ -65,6 +72,15 @@ Linked via `.clasp.json` (`scriptId` is committed; the auth token is not).
 - **Day-to-day:** `npm run push` (upload `.gs`+manifest) · `npm run watch` (auto-push on save) · `npm run pull` · `npm run open` · `npm run logs`.
 - **Deploy Web App:** `npm run deploy` (new versioned deployment) · `npm run deployments` (list IDs) · `npx clasp deploy --deploymentId <id> --description "..."` (update existing in place). The n8n workflow calls a specific deployment URL — to change behavior **without breaking the URL**, redeploy the **same** `deploymentId` (a new deployment = new URL).
 - **Web App access:** manifest sets `executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS` so n8n POSTs without OAuth. The deployment URL is effectively the credential — treat as secret (kept out of git; see MEMORY.md). Revisit when adding the authenticated frontend.
+
+## Git workflow (gitflow + releases)
+Gitflow (AVH, configured in `.git/config`; plain `git branch/merge` works too — the config just makes `git flow` commands match):
+- **`main`** = released/live code only. **`develop`** = integration branch; day-to-day commits and merges land here.
+- **Features:** `feature/<name>` off `develop`, merge back to `develop` (no tag, no release).
+- **Release to main:** merge `develop` → `main`, then run **`npm run release`** — the ONLY way code reaches main/live. It: verifies on-main+clean, `clasp push -f`, redeploys the **same** `deploymentId` (from gitignored `.deploymentid` — URL stays stable for n8n), tags `v<package.json version>`, pushes main+tags, creates a GitHub Release with generated notes. Bump the version **before** merging: `npm version patch|minor --no-git-tag-version` on `develop` (or the release branch), commit it.
+- **Hotfix:** `hotfix/<name>` off `main` → merge to `main`, bump patch version, `npm run release`, then **back-merge `main` → `develop`**.
+- **Tags/Releases invariant:** every tag is `vX.Y.Z`, on `main`, created only by `release.js`, and has a matching GitHub Release; GAS deployment description = the tag. Never hand-create tags or Releases.
+- Push `develop` freely; never push directly to `main` (only via release/hotfix merges followed by `npm run release`).
 
 ## Conventions & gotchas
 - **Never commit credentials:** `.clasprc.json` and the deployment URL stay out of git; `.clasp.json` (`scriptId` only) is safe.
