@@ -112,11 +112,14 @@ function acctOptions(){
 function toast(msg,kind){
   var t=el('div','toast '+(kind||''),esc(msg));
   $('#toastRoot').appendChild(t);
-  setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(function(){t.remove();},300);},2400);
+  var ms = kind==='err'?6000:2400; // errors linger long enough to read
+  setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(function(){t.remove();},300);},ms);
 }
 
 /* ── month helpers ───────────────────────────────────────────────────────── */
 function monthKey(d){return d.getFullYear()+'-'+MONTHS[d.getMonth()];}      // "2026-Jun"
+function monthLabel(m){var p=String(m).split('-');return p.length===2?p[1]+' '+p[0]:m;} // "Jun 2026"
+function monthOptions(){return buildMonthList().map(function(m){return {value:m,label:monthLabel(m)};});}
 function buildMonthList(){
   var out=[], now=new Date();
   for(var i=0;i<15;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
@@ -149,7 +152,7 @@ function boot(){
   $('#refreshBtn').addEventListener('click', refresh);
   $('#fab').addEventListener('click', function(){ withBoot(function(){ openTxModal(null); }); });
   var mp=$('#monthPicker');
-  buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=m;mp.appendChild(o);});
+  buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=monthLabel(m);mp.appendChild(o);});
   mp.value=S.month;
   mp.addEventListener('change', function(){ S.month=mp.value; S.cache={}; render(); });
 
@@ -170,14 +173,14 @@ function refresh(){
 function go(screen){
   S.screen=screen;
   document.querySelectorAll('.nav-item').forEach(function(b){b.classList.toggle('active', b.dataset.screen===screen);});
-  $('#fab').hidden = (screen!=='transactions');
   render();
 }
 
 /* ── render dispatcher ───────────────────────────────────────────────────── */
 function render(){
   var fns={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
-           review:renderReview,budgets:renderBudgets,investments:renderInvestments,tax:renderTax};
+           review:renderReview,budgets:renderBudgets,investments:renderInvestments,
+           exchange:renderExchange,tax:renderTax};
   return (fns[S.screen]||renderDashboard)();
 }
 function loading(){ $('#main').innerHTML='<div class="boot-loader"><div class="spinner"></div></div>'; }
@@ -192,7 +195,7 @@ function renderDashboard(){
   return cachedCall(key, function(){return gs('api_getDashboard',{month:S.month});}, function(d){
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Dashboard'));
-    w.appendChild(el('div','screen-sub','Period '+esc(S.month)));
+    w.appendChild(el('div','screen-sub','Period '+esc(monthLabel(S.month))));
 
     // hero net worth + assets/liabilities
     var hero=el('div','stat hero');
@@ -273,7 +276,7 @@ function renderTransactions(){
 
   // filters
   var f=el('div','filters');
-  var fMonth=comboEl(['(all months)'].concat(buildMonthList()), S.tx.filters.month||S.month);
+  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), S.tx.filters.month||S.month);
   var cats=Object.keys((S.boot.categories)||{}).sort();
   var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
   var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
@@ -440,7 +443,7 @@ function renderBudgets(){
     var bg=payload.bg, rec=payload.rec;
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Budgets'));
-    w.appendChild(el('div','screen-sub','Period '+esc(bg.month)+' · planning income '+money(bg.incomePhp,true)+'/mo'));
+    w.appendChild(el('div','screen-sub','Period '+esc(monthLabel(bg.month))+' · planning income '+money(bg.incomePhp,true)+'/mo'));
 
     if(bg.essentialsRewards){
       var er=bg.essentialsRewards;
@@ -557,6 +560,88 @@ function renderTax(){
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ *  EXCHANGE — fair USD↔PHP swap with the brother. You'd otherwise pay Wise's
+ *  fee to convert; trading direct saves it. The "fair" rate splits that saved
+ *  fee: the band runs from your Wise net (₱ you'd actually receive on Wise) up
+ *  to the mid-market rate; the 50/50 midpoint is the breakeven where you each
+ *  pocket half the avoided fee. Defaults: Wise USD→PHP ≈ $1.17 + 0.8% (tunable).
+ * ════════════════════════════════════════════════════════════════════════ */
+function renderExchange(){
+  if(!S.boot){ loading(); ensureBoot().then(renderExchange).catch(showErr); return; }
+  var w=el('div','screen');
+  w.appendChild(el('div','screen-title','Swap · Fair USD↔PHP'));
+  w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with your brother'));
+
+  var rate0 = (S.boot.fxUsdPhp!=null && S.boot.fxUsdPhp>0) ? Number(S.boot.fxUsdPhp).toFixed(4) : '';
+  var card=el('div','card');
+  card.innerHTML=
+    '<div class="field"><label>I\'m entering</label><select id="exSide">'+
+      '<option value="usd">Dollars I\'m giving (USD)</option>'+
+      '<option value="php">Pesos I need (PHP)</option>'+
+    '</select></div>'+
+    '<div class="field-row">'+
+      '<div class="field"><label>Amount</label><input id="exAmt" type="number" min="0" step="any" value="1000"></div>'+
+      '<div class="field"><label>Mid-market rate (₱ per $1)</label><input id="exRate" type="number" min="0" step="any" value="'+rate0+'">'+
+        '<div class="hint">Live rate, editable</div></div>'+
+    '</div>'+
+    '<div class="field-row">'+
+      '<div class="field"><label>Wise fixed fee (USD)</label><input id="exFixed" type="number" min="0" step="any" value="1.17"></div>'+
+      '<div class="field"><label>Wise % fee</label><input id="exPct" type="number" min="0" step="any" value="0.8"></div>'+
+    '</div>'+
+    '<div class="field"><label>Your share of the saved fee: <span id="exSplitLbl">50%</span></label>'+
+      '<input id="exSplit" type="range" min="0" max="100" step="5" value="50" style="width:100%;accent-color:var(--accent)">'+
+      '<div class="hint">50% = fair breakeven · higher = you keep more · lower = brother gets a better rate</div></div>';
+  w.appendChild(card);
+  w.appendChild(el('div','',null)).id='exOut';
+  w.appendChild(el('div','hint','No PH tax applies to a fair-value swap or a sibling remittance — the avoided Wise transfer fee is the only real cost, so the whole fee is the pot you\'re splitting.'));
+  paint(w);
+
+  ['exSide','exAmt','exRate','exFixed','exPct','exSplit'].forEach(function(id){
+    $('#'+id).addEventListener('input', exCalc);
+  });
+  exCalc();
+}
+
+function exCalc(){
+  var side=$('#exSide').value, amt=parseFloat($('#exAmt').value)||0;
+  var rate=parseFloat($('#exRate').value)||0, fixed=parseFloat($('#exFixed').value)||0;
+  var pct=parseFloat($('#exPct').value)||0, split=parseFloat($('#exSplit').value)||0;
+  $('#exSplitLbl').textContent=split+'%';
+  var out=$('#exOut');
+  if(!(amt>0)||!(rate>0)){ out.innerHTML='<div class="empty">Enter an amount and a rate.</div>'; return; }
+
+  // Reduce both entry modes to a USD notional being swapped.
+  var usd = side==='usd' ? amt : amt/rate;
+  var midPhp = usd*rate;                        // value at mid-market (ceiling for the brother)
+  var feeUsd = fixed + pct/100*usd;             // what Wise would charge on this USD→PHP
+  var feePhp = feeUsd*rate;
+  var wiseNetPhp = midPhp - feePhp;             // ₱ you'd actually receive via Wise (your floor)
+  var dealPhp = wiseNetPhp + split/100*feePhp;  // fair deal: you keep `split` of the saved fee
+  var fairRate = dealPhp/usd;
+  var youSave = dealPhp - wiseNetPhp;           // vs. using Wise yourself
+  var broSave = midPhp - dealPhp;               // vs. buying your USD at mid-market
+
+  function stat(label,val,sub){return '<div class="stat"><div class="stat-label">'+esc(label)+
+    '</div><div class="stat-value">'+val+'</div>'+(sub?'<div class="stat-sub">'+sub+'</div>':'')+'</div>';}
+
+  out.innerHTML=
+    '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">Fair rate</div>'+
+      '<div class="stat-value">'+num(fairRate)+' <span style="font-size:14px;color:var(--text-dim)">₱ per $1</span></div>'+
+      '<div class="stat-sub">Brother pays '+money(dealPhp)+' for '+moneyCur(usd,'USD')+' — you receive '+money(dealPhp)+'</div></div>'+
+    '<div class="grid grid-3">'+
+      stat('Mid-market value', money(midPhp), num(rate)+' ₱/$') +
+      stat('Wise would cost', money(feePhp), moneyCur(feeUsd,'USD')+' fee ('+pct+'% + $'+fixed+')') +
+      stat('If you used Wise', money(wiseNetPhp), 'you\'d receive this') +
+      stat('You save vs Wise', '<span class="pos">'+money(youSave)+'</span>', 'your '+split+'% share') +
+      stat('Brother saves vs mid', '<span class="pos">'+money(broSave)+'</span>', 'his '+(100-split)+'% share') +
+      stat('Total saved', money(feePhp), 'the avoided Wise fee') +
+    '</div>'+
+    '<div class="hint" style="margin-top:10px">Any rate between '+num(wiseNetPhp/usd)+
+      ' (your Wise net) and '+num(rate)+' (mid-market) leaves you both better off than using Wise. '+
+      'The '+num((wiseNetPhp+midPhp)/2/usd)+' midpoint is the 50/50 fair split.</div>';
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  *  REVIEW — accounts + transactions side-by-side, multi-select bulk edit,
  *  inline single-field edit. Reuses fetchTxPage / comboEl / acctOptions.
  * ════════════════════════════════════════════════════════════════════════ */
@@ -575,7 +660,7 @@ function renderReview(){
 
   // right-pane filters
   var f=el('div','filters');
-  var fMonth=comboEl(['(all months)'].concat(buildMonthList()), S.review.filters.month||'(all months)');
+  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), S.review.filters.month||'(all months)');
   var cats=Object.keys((S.boot.categories)||{}).sort();
   var fCat=comboEl(['(all categories)'].concat(cats), S.review.filters.category||'(all categories)');
   var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.review.filters.search||'';
@@ -854,7 +939,18 @@ function openModal(node){
   var root=$('#modalRoot'); var card=$('#modalCard');
   card.innerHTML=''; card.appendChild(node); root.hidden=false;
   $('.modal-backdrop',root).onclick=closeModal;
+  // Enter in a plain input submits (combos handle Enter themselves to pick an option)
+  card.onkeydown=function(e){
+    if(e.key==='Enter' && e.target.tagName==='INPUT' && !e.target.classList.contains('combo-input')){
+      e.preventDefault();
+      var p=$('.modal-f .btn.primary',card); if(p && !p.disabled) p.click();
+    }
+  };
 }
+// Escape closes the modal — unless an open combo dropdown should eat it first.
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape' && !$('#modalRoot').hidden && !(e.target.closest && e.target.closest('.combo.open'))) closeModal();
+});
 function closeModal(){ $('#modalRoot').hidden=true; }
 
 function modalShell(title,bodyNode,footerNodes){
