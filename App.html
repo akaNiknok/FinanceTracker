@@ -418,6 +418,8 @@ function renderDashboard(){
     var tIn=el('div','stat','<div class="stat-label">Income</div><div class="stat-value">'+money(cur?cur.income:null,true)+'</div>');
     var dIn=!isLive&&cur&&prev?deltaEl(cur.income,prev.income,true,prevLbl):null;
     if(dIn)tIn.appendChild(dIn); else if(isLive)tIn.appendChild(el('div','stat-sub','month to date'));
+    var sparkIn=sparklineSVG(cf.map(function(m){return m.income;}));
+    if(sparkIn)tIn.appendChild(sparkIn);
     stats.appendChild(tIn);
     var tSp=el('div','stat','<div class="stat-label">Spending</div><div class="stat-value">'+money(cur?cur.expense:monthSpend,true)+'</div>');
     var dSp=!isLive&&cur&&prev?deltaEl(cur.expense,prev.expense,false,prevLbl):null;
