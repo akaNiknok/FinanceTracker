@@ -3,6 +3,9 @@
   <head>
     <base target="_top">
     <meta charset="utf-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <?!= include('Stylesheet'); ?>
   </head>
   <body>
@@ -19,16 +22,18 @@
         </div>
       </header>
 
-      <!-- Desktop sidebar / mobile bottom-nav share the same buttons -->
+      <!-- Desktop sidebar shows all items; the phone bottom-nav shows the four
+           primary tabs + More (secondary screens live in the More sheet). -->
       <nav id="nav" class="nav">
         <button class="nav-item active" data-screen="dashboard"><span class="nav-ico">&#9737;</span><span class="nav-label">Dashboard</span></button>
         <button class="nav-item" data-screen="transactions"><span class="nav-ico">&#8645;</span><span class="nav-label">Transactions</span></button>
-        <button class="nav-item" data-screen="review"><span class="nav-ico">&#9745;</span><span class="nav-label">Review</span></button>
-        <button class="nav-item" data-screen="accounts"><span class="nav-ico">&#127974;</span><span class="nav-label">Accounts</span></button>
         <button class="nav-item" data-screen="budgets"><span class="nav-ico">&#9678;</span><span class="nav-label">Budgets</span></button>
-        <button class="nav-item" data-screen="investments"><span class="nav-ico">&#9650;</span><span class="nav-label">Invest</span></button>
-        <button class="nav-item" data-screen="exchange"><span class="nav-ico">&#8646;</span><span class="nav-label">Swap</span></button>
-        <button class="nav-item" data-screen="tax"><span class="nav-ico">&#167;</span><span class="nav-label">Tax</span></button>
+        <button class="nav-item" data-screen="accounts"><span class="nav-ico">&#127974;</span><span class="nav-label">Accounts</span></button>
+        <button class="nav-item secondary" data-screen="review"><span class="nav-ico">&#9745;</span><span class="nav-label">Review</span></button>
+        <button class="nav-item secondary" data-screen="investments"><span class="nav-ico">&#9650;</span><span class="nav-label">Invest</span></button>
+        <button class="nav-item secondary" data-screen="exchange"><span class="nav-ico">&#8646;</span><span class="nav-label">Swap</span></button>
+        <button class="nav-item secondary" data-screen="tax"><span class="nav-ico">&#167;</span><span class="nav-label">Tax</span></button>
+        <button class="nav-item nav-more" id="navMore"><span class="nav-ico">&#8943;</span><span class="nav-label">More</span></button>
       </nav>
 
       <!-- Screens render here -->
@@ -38,6 +43,20 @@
 
       <!-- Floating quick-add (every screen) -->
       <button id="fab" class="fab" title="Add transaction">+</button>
+
+      <!-- More sheet (mobile secondary nav) -->
+      <div id="sheetRoot" class="sheet-root" hidden>
+        <div class="sheet-backdrop"></div>
+        <div class="sheet">
+          <div class="sheet-grab"></div>
+          <div class="sheet-grid">
+            <button class="sheet-item" data-screen="review"><span class="nav-ico">&#9745;</span>Review</button>
+            <button class="sheet-item" data-screen="investments"><span class="nav-ico">&#9650;</span>Invest</button>
+            <button class="sheet-item" data-screen="exchange"><span class="nav-ico">&#8646;</span>Swap</button>
+            <button class="sheet-item" data-screen="tax"><span class="nav-ico">&#167;</span>Tax</button>
+          </div>
+        </div>
+      </div>
 
       <!-- Modal host -->
       <div id="modalRoot" class="modal-root" hidden>
