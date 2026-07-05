@@ -26,15 +26,35 @@ function api_getDashboard(args) {
     if (a.isLiability) liabilities += php; else assets += php; // liabilities are negative
   });
 
-  // This-month expenses by Segment.
+  // This-month expenses by Segment + trailing-6-month cash flow (income vs
+  // expense per month, ending at the requested month) in the same pass.
   const month = args.month ? String(args.month) : dash_currentMonth_();
+  const tz = Session.getScriptTimeZone();
+  const ref = bud_parseMonth_(month);
+  const flowByMonth = {}, flowMonths = [];
+  for (let i = 5; i >= 0; i--) {
+    const k = Utilities.formatDate(new Date(ref.getFullYear(), ref.getMonth() - i, 1), tz, "yyyy-MMM");
+    flowMonths.push(k);
+    flowByMonth[k] = { income: 0, expense: 0 };
+  }
   const tx = su_readObjects_(SHEET_TX);
   const spendBySegment = {};
   tx.forEach(function (r) {
-    if (String(r.Month) !== month) return;
-    if (String(r.Type) !== "Expense") return;
+    const m = String(r.Month), type = String(r.Type);
+    const f = flowByMonth[m];
+    if (f) {
+      const php = Math.abs(acct_num_(r["Amount (PHP)"]));
+      if (type === "Income") f.income += php;
+      else if (type === "Expense") f.expense += php;
+    }
+    if (m !== month || type !== "Expense") return;
     const seg = r.Segment || "Unsegmented";
     spendBySegment[seg] = (spendBySegment[seg] || 0) + Math.abs(acct_num_(r["Amount (PHP)"]));
+  });
+  const cashflow = flowMonths.map(function (k) {
+    return { month: k,
+             income: Math.round(flowByMonth[k].income * 100) / 100,
+             expense: Math.round(flowByMonth[k].expense * 100) / 100 };
   });
 
   const recent = tx.slice(-10).reverse().map(tx_clean_);
@@ -49,6 +69,7 @@ function api_getDashboard(args) {
     balancesByType: dash_round_(byType),
     balancesBySubtype: dash_round_(bySubtype),
     spendBySegment: dash_round_(spendBySegment),
+    cashflow: cashflow,
     budgets: api_getBudgets({ month: month }).budgets, // targets + computed actuals, period-aware
     recentTransactions: recent
   };
