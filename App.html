@@ -1489,12 +1489,21 @@ function openTxModal(t){
     };
     if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
-    save.disabled=true; save.textContent='Saving…';
-    var call = isEdit
-      ? gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
-      : gs('api_createTransaction', payload);
-    call.then(function(){ prefSet('lastAcct',payload.Account); closeModal(); toast(isEdit?'Updated':'Added','ok'); afterMutation(); })
-        .catch(function(e){ save.disabled=false; save.textContent=isEdit?'Save':'Add'; toast(e.message||e,'err'); });
+    if(isEdit){
+      save.disabled=true; save.textContent='Saving…';
+      gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
+        .then(function(){ prefSet('lastAcct',payload.Account); closeModal(); toast('Updated','ok'); afterMutation(); })
+        .catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
+      return;
+    }
+    // New tx: optimistic — close instantly so you can start the next entry without
+    // waiting on the (slow) Apps Script round-trip. The write runs in the background;
+    // afterMutation() refreshes balances when it lands. On failure, reopen with the
+    // values intact so nothing is lost.
+    prefSet('lastAcct',payload.Account); closeModal(); toast('Added','ok');
+    gs('api_createTransaction', payload)
+      .then(function(){ afterMutation(); })
+      .catch(function(e){ toast('Add failed — reopening: '+(e.message||e),'err'); openTxModal(payload); });
   };
   var foot=[save];
   if(isEdit){
@@ -1545,12 +1554,18 @@ function openTransferModal(t){
     var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
     if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
-    save.disabled=true; save.textContent='Saving…';
-    var call = isEdit
-      ? gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
-      : gs('api_createTransfer', payload);
-    call.then(function(){ closeModal(); toast(isEdit?'Updated':'Transfer added','ok'); afterMutation(); })
-        .catch(function(e){ save.disabled=false; save.textContent=isEdit?'Save':'Add transfer'; toast(e.message||e,'err'); });
+    if(isEdit){
+      save.disabled=true; save.textContent='Saving…';
+      gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
+        .then(function(){ closeModal(); toast('Updated','ok'); afterMutation(); })
+        .catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
+      return;
+    }
+    // New transfer: optimistic close (see openTxModal) — background write, reopen on failure.
+    closeModal(); toast('Transfer added','ok');
+    gs('api_createTransfer', payload)
+      .then(function(){ afterMutation(); })
+      .catch(function(e){ toast('Transfer failed — reopening: '+(e.message||e),'err'); openTransferModal(payload); });
   };
   var foot=[save];
   if(isEdit){
