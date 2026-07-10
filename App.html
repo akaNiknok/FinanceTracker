@@ -1443,6 +1443,13 @@ function comboEl(options,value,opts){
   return wrap;
 }
 
+/* —— remember the last-used account/category so re-entry is a couple of taps ——
+ * Most transactions reuse the same handful of accounts; pre-filling the last one
+ * (and autofocusing) means a new entry is usually just category + amount. */
+function prefGet(k){ try{ return localStorage.getItem('ft.'+k)||''; }catch(e){ return ''; } }
+function prefSet(k,v){ try{ if(v) localStorage.setItem('ft.'+k,String(v)); }catch(e){} }
+function focusCombo(c){ var i=c&&c.querySelector('.combo-input'); if(i){ i.focus(); i.select(); } }
+
 /* —— add / edit a normal transaction —— */
 function openTxModal(t){
   if(!S.boot){ withBoot(function(){ openTxModal(t); }); return; }
@@ -1454,10 +1461,12 @@ function openTxModal(t){
     return String((S.boot.categories[c]||{}).Type)!=='Transfer';
   }).sort();
   var accs=acctOptions();
+  // default account for a brand-new tx = last one used (if it still exists)
+  var defAcc=(!isEdit&&!t) ? (accs.some(function(a){return (a.value||a)===prefGet('lastAcct');})?prefGet('lastAcct'):'') : '';
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
   var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
-  var fAcc=comboEl(accs, t?t.Account:'', {placeholder:'Select account'});
+  var fAcc=comboEl(accs, t?t.Account:defAcc, {placeholder:'Select account'});
   var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
   var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
@@ -1484,7 +1493,7 @@ function openTxModal(t){
     var call = isEdit
       ? gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
       : gs('api_createTransaction', payload);
-    call.then(function(){ closeModal(); toast(isEdit?'Updated':'Added','ok'); afterMutation(); })
+    call.then(function(){ prefSet('lastAcct',payload.Account); closeModal(); toast(isEdit?'Updated':'Added','ok'); afterMutation(); })
         .catch(function(e){ save.disabled=false; save.textContent=isEdit?'Save':'Add'; toast(e.message||e,'err'); });
   };
   var foot=[save];
@@ -1494,6 +1503,8 @@ function openTxModal(t){
     foot.unshift(del);
   }
   openModal(modalShell(isEdit?'Edit transaction':'Add transaction', body, foot));
+  // For a new tx, jump straight into Category so you can type/filter without a click.
+  if(!isEdit&&!t) focusCombo(fCat);
 }
 
 /* —— transfer —— */
@@ -1548,6 +1559,7 @@ function openTransferModal(t){
     foot.unshift(del);
   }
   openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, foot));
+  if(!isEdit&&!t) focusCombo(fFrom);
 }
 
 function confirmDelete(t){
