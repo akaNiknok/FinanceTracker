@@ -181,6 +181,10 @@ button{font-family:inherit;cursor:pointer}
 .litem .amt .amt-sub{display:block;font-weight:500;font-size:11px;color:var(--text-faint);text-align:right}
 .litem.click{cursor:pointer;border-radius:12px}
 .litem.click:hover{background:var(--surface-2)}
+/* in-flight (optimistic) row: dimmed with a spinner in the icon slot */
+.litem.pending{opacity:.6;animation:pendPulse 1.4s ease-in-out infinite}
+.mini-spin{width:16px;height:16px;border:2px solid var(--border-2);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
+@keyframes pendPulse{0%,100%{opacity:.6}50%{opacity:.4}}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);

@@ -63,7 +63,8 @@ var S = {
   screen:'dashboard',
   dataVersion:null,     // last server data version we hold cache against
   cache:{},             // key → { data, version } (stale-while-revalidate)
-  tx:{ rows:[], total:0, offset:0, limit:50, filters:{} },
+  tx:{ rows:[], total:0, offset:0, limit:50, filters:{},
+       pendingAdds:[], pendingDeletes:{} },   // optimistic rows: in-flight creates / deletes
   review:{ sel:{}, filters:{}, rows:[], total:0, offset:0, limit:50 }
 };
 
@@ -538,53 +539,71 @@ function renderTransactions(){
   loadTx(w);
 }
 
-function loadTx(w){
+// silent: skip the full-card spinner (keep optimistic rows on screen until fresh
+// server data lands, so an added/deleted row transitions smoothly instead of flashing).
+function loadTx(w, silent){
   var st={filters:S.tx.filters, offset:S.tx.offset, limit:S.tx.limit};
   var key='tx|'+JSON.stringify(S.tx.filters||{})+'|'+S.tx.offset+'|'+S.tx.limit;
-  var card=$('#txListCard'); if(card && !S.cache[key]) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
   return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
     S.tx.total=res.total; S.tx.rows=res.transactions;
-    var c=$('#txListCard'); if(!c) return; c.innerHTML='';
-    var head=el('div','row-between'); head.style.marginBottom='6px';
-    head.innerHTML='<div class="card-h" style="margin:0">'+res.total+' transaction'+(res.total===1?'':'s')+'</div>';
-    c.appendChild(head);
-    // group by day: header shows weekday + date + the day's net (income − spend)
-    var l=el('div','list'), groups=[], byDate={};
-    res.transactions.forEach(function(t){
-      var d=fmtDate(t.Date);
-      if(!byDate[d]){ byDate[d]={rows:[],net:0,date:t.Date}; groups.push(d); }
-      byDate[d].rows.push(t);
-      var php=Math.abs(Number(t['Amount (PHP)'])||0);
-      if(String(t.Type)==='Expense') byDate[d].net-=php;
-      else if(String(t.Type)==='Income') byDate[d].net+=php;
-    });
-    groups.forEach(function(d){
-      var g=byDate[d], dt=parseDate(g.date);
-      var day=dt?DAYS[dt.getDay()]+' · ':'';
-      var net=Math.round(g.net*100)/100;
-      var h=el('div','list-date','<span>'+esc(day+d)+'</span>'+
-        (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
-      l.appendChild(h);
-      g.rows.forEach(function(t){ l.appendChild(txRow(t,true,true)); });
-    });
-    if(!res.transactions.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
-    c.appendChild(l);
-    // pager
-    if(res.total>S.tx.limit){
-      var pg=el('div','row-between'); pg.style.marginTop='12px';
-      var prev=el('button','btn sm','← Prev'); prev.disabled=S.tx.offset<=0;
-      prev.onclick=function(){S.tx.offset=Math.max(0,S.tx.offset-S.tx.limit);loadTx(w);};
-      var next=el('button','btn sm','Next →'); next.disabled=S.tx.offset+S.tx.limit>=res.total;
-      next.onclick=function(){S.tx.offset+=S.tx.limit;loadTx(w);};
-      var info=el('div','dim','Showing '+(res.offset+1)+'–'+Math.min(res.offset+S.tx.limit,res.total));
-      info.style.fontSize='12px';
-      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
-      c.appendChild(pg);
-    }
+    renderTxList();
   }).catch(showErr);
 }
 
-function txRow(t,clickable,hideDate){  // hideDate: the list already groups rows under date headers
+// Repaint the transactions list from S.tx.rows plus optimistic state (pending
+// creates shown at top, pending deletes shown in-place) — no server round-trip.
+function renderTxList(){
+  var c=$('#txListCard'); if(!c) return;
+  var dels=S.tx.pendingDeletes||{};
+  // pending creates only make sense on the first page (they'd be the newest rows)
+  var adds=(S.tx.offset<=0)?(S.tx.pendingAdds||[]):[];
+  var serverRows=S.tx.rows||[];
+  var total=(S.tx.total||0)+adds.length;
+  c.innerHTML='';
+  var head=el('div','row-between'); head.style.marginBottom='6px';
+  head.innerHTML='<div class="card-h" style="margin:0">'+total+' transaction'+(total===1?'':'s')+'</div>';
+  c.appendChild(head);
+  // group by day: header shows weekday + date + the day's net (income − spend)
+  var allRows=adds.concat(serverRows);   // optimistic adds sort ahead within their date
+  var l=el('div','list'), groups=[], byDate={};
+  allRows.forEach(function(t){
+    var d=fmtDate(t.Date);
+    if(!byDate[d]){ byDate[d]={rows:[],net:0,date:t.Date}; groups.push(d); }
+    byDate[d].rows.push(t);
+    var php=Math.abs(Number(t['Amount (PHP)'])||0);
+    if(String(t.Type)==='Expense') byDate[d].net-=php;
+    else if(String(t.Type)==='Income') byDate[d].net+=php;
+  });
+  groups.forEach(function(d){
+    var g=byDate[d], dt=parseDate(g.date);
+    var day=dt?DAYS[dt.getDay()]+' · ':'';
+    var net=Math.round(g.net*100)/100;
+    var h=el('div','list-date','<span>'+esc(day+d)+'</span>'+
+      (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
+    l.appendChild(h);
+    g.rows.forEach(function(t){
+      var pending = !!(t._pending || (t.ID && dels[t.ID]));
+      l.appendChild(txRow(t,!pending,true,pending));
+    });
+  });
+  if(!allRows.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
+  c.appendChild(l);
+  // pager (server rows only)
+  if(S.tx.total>S.tx.limit){
+    var pg=el('div','row-between'); pg.style.marginTop='12px';
+    var prev=el('button','btn sm','← Prev'); prev.disabled=S.tx.offset<=0;
+    prev.onclick=function(){S.tx.offset=Math.max(0,S.tx.offset-S.tx.limit);loadTx();};
+    var next=el('button','btn sm','Next →'); next.disabled=S.tx.offset+S.tx.limit>=S.tx.total;
+    next.onclick=function(){S.tx.offset+=S.tx.limit;loadTx();};
+    var info=el('div','dim','Showing '+(S.tx.offset+1)+'–'+Math.min(S.tx.offset+S.tx.limit,S.tx.total));
+    info.style.fontSize='12px';
+    pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
+    c.appendChild(pg);
+  }
+}
+
+function txRow(t,clickable,hideDate,pending){  // hideDate: the list already groups rows under date headers; pending: in-flight write (loading state)
   var type=String(t.Type||'');
   var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
   var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
@@ -600,8 +619,10 @@ function txRow(t,clickable,hideDate){  // hideDate: the list already groups rows
   var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
   var sub=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+' · '+esc(t.Category||'');
   var date=fmtDate(t.Date);
-  var r=el('div','litem'+(clickable?' click':''));
-  r.innerHTML='<div class="ic '+icCls+'">'+icCh+'</div>'+
+  var r=el('div','litem'+(clickable?' click':'')+(pending?' pending':''));
+  // a pending row swaps its type glyph for a spinner so it clearly reads as "loading"
+  var ic=pending?'<div class="ic"><span class="mini-spin"></span></div>':'<div class="ic '+icCls+'">'+icCh+'</div>';
+  r.innerHTML=ic+
     '<div class="grow"><div class="t1">'+esc(t.Description||t.Category||'(no description)')+'</div>'+
     '<div class="t2">'+sub+(hideDate?'':' · '+esc(date))+'</div></div>'+
     '<div class="amt '+amtCls+'">'+sign+mainAmt+
@@ -1496,14 +1517,16 @@ function openTxModal(t){
         .catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
       return;
     }
-    // New tx: optimistic — close instantly so you can start the next entry without
-    // waiting on the (slow) Apps Script round-trip. The write runs in the background;
-    // afterMutation() refreshes balances when it lands. On failure, reopen with the
-    // values intact so nothing is lost.
+    // New tx: optimistic — close instantly and show the row as "loading" right away
+    // so you can start the next entry without waiting on the (slow) Apps Script
+    // round-trip. The write runs in the background; when it lands the row becomes a
+    // normal entry (afterMutation reloads in place). On failure the placeholder is
+    // dropped and the modal reopens with the values intact so nothing is lost.
     prefSet('lastAcct',payload.Account); closeModal(); toast('Added','ok');
+    var tmp=pushPendingAdd(payload);
     gs('api_createTransaction', payload)
-      .then(function(){ afterMutation(); })
-      .catch(function(e){ toast('Add failed — reopening: '+(e.message||e),'err'); openTxModal(payload); });
+      .then(function(){ dropPendingAdd(tmp); afterMutation(); })
+      .catch(function(e){ dropPendingAdd(tmp); if(S.screen==='transactions') renderTxList(); toast('Add failed — reopening: '+(e.message||e),'err'); openTxModal(payload); });
   };
   var foot=[save];
   if(isEdit){
@@ -1561,11 +1584,12 @@ function openTransferModal(t){
         .catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
       return;
     }
-    // New transfer: optimistic close (see openTxModal) — background write, reopen on failure.
+    // New transfer: optimistic close + loading row (see openTxModal) — background write, reopen on failure.
     closeModal(); toast('Transfer added','ok');
+    var tmp=pushPendingAdd(payload);
     gs('api_createTransfer', payload)
-      .then(function(){ afterMutation(); })
-      .catch(function(e){ toast('Transfer failed — reopening: '+(e.message||e),'err'); openTransferModal(payload); });
+      .then(function(){ dropPendingAdd(tmp); afterMutation(); })
+      .catch(function(e){ dropPendingAdd(tmp); if(S.screen==='transactions') renderTxList(); toast('Transfer failed — reopening: '+(e.message||e),'err'); openTransferModal(payload); });
   };
   var foot=[save];
   if(isEdit){
@@ -1581,10 +1605,17 @@ function confirmDelete(t){
   var body=el('div','dim','Delete this transaction permanently? This cannot be undone.');
   var yes=el('button','btn danger','Delete');
   yes.onclick=function(){
-    yes.disabled=true; yes.textContent='Deleting…';
+    // Optimistic: close instantly and show the row as "loading". It's removed from
+    // the list only once the backend confirms; on failure it reverts to a normal row.
+    S.tx.pendingDeletes[t.ID]=true;
+    closeModal();
+    if(S.screen==='transactions') renderTxList();
     gs('api_deleteTransaction',{ID:t.ID}).then(function(){
-      closeModal(); toast('Deleted','ok'); afterMutation();
-    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
+      delete S.tx.pendingDeletes[t.ID]; toast('Deleted','ok'); afterMutation();
+    }).catch(function(e){
+      delete S.tx.pendingDeletes[t.ID]; toast(e.message||e,'err');
+      if(S.screen==='transactions') renderTxList(); else render();
+    });
   };
   var no=el('button','btn','Cancel'); no.onclick=function(){ openTxModal(t); };
   openModal(modalShell('Confirm delete', body, [no,yes]));
@@ -1666,9 +1697,26 @@ function afterMutation(){
   // Each screen re-fetches its own fresh balances/budgets; account & category
   // names are unchanged by a tx write, so no need to re-hydrate getBootstrap.
   S.cache={};
-  if(S.screen==='transactions'){ S.tx.offset=0; renderTransactions(); }
+  // On the transactions screen do a *silent* reload: the optimistic row already
+  // on screen stays put until the fresh server page lands, then swaps in place
+  // (no spinner flash). Other screens fully re-render.
+  if(S.screen==='transactions'){ loadTx(null,true); }
   else render();
 }
+
+// Build a display-shaped row for an in-flight create so it can render immediately.
+function optimisticTx(p){
+  var cat=p.Category, catType=((S.boot&&S.boot.categories||{})[cat]||{}).Type||'';
+  var acc=((S.boot&&S.boot.accounts)||[]).filter(function(x){return x.name===p.Account;})[0]||{};
+  var cur=acc.currency||'PHP';
+  var php=p.ExchangeRate?p.Amount*p.ExchangeRate:p.Amount;   // best-effort; reconciled on reload
+  return { _pending:true, _tmpId:'tmp'+Date.now()+'-'+Math.round(Math.random()*1e6),
+    Date:p.Date, Category:cat, Account:p.Account, ToAccount:p.ToAccount||'',
+    Amount:p.Amount, 'Amount (PHP)':php, Currency:cur,
+    Type:p.ToAccount?'Transfer':catType, Description:p.Description, ExchangeRate:p.ExchangeRate };
+}
+function pushPendingAdd(p){ var o=optimisticTx(p); S.tx.pendingAdds.unshift(o); if(S.screen==='transactions') renderTxList(); return o._tmpId; }
+function dropPendingAdd(id){ S.tx.pendingAdds=S.tx.pendingAdds.filter(function(x){return x._tmpId!==id;}); }
 function showErr(e){
   $('#main').innerHTML='<div class="empty">'+esc(e&&e.message?e.message:e)+
     '<br><button class="btn" style="margin-top:12px" onclick="render()">Retry</button></div>';
