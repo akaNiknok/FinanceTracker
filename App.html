@@ -1384,9 +1384,17 @@ function openBulkDelete(){
 /* ════════════════════════════════════════════════════════════════════════
  *  MODALS — transaction, transfer, account
  * ════════════════════════════════════════════════════════════════════════ */
+// Keep #modalRoot inside the visual viewport (not the full layout viewport) so the iOS
+// keyboard doesn't cover the focused field/dropdown — a fixed, centered modal can't scroll otherwise.
+function fitModal(){
+  var vv=window.visualViewport, root=$('#modalRoot');
+  if(!vv||!root||root.hidden) return;
+  root.style.top=vv.offsetTop+'px'; root.style.height=vv.height+'px';
+}
 function openModal(node){
   var root=$('#modalRoot'); var card=$('#modalCard');
   card.innerHTML=''; card.appendChild(node); root.hidden=false;
+  if(window.visualViewport){ visualViewport.addEventListener('resize',fitModal); visualViewport.addEventListener('scroll',fitModal); fitModal(); }
   $('.modal-backdrop',root).onclick=closeModal;
   // Enter in a plain input submits (combos handle Enter themselves to pick an option)
   card.onkeydown=function(e){
@@ -1400,7 +1408,10 @@ function openModal(node){
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape' && !$('#modalRoot').hidden && !(e.target.closest && e.target.closest('.combo.open'))) closeModal();
 });
-function closeModal(){ $('#modalRoot').hidden=true; }
+function closeModal(){
+  var root=$('#modalRoot'); root.hidden=true; root.style.top=''; root.style.height='';
+  if(window.visualViewport){ visualViewport.removeEventListener('resize',fitModal); visualViewport.removeEventListener('scroll',fitModal); }
+}
 
 function modalShell(title,bodyNode,footerNodes){
   var c=el('div');
@@ -1477,7 +1488,9 @@ function comboEl(options,value,opts){
   }
   function highlight(){ Array.prototype.forEach.call(list.children,function(c,i){ c.classList.toggle('active', i===active); }); }
   function scrollActive(){ var c=list.children[active]; if(c&&c.scrollIntoView)c.scrollIntoView({block:'nearest'}); }
-  function open(){ renderList(''); list.hidden=false; wrap.classList.add('open'); }
+  function open(){ renderList(''); list.hidden=false; wrap.classList.add('open');
+    // Nudge the dropdown into view so a scrollable modal/keyboard doesn't hide the options (mobile).
+    setTimeout(function(){ if(!list.hidden&&list.scrollIntoView) list.scrollIntoView({block:'nearest'}); },0); }
   function close(){ list.hidden=true; wrap.classList.remove('open'); }
   function choose(it){ _value=it.value; _label=it.label; input.value=it.label; close(); if(_onchange)_onchange(); }
 
