@@ -7,6 +7,10 @@
 !**/*.js
 !**/*.html
 
-# ...but never push local tooling to GAS.
+# ...but never push local tooling or nested checkouts to GAS.
+# (the !**/*.gs|js|html allows above are otherwise greedy — they'd sweep in
+#  node_modules and .claude/worktrees copies, duplicating every .gs → flat-namespace clash.)
 release.js
 test.js
+node_modules/**
+.claude/**
