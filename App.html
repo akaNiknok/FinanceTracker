@@ -136,8 +136,22 @@ function monthLabel(m){var p=String(m).split('-');return p.length===2?p[1]+' '+p
 function monthOptions(){return buildMonthList().map(function(m){return {value:m,label:monthLabel(m)};});}
 function buildMonthList(){
   var out=[], now=new Date();
-  for(var i=0;i<15;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
+  // Extend back to the oldest ledger month so older history is reachable; floor at
+  // 15 months (before any data lands) and cap at 120 to bound a huge/garbled ledger.
+  var min=(S.boot&&S.boot.minMonth)?monthKey2date(S.boot.minMonth):null;
+  var count=15;
+  if(min){
+    var months=(now.getFullYear()-min.getFullYear())*12+(now.getMonth()-min.getMonth())+1;
+    count=Math.min(120,Math.max(15,months));
+  }
+  for(var i=0;i<count;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
   return out;
+}
+// "2026-Jun" → Date(first of month); null on bad input.
+function monthKey2date(m){
+  var p=String(m).split('-'); if(p.length!==2) return null;
+  var mi=MONTHS.indexOf(p[1]); if(mi<0) return null;
+  return new Date(parseInt(p[0],10),mi,1);
 }
 
 /* ── boot ────────────────────────────────────────────────────────────────── */
@@ -518,7 +532,10 @@ function renderTransactions(){
 
   // filters
   var f=el('div','filters');
-  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), S.tx.filters.month||S.month);
+  // Distinguish unset (→ current period) from an explicit '' ("all months"); '' meant
+  // the combo showed a specific month while the list fetched everything.
+  var seedMonth=S.tx.filters.month===undefined?S.month:(S.tx.filters.month===''?'(all months)':S.tx.filters.month);
+  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), seedMonth);
   var cats=Object.keys((S.boot.categories)||{}).sort();
   var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
   var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
@@ -1694,8 +1711,12 @@ function openAccountModal(a){
   save.onclick=function(){
     var payload={Name:a.name};
     if(fFreq.value!==(a.interestFrequency||'')) payload['Interest Frequency']=fFreq.value;
-    if(fRate.value!=='') payload['Interest Rate']=parseFloat(fRate.value);
-    if(fLimit.value!=='') payload['Credit Limit']=parseFloat(fLimit.value);
+    // Mirror Notes: send whenever the field changed, with '' meaning "clear the cell"
+    // (server setValue('') empties it) — otherwise a rate/limit could never be removed.
+    var curRate=a.interestRate!=null?String(a.interestRate):'';
+    if(fRate.value!==curRate) payload['Interest Rate']=fRate.value===''?'':parseFloat(fRate.value);
+    var curLimit=a.creditLimit!=null?String(a.creditLimit):'';
+    if(fLimit.value!==curLimit) payload['Credit Limit']=fLimit.value===''?'':parseFloat(fLimit.value);
     if(fNotes.value!==(a.notes||'')) payload['Notes']=fNotes.value;
     var newColor = colorSet ? fColor.value : '';
     if(newColor !== (a.color||'')) payload['Color']=newColor;
@@ -1732,7 +1753,10 @@ function optimisticTx(p){
   var cat=p.Category, catType=((S.boot&&S.boot.categories||{})[cat]||{}).Type||'';
   var acc=((S.boot&&S.boot.accounts)||[]).filter(function(x){return x.name===p.Account;})[0]||{};
   var cur=acc.currency||'PHP';
-  var php=p.ExchangeRate?p.Amount*p.ExchangeRate:p.Amount;   // best-effort; reconciled on reload
+  // best-effort PHP; reconciled on reload. Manual rate wins; else auto-FX for USD
+  // (the common case) so the pending row + day-net don't treat USD as PHP.
+  var rate=p.ExchangeRate?p.ExchangeRate:(cur==='USD'&&S.boot&&S.boot.fxUsdPhp?S.boot.fxUsdPhp:(cur==='PHP'?1:null));
+  var php=rate!=null?p.Amount*rate:p.Amount;
   return { _pending:true, _tmpId:'tmp'+Date.now()+'-'+Math.round(Math.random()*1e6),
     Date:p.Date, Category:cat, Account:p.Account, ToAccount:p.ToAccount||'',
     Amount:p.Amount, 'Amount (PHP)':php, Currency:cur,

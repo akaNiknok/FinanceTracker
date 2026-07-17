@@ -9,6 +9,8 @@
 function test_all() {
   test_a1();
   test_assertShape();
+  test_byDateDesc();
+  test_isInvestment();
   test_ledgerCoerce();
   test_referenceData();
   test_fx();
@@ -52,6 +54,34 @@ function test_assertShape() {
     if (!threw) throw new Error("tx_assertShape_ FAIL: expected reject for " + JSON.stringify(c));
   });
   Logger.log("test_assertShape OK");
+}
+
+/** tx_byDateDesc_ — newest date first; same-day ties fall back to row order (later row first). */
+function test_byDateDesc() {
+  const rows = [
+    { ID: "old",  Date: new Date(2026, 0, 1),  __row: 2 },
+    { ID: "new",  Date: new Date(2026, 5, 1),  __row: 3 },
+    { ID: "same-early", Date: new Date(2026, 5, 1), __row: 4 },  // same day as "new", later row
+    { ID: "iso",  Date: "2026-03-15",            __row: 5 }       // string date still sorts
+  ];
+  const order = rows.slice().sort(tx_byDateDesc_).map(function (r) { return r.ID; });
+  const want = ["same-early", "new", "iso", "old"];
+  if (order.join(",") !== want.join(","))
+    throw new Error("tx_byDateDesc_ FAIL: got " + order.join(",") + " want " + want.join(","));
+  Logger.log("test_byDateDesc OK");
+}
+
+/** acct_isInvestment_ — Dashboard tile + Investments screen must agree on this predicate. */
+function test_isInvestment() {
+  const cases = [
+    ["SHARES", "", true], ["PHP", "Investment", true], ["USD", "ETF Growth", true],
+    ["PHP", "Stock", true], ["PHP", "Savings", false], ["USD", "Checking", false], ["PHP", "", false]
+  ];
+  cases.forEach(function (c) {
+    const got = acct_isInvestment_(c[0], c[1]);
+    if (got !== c[2]) throw new Error("acct_isInvestment_ FAIL: " + JSON.stringify(c) + " → " + got);
+  });
+  Logger.log("test_isInvestment OK");
 }
 
 function test_referenceData() {

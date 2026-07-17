@@ -137,7 +137,7 @@ function api_listTransactions(args) {
     }
     return true;
   });
-  filtered.reverse(); // most recent first
+  filtered.sort(tx_byDateDesc_); // by Date desc; backdated rows land in date order, not append order
 
   const total  = filtered.length;
   const offset = Math.max(0, parseInt(args.offset, 10) || 0);
@@ -374,6 +374,22 @@ function tx_rowObject_(sheet, headerMap, row) {
   const obj = {};
   headers.forEach(function (hname, i) { if (hname !== "") obj[hname] = vals[i]; });
   return tx_clean_(obj);
+}
+
+/**
+ * Sort comparator: Date descending, __row descending as tie-breaker (stable for
+ * same-day rows → later-entered shows first). Used by list + Dashboard "Recent"
+ * so a backdated entry sorts by its date, not by its append position.
+ */
+function tx_byDateDesc_(a, b) {
+  const da = tx_dateVal_(a.Date), db = tx_dateVal_(b.Date);
+  if (da !== db) return db - da;
+  return (b.__row || 0) - (a.__row || 0);
+}
+function tx_dateVal_(v) {
+  if (v instanceof Date) return v.getTime();
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
 /** Strip the internal __row marker + stringify Dates (google.script.run-safe). */
