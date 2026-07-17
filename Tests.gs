@@ -6,12 +6,12 @@
  * assumptions documented in Accounts.gs.
  */
 
+/** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
+var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_isInvestment",
+                  "test_ledgerCoerce", "test_parseDate"];
+
 function test_all() {
-  test_a1();
-  test_assertShape();
-  test_byDateDesc();
-  test_isInvestment();
-  test_ledgerCoerce();
+  PURE_TESTS.forEach(function (n) { globalThis[n](); });
   test_referenceData();
   test_fx();
   test_bootstrap();
@@ -82,6 +82,21 @@ function test_isInvestment() {
     if (got !== c[2]) throw new Error("acct_isInvestment_ FAIL: " + JSON.stringify(c) + " → " + got);
   });
   Logger.log("test_isInvestment OK");
+}
+
+/** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */
+function test_parseDate() {
+  const d = tx_parseDate_("2026-01-02");
+  if (d.getFullYear() !== 2026 || d.getMonth() !== 0 || d.getDate() !== 2)
+    throw new Error("tx_parseDate_ FAIL: ISO string day-shifted → " + d);
+  const real = new Date(2026, 5, 15);
+  if (tx_parseDate_(real) !== real) throw new Error("tx_parseDate_ FAIL: Date not passed through");
+  [undefined, null, "", "not-a-date"].forEach(function (v) {
+    const got = tx_parseDate_(v);
+    if (!(got instanceof Date) || isNaN(got.getTime()))
+      throw new Error("tx_parseDate_ FAIL: no valid fallback for " + JSON.stringify(v));
+  });
+  Logger.log("test_parseDate OK");
 }
 
 function test_referenceData() {

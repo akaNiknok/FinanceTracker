@@ -9,3 +9,4 @@
 
 # ...but never push local tooling to GAS.
 release.js
+test.js
