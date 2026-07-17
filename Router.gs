@@ -38,7 +38,11 @@ function doGet(e) {
   const params = (e && e.parameter) ? e.parameter : {};
   try {
     const action = params.action;
-    if (action) return rt_dispatch_(action, e, null);
+    if (action) {
+      // Never mutate over GET — link previewers/scanners prefetch URLs.
+      if (ROUTES_WRITE_[action]) return jsonError_("Action '" + action + "' requires POST.");
+      return rt_dispatch_(action, e, null);
+    }
 
     // ── Legacy: raw data dumps (behind read guard) ──
     if (params.sheets !== undefined) { auth_requireRead_(e, null); return jsonResponse(listSheetNames()); }
@@ -94,6 +98,7 @@ function rt_dispatch_(action, e, body) {
     return jsonResponse(ROUTES_WRITE_[action](e, body));
   }
   if (ROUTES_READ_[action]) {
+    auth_requireRead_(e, body);
     return jsonResponse(ROUTES_READ_[action](e, body));
   }
   return jsonError_("Unknown action: " + action, { knownActions:
@@ -102,20 +107,13 @@ function rt_dispatch_(action, e, body) {
 
 /** The original doGet payload: Categories {Type, Description} + Accounts {Currency}. */
 function rt_legacyBootstrap_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const catData = ss.getSheetByName(SHEET_CATEGORIES).getDataRange().getValues();
   const categories = {};
-  for (let i = 1; i < catData.length; i++) {
-    const row = catData[i];
-    if (!row[0]) continue;
-    categories[row[0]] = { Type: row[1] || null, Description: row[3] || null };
-  }
-  const accData = ss.getSheetByName(SHEET_ACCOUNTS).getDataRange().getValues();
+  su_readObjects_(SHEET_CATEGORIES).forEach(function (r) {
+    if (r.Category) categories[r.Category] = { Type: r.Type || null, Description: r.Description || null };
+  });
   const accounts = {};
-  for (let i = 1; i < accData.length; i++) {
-    const row = accData[i];
-    if (!row[0]) continue;
-    accounts[row[0]] = { Currency: row[1] };
-  }
+  su_readObjects_(SHEET_ACCOUNTS).forEach(function (r) {
+    if (r.Name) accounts[r.Name] = { Currency: r.Currency };
+  });
   return { Categories: categories, Accounts: accounts };
 }

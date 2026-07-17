@@ -52,8 +52,20 @@ function api_getBootstrap() {
     recurring: api_getRecurring().rows,
     calendar: reads_clean_(su_readObjects_(SHEET_CALENDAR)),
     fxUsdPhp: fx_liveRate_("USD", BASE_CURRENCY) || null,
+    minMonth: reads_minTxMonth_(),   // oldest ledger month → month pickers reach all history
     version: cache_getVersion_()
   };
+}
+
+/** Oldest `Month` in the ledger (yyyy-MMM), or null if empty. Ledger already memoized by getBudgets. */
+function reads_minTxMonth_() {
+  let min = null;
+  su_readObjects_(SHEET_TX).forEach(function (r) {
+    const d = r.Date instanceof Date ? r.Date : (r.Date ? new Date(r.Date) : null);
+    if (!d || isNaN(d.getTime())) return;
+    if (!min || d.getTime() < min.getTime()) min = d;
+  });
+  return min ? Utilities.formatDate(min, Session.getScriptTimeZone(), "yyyy-MMM") : null;
 }
 
 function reads_clean_(rows) {

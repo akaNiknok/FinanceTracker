@@ -30,6 +30,7 @@ function api_getAccounts() {
     const isLiability = /liab/i.test(String(type));
     const isShares = String(a.Currency).toUpperCase() === "SHARES" ||
                      /share|stock/i.test(String(a.Subtype || ""));
+    const isInvestment = acct_isInvestment_(a.Currency, a.Subtype);
     const balancePhp = acct_pickNum_(a, ACCT_STORED_HEADERS);
     const signed = (balancePhp === null) ? null : (isLiability ? -balancePhp : balancePhp);
     return {
@@ -43,7 +44,8 @@ function api_getAccounts() {
       netWorthPhp: signed,                           // signed for net-worth (liabilities negative)
       availableCredit: acct_pickNum_(a, ACCT_CREDIT_HEADERS),
       isLiability: isLiability,
-      isShares: isShares,
+      isShares: isShares,           // Shares accounts only — used for quantity-vs-value
+      isInvestment: isInvestment,   // "counts as an investment" (Dashboard tile + Investments screen)
       interestFrequency: a["Interest Frequency"] || null,
       interestRate: a["Interest Rate"] || null,
       creditLimit: acct_pickNum_(a, ["Credit Limit"]),
@@ -113,6 +115,10 @@ function api_updateAccount(args) {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+/** Shared "counts as an investment" test — Dashboard Invested tile + Investments screen must agree. */
+function acct_isInvestment_(currency, subtype) {
+  return String(currency).toUpperCase() === "SHARES" || /share|stock|invest|etf/i.test(String(subtype || ""));
+}
 function acct_pick_(obj, headers) {
   for (let i = 0; i < headers.length; i++) if (obj[headers[i]] !== undefined && obj[headers[i]] !== "") return obj[headers[i]];
   return "";
