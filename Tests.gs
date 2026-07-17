@@ -8,6 +8,7 @@
 
 function test_all() {
   test_a1();
+  test_assertShape();
   test_ledgerCoerce();
   test_referenceData();
   test_fx();
@@ -38,6 +39,19 @@ function test_a1() {
     if (got !== want) throw new Error("su_a1_ FAIL: expected " + want + ", got " + got);
   });
   Logger.log("test_a1 OK");
+}
+
+/** tx_assertShape_ — Transfer category ⇔ ToAccount present (issue #8). */
+function test_assertShape() {
+  tx_assertShape_("Transfer", true);   // ok
+  tx_assertShape_("Expense", false);   // ok
+  tx_assertShape_("Income", false);    // ok
+  [["Transfer", false], ["Expense", true], ["Income", true], [null, true]].forEach(function (c) {
+    let threw = false;
+    try { tx_assertShape_(c[0], c[1]); } catch (e) { threw = true; }
+    if (!threw) throw new Error("tx_assertShape_ FAIL: expected reject for " + JSON.stringify(c));
+  });
+  Logger.log("test_assertShape OK");
 }
 
 function test_referenceData() {
