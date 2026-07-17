@@ -109,6 +109,18 @@ function acctOptions(){
     return {value:a.name,label:a.name,color:a.color};
   });
 }
+function acctCurrency(name){
+  var a=((S.boot&&S.boot.accounts)||[]).filter(function(x){return x.name===name;})[0];
+  return a?(a.currency||'PHP'):'PHP';
+}
+// A tx is a transfer if its derived Type says so or it carries a ToAccount.
+function txIsXfer(t){ return String(t.Type||'')==='Transfer'||!!(t.ToAccount&&String(t.ToAccount).trim()); }
+// Categories valid for a row's shape: Transfer categories only on transfers, and
+// vice versa (mirrors the server invariant so the picker can't offer a mismatch).
+function catsForShape(isXfer){
+  var c=(S.boot&&S.boot.categories)||{};
+  return Object.keys(c).filter(function(k){ return (String(c[k].Type)==='Transfer')===!!isXfer; }).sort();
+}
 
 /* ── toast ───────────────────────────────────────────────────────────────── */
 function toast(msg,kind){
@@ -124,8 +136,22 @@ function monthLabel(m){var p=String(m).split('-');return p.length===2?p[1]+' '+p
 function monthOptions(){return buildMonthList().map(function(m){return {value:m,label:monthLabel(m)};});}
 function buildMonthList(){
   var out=[], now=new Date();
-  for(var i=0;i<15;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
+  // Extend back to the oldest ledger month so older history is reachable; floor at
+  // 15 months (before any data lands) and cap at 120 to bound a huge/garbled ledger.
+  var min=(S.boot&&S.boot.minMonth)?monthKey2date(S.boot.minMonth):null;
+  var count=15;
+  if(min){
+    var months=(now.getFullYear()-min.getFullYear())*12+(now.getMonth()-min.getMonth())+1;
+    count=Math.min(120,Math.max(15,months));
+  }
+  for(var i=0;i<count;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
   return out;
+}
+// "2026-Jun" → Date(first of month); null on bad input.
+function monthKey2date(m){
+  var p=String(m).split('-'); if(p.length!==2) return null;
+  var mi=MONTHS.indexOf(p[1]); if(mi<0) return null;
+  return new Date(parseInt(p[0],10),mi,1);
 }
 
 /* ── boot ────────────────────────────────────────────────────────────────── */
@@ -506,7 +532,10 @@ function renderTransactions(){
 
   // filters
   var f=el('div','filters');
-  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), S.tx.filters.month||S.month);
+  // Distinguish unset (→ current period) from an explicit '' ("all months"); '' meant
+  // the combo showed a specific month while the list fetched everything.
+  var seedMonth=S.tx.filters.month===undefined?S.month:(S.tx.filters.month===''?'(all months)':S.tx.filters.month);
+  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), seedMonth);
   var cats=Object.keys((S.boot.categories)||{}).sort();
   var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
   var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
@@ -1210,8 +1239,7 @@ function reviewTxRow(t){
   sub.appendChild(document.createTextNode(' · '));
   // category — inline editable
   sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
-    var cats=Object.keys(S.boot.categories||{}).sort();
-    inlineCombo(host, cats, t.Category, function(val){ commitInline(t,'Category',val); });
+    inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
   }));
   sub.appendChild(document.createTextNode(' · '+fmtDate(t.Date)));
   if(isForeign) sub.appendChild(document.createTextNode(' · '+money(amtPhp)));
@@ -1312,8 +1340,15 @@ function bulkApply(patch){
 }
 function openBulkRecat(){
   withBoot(function(){
-    var cats=Object.keys(S.boot.categories||{}).sort();
-    var c=comboEl(cats,'',{placeholder:'Select category'});
+    var picked=(S.review.rows||[]).filter(function(t){return S.review.sel[t.ID];});
+    var anyXfer=picked.some(txIsXfer), anyReg=picked.some(function(t){return !txIsXfer(t);});
+    if(anyXfer&&anyReg){ // a single category can't be valid for both shapes
+      openModal(modalShell('Recategorize '+selCount()+' transactions',
+        el('div','dim','Selection mixes transfers and regular transactions — recategorize them separately so a Transfer category never lands on a regular row (or vice versa).'),
+        []));
+      return;
+    }
+    var c=comboEl(catsForShape(anyXfer),'',{placeholder:'Select category'});
     var save=el('button','btn primary','Apply to '+selCount());
     save.onclick=function(){ if(!c.value){toast('Pick a category','err');return;} bulkApply({Category:c.value}); };
     openModal(modalShell('Recategorize '+selCount()+' transactions', fieldEl('New category',c), [save]));
@@ -1349,9 +1384,17 @@ function openBulkDelete(){
 /* ════════════════════════════════════════════════════════════════════════
  *  MODALS — transaction, transfer, account
  * ════════════════════════════════════════════════════════════════════════ */
+// Keep #modalRoot inside the visual viewport (not the full layout viewport) so the iOS
+// keyboard doesn't cover the focused field/dropdown — a fixed, centered modal can't scroll otherwise.
+function fitModal(){
+  var vv=window.visualViewport, root=$('#modalRoot');
+  if(!vv||!root||root.hidden) return;
+  root.style.top=vv.offsetTop+'px'; root.style.height=vv.height+'px';
+}
 function openModal(node){
   var root=$('#modalRoot'); var card=$('#modalCard');
   card.innerHTML=''; card.appendChild(node); root.hidden=false;
+  if(window.visualViewport){ visualViewport.addEventListener('resize',fitModal); visualViewport.addEventListener('scroll',fitModal); fitModal(); }
   $('.modal-backdrop',root).onclick=closeModal;
   // Enter in a plain input submits (combos handle Enter themselves to pick an option)
   card.onkeydown=function(e){
@@ -1365,7 +1408,10 @@ function openModal(node){
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape' && !$('#modalRoot').hidden && !(e.target.closest && e.target.closest('.combo.open'))) closeModal();
 });
-function closeModal(){ $('#modalRoot').hidden=true; }
+function closeModal(){
+  var root=$('#modalRoot'); root.hidden=true; root.style.top=''; root.style.height='';
+  if(window.visualViewport){ visualViewport.removeEventListener('resize',fitModal); visualViewport.removeEventListener('scroll',fitModal); }
+}
 
 function modalShell(title,bodyNode,footerNodes){
   var c=el('div');
@@ -1442,7 +1488,9 @@ function comboEl(options,value,opts){
   }
   function highlight(){ Array.prototype.forEach.call(list.children,function(c,i){ c.classList.toggle('active', i===active); }); }
   function scrollActive(){ var c=list.children[active]; if(c&&c.scrollIntoView)c.scrollIntoView({block:'nearest'}); }
-  function open(){ renderList(''); list.hidden=false; wrap.classList.add('open'); }
+  function open(){ renderList(''); list.hidden=false; wrap.classList.add('open');
+    // Nudge the dropdown into view so a scrollable modal/keyboard doesn't hide the options (mobile).
+    setTimeout(function(){ if(!list.hidden&&list.scrollIntoView) list.scrollIntoView({block:'nearest'}); },0); }
   function close(){ list.hidden=true; wrap.classList.remove('open'); }
   function choose(it){ _value=it.value; _label=it.label; input.value=it.label; close(); if(_onchange)_onchange(); }
 
@@ -1491,6 +1539,10 @@ function openTxModal(t){
   var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
   var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
+  // A stamped rate belongs to the old account's currency — reassigning to a different
+  // currency makes it meaningless, so clear the field back to "auto" (issue #7).
+  var origCur=t?(t.Currency||'PHP'):'PHP';
+  fAcc.onchange=function(){ if(acctCurrency(fAcc.value)!==origCur) fFx.value=''; };
 
   var body=el('div');
   body.appendChild(fieldEl('Date', fDate));
@@ -1509,6 +1561,7 @@ function openTxModal(t){
       Amount:parseFloat(fAmt.value), Description:fDesc.value
     };
     if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
+    else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
     if(isEdit){
       save.disabled=true; save.textContent='Saving…';
@@ -1671,8 +1724,12 @@ function openAccountModal(a){
   save.onclick=function(){
     var payload={Name:a.name};
     if(fFreq.value!==(a.interestFrequency||'')) payload['Interest Frequency']=fFreq.value;
-    if(fRate.value!=='') payload['Interest Rate']=parseFloat(fRate.value);
-    if(fLimit.value!=='') payload['Credit Limit']=parseFloat(fLimit.value);
+    // Mirror Notes: send whenever the field changed, with '' meaning "clear the cell"
+    // (server setValue('') empties it) — otherwise a rate/limit could never be removed.
+    var curRate=a.interestRate!=null?String(a.interestRate):'';
+    if(fRate.value!==curRate) payload['Interest Rate']=fRate.value===''?'':parseFloat(fRate.value);
+    var curLimit=a.creditLimit!=null?String(a.creditLimit):'';
+    if(fLimit.value!==curLimit) payload['Credit Limit']=fLimit.value===''?'':parseFloat(fLimit.value);
     if(fNotes.value!==(a.notes||'')) payload['Notes']=fNotes.value;
     var newColor = colorSet ? fColor.value : '';
     if(newColor !== (a.color||'')) payload['Color']=newColor;
@@ -1709,7 +1766,10 @@ function optimisticTx(p){
   var cat=p.Category, catType=((S.boot&&S.boot.categories||{})[cat]||{}).Type||'';
   var acc=((S.boot&&S.boot.accounts)||[]).filter(function(x){return x.name===p.Account;})[0]||{};
   var cur=acc.currency||'PHP';
-  var php=p.ExchangeRate?p.Amount*p.ExchangeRate:p.Amount;   // best-effort; reconciled on reload
+  // best-effort PHP; reconciled on reload. Manual rate wins; else auto-FX for USD
+  // (the common case) so the pending row + day-net don't treat USD as PHP.
+  var rate=p.ExchangeRate?p.ExchangeRate:(cur==='USD'&&S.boot&&S.boot.fxUsdPhp?S.boot.fxUsdPhp:(cur==='PHP'?1:null));
+  var php=rate!=null?p.Amount*rate:p.Amount;
   return { _pending:true, _tmpId:'tmp'+Date.now()+'-'+Math.round(Math.random()*1e6),
     Date:p.Date, Category:cat, Account:p.Account, ToAccount:p.ToAccount||'',
     Amount:p.Amount, 'Amount (PHP)':php, Currency:cur,

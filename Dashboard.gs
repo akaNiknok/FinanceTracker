@@ -18,7 +18,7 @@ function api_getDashboard(args) {
   const byType = {}, bySubtype = {};
   accounts.forEach(function (a) {
     const php = (a.netWorthPhp === null || a.netWorthPhp === undefined) ? 0 : a.netWorthPhp;
-    if (a.isShares) sharesValue += (a.balancePhp || 0); // shares contribution (always asset)
+    if (a.isInvestment) sharesValue += (a.balancePhp || 0); // invested contribution (always asset)
     const t = a.type || "Unknown", s = a.subtype || "Unknown";
     byType[t] = (byType[t] || 0) + php;
     bySubtype[s] = (bySubtype[s] || 0) + php;
@@ -57,7 +57,7 @@ function api_getDashboard(args) {
              expense: Math.round(flowByMonth[k].expense * 100) / 100 };
   });
 
-  const recent = tx.slice(-10).reverse().map(tx_clean_);
+  const recent = tx.slice().sort(tx_byDateDesc_).slice(0, 10).map(tx_clean_);
 
   return {
     status: "success",
@@ -78,8 +78,7 @@ function api_getDashboard(args) {
 function api_getInvestments() {
   const accounts = api_getAccounts().accounts;
   const positions = accounts.filter(function (a) {
-    return String(a.currency).toUpperCase() === "SHARES" ||
-           /share|stock|invest|etf/i.test(String(a.subtype || ""));
+    return a.isInvestment;
   }).map(function (a) {
     return {
       name: a.name, subtype: a.subtype, currency: a.currency,
