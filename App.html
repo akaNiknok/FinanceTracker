@@ -109,6 +109,18 @@ function acctOptions(){
     return {value:a.name,label:a.name,color:a.color};
   });
 }
+function acctCurrency(name){
+  var a=((S.boot&&S.boot.accounts)||[]).filter(function(x){return x.name===name;})[0];
+  return a?(a.currency||'PHP'):'PHP';
+}
+// A tx is a transfer if its derived Type says so or it carries a ToAccount.
+function txIsXfer(t){ return String(t.Type||'')==='Transfer'||!!(t.ToAccount&&String(t.ToAccount).trim()); }
+// Categories valid for a row's shape: Transfer categories only on transfers, and
+// vice versa (mirrors the server invariant so the picker can't offer a mismatch).
+function catsForShape(isXfer){
+  var c=(S.boot&&S.boot.categories)||{};
+  return Object.keys(c).filter(function(k){ return (String(c[k].Type)==='Transfer')===!!isXfer; }).sort();
+}
 
 /* ── toast ───────────────────────────────────────────────────────────────── */
 function toast(msg,kind){
@@ -1210,8 +1222,7 @@ function reviewTxRow(t){
   sub.appendChild(document.createTextNode(' · '));
   // category — inline editable
   sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
-    var cats=Object.keys(S.boot.categories||{}).sort();
-    inlineCombo(host, cats, t.Category, function(val){ commitInline(t,'Category',val); });
+    inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
   }));
   sub.appendChild(document.createTextNode(' · '+fmtDate(t.Date)));
   if(isForeign) sub.appendChild(document.createTextNode(' · '+money(amtPhp)));
@@ -1312,8 +1323,15 @@ function bulkApply(patch){
 }
 function openBulkRecat(){
   withBoot(function(){
-    var cats=Object.keys(S.boot.categories||{}).sort();
-    var c=comboEl(cats,'',{placeholder:'Select category'});
+    var picked=(S.review.rows||[]).filter(function(t){return S.review.sel[t.ID];});
+    var anyXfer=picked.some(txIsXfer), anyReg=picked.some(function(t){return !txIsXfer(t);});
+    if(anyXfer&&anyReg){ // a single category can't be valid for both shapes
+      openModal(modalShell('Recategorize '+selCount()+' transactions',
+        el('div','dim','Selection mixes transfers and regular transactions — recategorize them separately so a Transfer category never lands on a regular row (or vice versa).'),
+        []));
+      return;
+    }
+    var c=comboEl(catsForShape(anyXfer),'',{placeholder:'Select category'});
     var save=el('button','btn primary','Apply to '+selCount());
     save.onclick=function(){ if(!c.value){toast('Pick a category','err');return;} bulkApply({Category:c.value}); };
     openModal(modalShell('Recategorize '+selCount()+' transactions', fieldEl('New category',c), [save]));
@@ -1491,6 +1509,10 @@ function openTxModal(t){
   var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
   var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
+  // A stamped rate belongs to the old account's currency — reassigning to a different
+  // currency makes it meaningless, so clear the field back to "auto" (issue #7).
+  var origCur=t?(t.Currency||'PHP'):'PHP';
+  fAcc.onchange=function(){ if(acctCurrency(fAcc.value)!==origCur) fFx.value=''; };
 
   var body=el('div');
   body.appendChild(fieldEl('Date', fDate));
@@ -1509,6 +1531,7 @@ function openTxModal(t){
       Amount:parseFloat(fAmt.value), Description:fDesc.value
     };
     if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
+    else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
     if(isEdit){
       save.disabled=true; save.textContent='Saving…';

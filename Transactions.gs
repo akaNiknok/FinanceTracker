@@ -37,6 +37,7 @@ function api_createTransaction(args) {
   if (!accts[account])  throw new Error("Unknown Account: " + account);
   if (args.Amount === undefined || args.Amount === "" || isNaN(parseFloat(args.Amount)))
     throw new Error("Missing/invalid required field: Amount");
+  tx_assertShape_(cats[category].Type, false); // a plain tx never has a ToAccount → reject Transfer categories (use createTransfer)
 
   // Idempotency: if caller passes an existing ID, return the existing row instead
   // of double-posting (used by n8n retries).
@@ -85,6 +86,7 @@ function api_createTransfer(args) {
   if (account === toAccount) throw new Error("Account and ToAccount must differ.");
   if (!category) throw new Error("Transfer needs a Category (Transfer type).");
   if (!cats[category]) throw new Error("Unknown Category: " + category);
+  tx_assertShape_(cats[category].Type, true); // a transfer row has a ToAccount → its category must be Transfer type
   if (args.Amount === undefined || isNaN(parseFloat(args.Amount)))
     throw new Error("Missing/invalid Amount (source amount).");
 
@@ -169,6 +171,20 @@ function api_updateTransaction(args) {
   if (patch.Amount !== undefined) patch.Amount = parseFloat(patch.Amount);
   if (patch.ToAmount !== undefined && patch.ToAmount !== "") patch.ToAmount = parseFloat(patch.ToAmount);
 
+  // Effective row after the patch, for the two invariants below.
+  const cur = tx_rowObject_(sheet, h, row);
+  const effCat = patch.Category  !== undefined ? patch.Category  : cur.Category;
+  const effTo  = patch.ToAccount !== undefined ? patch.ToAccount : cur.ToAccount;
+  tx_assertShape_(cats[effCat] ? cats[effCat].Type : null, tx_hasTo_(effTo)); // issue #8
+  // Re-stamp ExchangeRate when Account (currency) changes or the client sends one
+  // explicitly — incl. "" to clear a manual override (issue #7). Untouched otherwise
+  // so history never reprices.
+  if (patch.Account !== undefined || args.ExchangeRate !== undefined) {
+    const effAcct = patch.Account !== undefined ? patch.Account : cur.Account;
+    const fx = fx_resolveRate_(accts[effAcct] ? accts[effAcct].Currency : "", args.ExchangeRate);
+    patch.ExchangeRate = fx.blank ? "" : fx.rate;
+  }
+
   su_setInputCells_(sheet, h, row, patch);
   SpreadsheetApp.flush();
   cache_bumpVersion_();
@@ -229,6 +245,29 @@ function api_bulkUpdateTransactions(args) {
     if (!row) { skipped.push(id); return; }
     rows.push(row);
   });
+
+  // Shape guard (issue #8): reject a Category/ToAccount mismatch on any affected row.
+  // Values not in the patch are read per-row (one column read each).
+  if (p.Category !== undefined || p.ToAccount !== undefined) {
+    const catByRow = p.Category  === undefined ? tx_colByRow_(sheet, h, "Category")  : null;
+    const toByRow  = p.ToAccount === undefined ? tx_colByRow_(sheet, h, "ToAccount") : null;
+    rows.forEach(function (row) {
+      const c  = p.Category  !== undefined ? p.Category  : catByRow[row];
+      const to = p.ToAccount !== undefined ? p.ToAccount : toByRow[row];
+      tx_assertShape_(cats[c] ? cats[c].Type : null, tx_hasTo_(to));
+    });
+  }
+  // Re-stamp ExchangeRate on reassignment / explicit send (issue #7). A bulk reassign
+  // sends a single Account so one resolution covers all rows.
+  // ponytail: a bulk clear (ExchangeRate:"") with no Account change resolves against
+  // the empty currency (→ blank) for every row; fine for reassigns (the only UI path),
+  // per-row currency lookup only if a mixed-currency bulk-clear is ever exposed.
+  if (p.Account !== undefined || patch.ExchangeRate !== undefined) {
+    const cy = accts[p.Account] ? accts[p.Account].Currency : "";
+    const fx = fx_resolveRate_(cy, patch.ExchangeRate);
+    p.ExchangeRate = fx.blank ? "" : fx.rate;
+  }
+
   if (rows.length) {
     su_invalidateMemo_(sheet.getName());
     // One RangeList write per patched field (not one setValue per cell): N rows ×
@@ -274,6 +313,31 @@ function api_bulkDeleteTransactions(args) {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+/** Truthy ToAccount (present + non-blank). */
+function tx_hasTo_(v) { return !!(v && String(v).trim() !== ""); }
+
+/**
+ * Invariant: a Transfer-type category ⇔ the row has a ToAccount. A mismatch would
+ * make the derived Type/balance math and budgets read the row wrong, so we reject it
+ * on every create/update/bulk path. `type` = effective category Type, `hasTo` = bool.
+ */
+function tx_assertShape_(type, hasTo) {
+  if (type === "Transfer" && !hasTo) throw new Error("A Transfer category requires a destination account (ToAccount).");
+  if (type !== "Transfer" && hasTo)  throw new Error("Only a Transfer category may have a ToAccount.");
+}
+
+/** {1-based row → value} for one header, from a single column read. */
+function tx_colByRow_(sheet, headerMap, header) {
+  const col = headerMap[header];
+  const last = su_lastDataRow_(sheet, headerMap);
+  const map = {};
+  if (col && last >= 2) {
+    const vals = sheet.getRange(2, col, last - 1, 1).getValues();
+    for (let i = 0; i < vals.length; i++) map[i + 2] = vals[i][0];
+  }
+  return map;
+}
+
 /** id (string) → 1-based sheet row, from a single read of the ID column. */
 function tx_idRowMap_(sheet, headerMap) {
   const idCol = headerMap["ID"];
