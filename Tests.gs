@@ -7,8 +7,8 @@
  */
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
-var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_isInvestment",
-                  "test_ledgerCoerce", "test_parseDate"];
+var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
+                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -69,6 +69,21 @@ function test_byDateDesc() {
   if (order.join(",") !== want.join(","))
     throw new Error("tx_byDateDesc_ FAIL: got " + order.join(",") + " want " + want.join(","));
   Logger.log("test_byDateDesc OK");
+}
+
+/** interest_net_ — daily accrual less 20% withholding, rounded to centavos. */
+function test_interestNet() {
+  const cases = [
+    [100000, 0.0625, 13.7],    // 6.25% p.a. on 100k → 17.1233 gross → 13.70 net
+    [0, 0.0625, 0], [100000, 0, 0],
+    [-1000, 0.05, -0.11],      // overdrawn: negative accrual, not silently dropped
+    [1, 0.0001, 0]             // rounds to nothing → caller treats as "no row"
+  ];
+  cases.forEach(function (c) {
+    const got = interest_net_(c[0], c[1]);
+    if (got !== c[2]) throw new Error("interest_net_ FAIL: (" + c[0] + "," + c[1] + ") → " + got + " want " + c[2]);
+  });
+  Logger.log("test_interestNet OK");
 }
 
 /** acct_isInvestment_ — Dashboard tile + Investments screen must agree on this predicate. */
