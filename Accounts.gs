@@ -63,9 +63,12 @@ function api_getAccounts() {
  * asset cash — a charge increases the balance — so their deltas are inverted to
  * match the sheet's positive-owed convention. Each account's transactions are in
  * its own currency, so this is comparable to the sheet's native `Current Balance`.
+ * `asOfKey` (yyyy-MM-dd, optional) caps it to rows dated on or before that day —
+ * the sheet's balance formula can't do point-in-time, and the interest job needs
+ * the closing balance of a past day, not today's total.
  * Returns { name: { net, count } }.
  */
-function acct_computeDeltas_() {
+function acct_computeDeltas_(asOfKey) {
   const liab = {};
   su_readObjects_(SHEET_ACCOUNTS).forEach(function (a) {
     if (/liab/i.test(String(a.Type || ""))) liab[a.Name] = true;
@@ -79,6 +82,7 @@ function acct_computeDeltas_() {
     acc[name].net += v; acc[name].count += 1;
   }
   rows.forEach(function (r) {
+    if (asOfKey && su_dateStr_(r.Date) > asOfKey) return;  // point-in-time cut (ISO strings sort by date)
     const type = String(r.Type || "");
     const amt = acct_num_(r.Amount);
     const toAmt = acct_num_(r.ToAmount);

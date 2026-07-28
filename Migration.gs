@@ -421,3 +421,22 @@ function mig_colLetter_(col) {
   while (col > 0) { const m = (col - 1) % 26; s = String.fromCharCode(65 + m) + s; col = (col - m - 1) / 26; }
   return s;
 }
+
+// ── One-shot: remove script-synthesized interest rows ─────────────────────────
+/**
+ * 2026-07-26. The daily-interest job was double-posting against interest the owner
+ * already logs by hand from the bank app (23 duplicated MariBank days, Jun 11 -
+ * Jul 3), and synthesizing estimates for Jul 4-26 that drifted from what the bank
+ * actually paid. Decision: the bank statement is the source of truth for interest;
+ * drop every row the job created. Script rows are identifiable by their
+ * deterministic ID prefix, so this is exact. Run once from the editor, then set the
+ * account's Interest Frequency to something other than Daily.
+ */
+function cleanupSyntheticInterest() {
+  const ids = su_readObjects_(SHEET_TX)
+    .map(function (r) { return String(r.ID); })
+    .filter(function (id) { return id.indexOf("interest-") === 0; });
+  if (!ids.length) { Logger.log("No script-generated interest rows found."); return; }
+  Logger.log("Deleting %s row(s): %s ... %s", ids.length, ids[0], ids[ids.length - 1]);
+  Logger.log(JSON.stringify(api_bulkDeleteTransactions({ ids: ids })));
+}
