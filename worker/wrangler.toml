@@ -3,4 +3,5 @@
 #          npx wrangler secret put SECRET_TOKEN  (same value as TELEGRAM_SECRET_TOKEN)
 name = "financetracker-telegram"
 main = "worker.js"
-compatibility_date = "2026-07-29"
+# UTC, and Cloudflare rejects a future date — Manila is a day ahead of UTC.
+compatibility_date = "2026-07-28"
