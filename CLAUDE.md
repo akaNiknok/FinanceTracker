@@ -9,7 +9,7 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 ## Project overview
 **FinanceTracker** is a **personal finance tracker**. Backend = **Google Apps Script (GAS)** over one Google Sheets workbook, published as a Web App exposing a small JSON API (record transactions, read accounts/categories) plus a scheduled daily-interest job.
 - **Use:** personal finance tracking — log transactions, accounts, interest into a private Google Sheet.
-- **Current client:** a private **Telegram bot running inside GAS** (`Telegram.gs`) — Telegram → **Cloudflare Worker** (`worker/`, answers the 200 that GAS can't) → `?action=telegram` → Gemini parse → service layer → reply. **n8n is retired** (2026-07-29); its exports stay in `n8n/` as reference only.
+- **Current client:** a private **Telegram bot running inside GAS** (`Telegram.gs`) — Telegram → **Cloudflare Worker** (`worker/`, answers the 200 that GAS can't) → `?action=telegram` → Gemini parse → service layer → reply. **n8n is retired** (2026-07-29) and its exports are deleted — `git show v1.3.2:'n8n/Finance Tracker.json'` if the old workflow is ever needed.
 - **Frontend:** a **GAS Web App UI** (HTML via `doGet`/`HtmlService`) is **built (Phase 2)** atop the API — responsive (desktop/tablet/mobile). See "Web App frontend (Phase 2)" below.
 - **Locale:** amounts in **PHP**; timezone `Asia/Manila`.
 
@@ -40,7 +40,6 @@ Guidance for Claude Code (and humans) working in this repo. **Keep this file and
 | `.claspignore` | Restricts clasp pushes (only `.gs`/`.js`/`.html` + manifest). |
 | `package.json` | npm scripts wrapping clasp; `version` drives release tags. |
 | `release.js` | `npm run release`: clasp push + redeploy same `deploymentId` + git tag `vX.Y.Z` + GitHub Release. Main-branch only. Not pushed to GAS (`.claspignore`). |
-| `n8n/` | **Dead reference.** Sanitized exports of the retired n8n workflows (the bot logic now lives in `Telegram.gs`; the prompt was ported from `Finance Tracker.json`), plus the abandoned Oracle-host `docker-compose.yml`/`Caddyfile`. Never pushed to GAS. |
 | `HANDOFF.md` | (when present, gitignored) previous session's handoff — read first. See "Session protocol". |
 | `MEMORY.md` | Durable notes, decisions, secrets-locations, TODOs (read it too). |
 | `OVERHAUL_PLAN.md` | The Phase 1–3 overhaul plan + original sheet audit. Phases 1–2 shipped; consult for Phase 3 (auth cutover, bot upgrades) scope. |
