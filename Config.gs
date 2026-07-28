@@ -57,7 +57,10 @@ const BASE_CURRENCY = "PHP";
 //   TELEGRAM_BOT_TOKEN — BotFather token for the private bot (Telegram.gs).
 //   TELEGRAM_USER_ID  — the only Telegram user id the bot answers.
 //   GEMINI_API_KEY    — Google AI Studio key used to parse bot messages.
-//   WEB_APP_URL       — the /exec deployment URL; used only by tg_setWebhook.
+//   WEB_APP_URL       — the /exec deployment URL; used only by tg_gasEndpoint.
+//   WEBHOOK_URL       — the Cloudflare Worker URL Telegram delivers to (worker/).
+//   TELEGRAM_SECRET_TOKEN — optional shared secret the Worker checks on each
+//                       delivery; must match the Worker's SECRET_TOKEN.
 function cfg_(key, fallback) {
   const v = PropertiesService.getScriptProperties().getProperty(key);
   return (v === null || v === undefined || v === "") ? fallback : v;

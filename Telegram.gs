@@ -7,8 +7,11 @@
  * structured transaction, hand it to the service layer, and reply in the chat.
  *
  * Notes on the two things that made this look hard from the n8n side:
- *   • ContentService's 302 — irrelevant. Telegram only needs the delivery to not
- *     fail; the bot's reply is sent out-of-band via sendMessage, not in the body.
+ *   • ContentService's 302 — real, and the one thing GAS cannot solve alone.
+ *     Telegram rejects a redirecting webhook outright ("Wrong response from the
+ *     webhook: 302 Found"), so a Cloudflare Worker (worker/) sits in front,
+ *     answers 200, and forwards the update here. Nothing else about the bot
+ *     changes; the reply still goes out-of-band via sendMessage.
  *   • update_id dedup — real, and it takes two layers. `tg_seen_` claims the
  *     update_id in CacheService before any work, so a redelivery is answered
  *     instantly instead of re-running the slow path; the deterministic
@@ -229,16 +232,33 @@ function tg_send_(chatId, text, replyTo) {
 function tg_msg_(err) { return (err && err.message) ? err.message : String(err); }
 
 // ── setup helpers (run from the Apps Script editor) ───────────────────────────
-/** Point Telegram at this deployment. Run once, and again after any URL change. */
+/**
+ * Point Telegram at the Cloudflare Worker proxy (WEBHOOK_URL). Run once, and
+ * again whenever the Worker URL or the secret changes.
+ *
+ * Telegram cannot be pointed straight at this deployment: /exec answers a POST
+ * with a 302 and Telegram rejects it outright ("Wrong response from the webhook:
+ * 302 Found"), redelivering for as long as it can. The Worker in worker/ exists
+ * only to answer 200 and forward the update here. Latency stays instant.
+ */
 function tg_setWebhook() {
+  const url = cfg_("WEBHOOK_URL", "");
+  if (!url) throw new Error("Set the WEBHOOK_URL script property to the Cloudflare Worker URL first (see worker/).");
+  const payload = { url: url, allowed_updates: ["message"], drop_pending_updates: true };
+  const secret = cfg_("TELEGRAM_SECRET_TOKEN", "");
+  if (secret) payload.secret_token = secret;   // the Worker checks this header
+  const res = UrlFetchApp.fetch(TG_API_ + cfgTelegramToken_() + "/setWebhook",
+    { method: "post", contentType: "application/json", muteHttpExceptions: true,
+      payload: JSON.stringify(payload) });
+  Logger.log(res.getContentText());
+}
+
+/** Print the URL to store as the Worker's GAS_URL secret (token included if set). */
+function tg_gasEndpoint() {
   const base = cfg_("WEB_APP_URL", "");
   if (!base) throw new Error("Set the WEB_APP_URL script property to the /exec deployment URL first.");
   const token = cfgApiToken_();
-  const url = base + "?action=telegram" + (token ? "&token=" + encodeURIComponent(token) : "");
-  const res = UrlFetchApp.fetch(TG_API_ + cfgTelegramToken_() + "/setWebhook",
-    { method: "post", contentType: "application/json", muteHttpExceptions: true,
-      payload: JSON.stringify({ url: url, allowed_updates: ["message"], drop_pending_updates: true }) });
-  Logger.log(res.getContentText());
+  Logger.log(base + "?action=telegram" + (token ? "&token=" + encodeURIComponent(token) : ""));
 }
 
 /** What Telegram thinks the webhook is — check `last_error_message` after a test. */
