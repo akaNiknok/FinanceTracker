@@ -6,7 +6,6 @@
  */
 
 // api_getBudgets lives in Budgets.gs (it computes actuals, not a raw row dump).
-function api_getCalendar()  { return { status: "success", rows: reads_clean_(su_readObjects_(SHEET_CALENDAR)) }; }
 
 /**
  * Ledger for the editable Tax screen: rows keep their 1-based `__row` (so the UI
@@ -50,7 +49,6 @@ function api_getBootstrap() {
     accounts: api_getAccounts().accounts,
     budgets: api_getBudgets().budgets,
     recurring: api_getRecurring().rows,
-    calendar: reads_clean_(su_readObjects_(SHEET_CALENDAR)),
     fxUsdPhp: fx_liveRate_("USD", BASE_CURRENCY) || null,
     minMonth: reads_minTxMonth_(),   // oldest ledger month → month pickers reach all history
     version: cache_getVersion_()

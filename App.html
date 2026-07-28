@@ -256,12 +256,10 @@ function svgEl(tag,attrs){
   Object.keys(attrs||{}).forEach(function(k){e.setAttribute(k,attrs[k]);});
   return e;
 }
-function compactPhp(n){
-  var a=Math.abs(n);
-  if(a>=1e6) return '₱'+(Math.round(n/1e5)/10)+'M';
-  if(a>=1e3) return '₱'+Math.round(n/1e3)+'K';
-  return '₱'+Math.round(n);
-}
+// Axis labels: ₱1.2M / ₱45K / ₱450. Intl also keeps a 2500 tick as "₱2.5K"
+// (the old hand-rolled rounding rendered it "₱3K").
+var PHPC = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',notation:'compact',maximumFractionDigits:1});
+function compactPhp(n){ return PHPC.format(Number(n)); }
 function niceCeil(n){                 // round up to 1/2/2.5/5×10^k for clean axis ticks
   if(!(n>0)) return 1;
   var p=Math.pow(10,Math.floor(Math.log(n)/Math.LN10)), f=n/p;

@@ -13,15 +13,7 @@ const SHEET_ACCOUNTS  = "Accounts";
 const SHEET_CATEGORIES = "Categories";
 const SHEET_BUDGETS   = "Budgets";
 const SHEET_RECURRING = "Recurring";
-const SHEET_CALENDAR  = "Calendar";
 const SHEET_LEDGER    = "Ledger";
-
-// ── Budgets column model ──────────────────────────────────────────────────────
-// The Budgets sheet holds the PLAN only — one row per segment. Actuals/remaining/%
-// are computed in Budgets.gs from the Transactions ledger (period-aware), never
-// stored. Target Type = "Percent" (of MONTHLY_INCOME_PHP) or "Amount" (Currency
-// USD resolves at live FX; else passes through). Period = "Monthly"|"Quarterly".
-const BUDGET_INPUT_COLS = ["Segment", "Period", "Target Type", "Target", "Currency", "Notes"];
 
 // ── Transactions column model ────────────────────────────────────────────────
 // INPUT columns: the only cells the service layer is allowed to write. Anything
@@ -31,10 +23,6 @@ const BUDGET_INPUT_COLS = ["Segment", "Period", "Target Type", "Target", "Curren
 const TX_INPUT_COLS = [
   "ID", "Date", "Category", "Description", "Account", "Amount",
   "ExchangeRate", "ToAccount", "ToAmount"
-];
-// Derived columns (formula-owned). Listed for documentation / guard checks only.
-const TX_DERIVED_COLS = [
-  ".", "Month", "Type", "Segment", "Currency", "Amount (PHP)", "ToCurrency"
 ];
 
 // Fields a client is allowed to supply when creating/updating a transaction.

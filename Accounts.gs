@@ -17,11 +17,6 @@
 
 // Editable Account columns (never write a formula/derived column like Current Balance).
 const ACCOUNT_EDITABLE = ["Starting Balance", "Interest Frequency", "Interest Rate", "Credit Limit", "Notes", "Color"];
-// Header candidates we tolerate for the same concept.
-const ACCT_START_HEADERS  = ["Starting Balance", "Starting Balance (PHP)", "Start Balance"];
-const ACCT_NATIVE_HEADERS = ["Current Balance"];                                  // native currency
-const ACCT_STORED_HEADERS = ["Current Balance (PHP)", "Current Balance", "Balance (PHP)"]; // PHP (formula)
-const ACCT_CREDIT_HEADERS = ["Available Credit"];
 
 function api_getAccounts() {
   const accounts = su_readObjects_(SHEET_ACCOUNTS);
@@ -31,24 +26,24 @@ function api_getAccounts() {
     const isShares = String(a.Currency).toUpperCase() === "SHARES" ||
                      /share|stock/i.test(String(a.Subtype || ""));
     const isInvestment = acct_isInvestment_(a.Currency, a.Subtype);
-    const balancePhp = acct_pickNum_(a, ACCT_STORED_HEADERS);
+    const balancePhp = acct_pickNum_(a["Current Balance (PHP)"]);
     const signed = (balancePhp === null) ? null : (isLiability ? -balancePhp : balancePhp);
     return {
       name: a.Name,
       currency: a.Currency || null,
       type: type,
       subtype: a.Subtype || null,
-      startingBalance: acct_pickNum_(a, ACCT_START_HEADERS),
+      startingBalance: acct_pickNum_(a["Starting Balance"]),
       balancePhp: balancePhp,                        // sheet value as shown (liabilities positive)
-      balanceNative: acct_pickNum_(a, ACCT_NATIVE_HEADERS), // native; for Shares this is the quantity
+      balanceNative: acct_pickNum_(a["Current Balance"]), // native; for Shares this is the quantity
       netWorthPhp: signed,                           // signed for net-worth (liabilities negative)
-      availableCredit: acct_pickNum_(a, ACCT_CREDIT_HEADERS),
+      availableCredit: acct_pickNum_(a["Available Credit"]),
       isLiability: isLiability,
       isShares: isShares,           // Shares accounts only — used for quantity-vs-value
       isInvestment: isInvestment,   // "counts as an investment" (Dashboard tile + Investments screen)
       interestFrequency: a["Interest Frequency"] || null,
       interestRate: a["Interest Rate"] || null,
-      creditLimit: acct_pickNum_(a, ["Credit Limit"]),
+      creditLimit: acct_pickNum_(a["Credit Limit"]),
       notes: a.Notes || null,
       color: a.Color || null   // optional hex for color-coding (blank before setupAccountColor)
     };
@@ -123,13 +118,8 @@ function api_updateAccount(args) {
 function acct_isInvestment_(currency, subtype) {
   return String(currency).toUpperCase() === "SHARES" || /share|stock|invest|etf/i.test(String(subtype || ""));
 }
-function acct_pick_(obj, headers) {
-  for (let i = 0; i < headers.length; i++) if (obj[headers[i]] !== undefined && obj[headers[i]] !== "") return obj[headers[i]];
-  return "";
-}
-/** Like acct_pick_ but coerced to a number, or null when the cell is blank. */
-function acct_pickNum_(obj, headers) {
-  const v = acct_pick_(obj, headers);
+/** A cell coerced to a number, or null when it's blank. */
+function acct_pickNum_(v) {
   return (v === "" || v === null || v === undefined) ? null : acct_num_(v);
 }
 function acct_num_(v) {
