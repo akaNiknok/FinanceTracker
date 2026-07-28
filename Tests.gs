@@ -8,7 +8,7 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate"];
+                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_telegram"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -97,6 +97,27 @@ function test_isInvestment() {
     if (got !== c[2]) throw new Error("acct_isInvestment_ FAIL: " + JSON.stringify(c) + " → " + got);
   });
   Logger.log("test_isInvestment OK");
+}
+
+/** Telegram bot pure bits: Gemini unwrap (incl. the empty-candidate case) + receipt shape. */
+function test_telegram() {
+  const ok = { candidates: [{ content: { parts: [{ text: '{"error":null}' }] } }] };
+  if (tg_geminiText_(ok) !== '{"error":null}') throw new Error("tg_geminiText_ FAIL: text not extracted");
+  [{}, { candidates: [] }, { candidates: [{ finishReason: "SAFETY", content: {} }] }].forEach(function (j) {
+    let threw = false;
+    try { tg_geminiText_(j); } catch (e) { threw = true; }
+    if (!threw) throw new Error("tg_geminiText_ FAIL: expected throw for " + JSON.stringify(j));
+  });
+
+  const plain = tg_receipt_({ Date: "2026-07-29", Category: "Food", Description: "lunch",
+                              Account: "Maya", Amount: 250, ToAccount: null, ToAmount: null }, "success");
+  if (plain.indexOf("✦ *Logged*") !== 0 || plain.indexOf("To:") !== -1 || plain.split("\n").length !== 6)
+    throw new Error("tg_receipt_ FAIL (plain): " + plain);
+  const xfer = tg_receipt_({ Date: "2026-07-29", Category: "Investment: Growth", Description: "top up",
+                             Account: "BPI", Amount: 5000, ToAccount: "IBKR", ToAmount: 81 }, "duplicate");
+  if (xfer.indexOf("Already logged") === -1 || xfer.indexOf("› To: _IBKR_") === -1 || xfer.indexOf("`81`") === -1)
+    throw new Error("tg_receipt_ FAIL (transfer): " + xfer);
+  Logger.log("test_telegram OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */

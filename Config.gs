@@ -54,6 +54,10 @@ const BASE_CURRENCY = "PHP";
 //                       the live n8n bot keeps working until Phase 3 cuts over).
 //   USD_PHP_FALLBACK  — exchange rate used if the live FX fetch fails.
 //   MONTHLY_INCOME_PHP — planning base for percent-of-income budget targets.
+//   TELEGRAM_BOT_TOKEN — BotFather token for the private bot (Telegram.gs).
+//   TELEGRAM_USER_ID  — the only Telegram user id the bot answers.
+//   GEMINI_API_KEY    — Google AI Studio key used to parse bot messages.
+//   WEB_APP_URL       — the /exec deployment URL; used only by tg_setWebhook.
 function cfg_(key, fallback) {
   const v = PropertiesService.getScriptProperties().getProperty(key);
   return (v === null || v === undefined || v === "") ? fallback : v;
@@ -63,3 +67,6 @@ function cfgApiToken_()      { return cfg_("API_TOKEN", ""); }
 function cfgEnforceToken_()  { return String(cfg_("ENFORCE_TOKEN", "false")).toLowerCase() === "true"; }
 function cfgUsdPhpFallback_(){ return parseFloat(cfg_("USD_PHP_FALLBACK", "0")) || 0; }
 function cfgMonthlyIncomePhp_(){ return parseFloat(cfg_("MONTHLY_INCOME_PHP", "47200")) || 0; }
+function cfgTelegramToken_()  { return cfg_("TELEGRAM_BOT_TOKEN", ""); }
+function cfgTelegramUserId_() { return cfg_("TELEGRAM_USER_ID", ""); }
+function cfgGeminiKey_()      { return cfg_("GEMINI_API_KEY", ""); }
