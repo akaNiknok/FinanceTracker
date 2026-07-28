@@ -580,6 +580,27 @@ function loadTx(w, silent){
   }).catch(showErr);
 }
 
+// Bucket rows into day groups (display order preserved) with each day's net.
+// Shared by the Transactions and Review lists.
+function groupByDay(rows){
+  var groups=[], byDate={};
+  (rows||[]).forEach(function(t){
+    var d=fmtDate(t.Date);
+    if(!byDate[d]){ byDate[d]={label:d,rows:[],net:0,date:t.Date}; groups.push(byDate[d]); }
+    byDate[d].rows.push(t);
+    var php=Math.abs(Number(t['Amount (PHP)'])||0);
+    if(String(t.Type)==='Expense') byDate[d].net-=php;
+    else if(String(t.Type)==='Income') byDate[d].net+=php;
+  });
+  return groups;
+}
+function dayHeadEl(g){
+  var dt=parseDate(g.date), day=dt?DAYS[dt.getDay()]+' · ':'';
+  var net=Math.round(g.net*100)/100;
+  return el('div','list-date','<span>'+esc(day+g.label)+'</span>'+
+    (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
+}
+
 // Repaint the transactions list from S.tx.rows plus optimistic state (pending
 // creates shown at top, pending deletes shown in-place) — no server round-trip.
 function renderTxList(){
@@ -595,22 +616,9 @@ function renderTxList(){
   c.appendChild(head);
   // group by day: header shows weekday + date + the day's net (income − spend)
   var allRows=adds.concat(serverRows);   // optimistic adds sort ahead within their date
-  var l=el('div','list'), groups=[], byDate={};
-  allRows.forEach(function(t){
-    var d=fmtDate(t.Date);
-    if(!byDate[d]){ byDate[d]={rows:[],net:0,date:t.Date}; groups.push(d); }
-    byDate[d].rows.push(t);
-    var php=Math.abs(Number(t['Amount (PHP)'])||0);
-    if(String(t.Type)==='Expense') byDate[d].net-=php;
-    else if(String(t.Type)==='Income') byDate[d].net+=php;
-  });
-  groups.forEach(function(d){
-    var g=byDate[d], dt=parseDate(g.date);
-    var day=dt?DAYS[dt.getDay()]+' · ':'';
-    var net=Math.round(g.net*100)/100;
-    var h=el('div','list-date','<span>'+esc(day+d)+'</span>'+
-      (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
-    l.appendChild(h);
+  var l=el('div','list');
+  groupByDay(allRows).forEach(function(g){
+    l.appendChild(dayHeadEl(g));
     g.rows.forEach(function(t){
       var pending = !!(t._pending || (t.ID && dels[t.ID]));
       l.appendChild(txRow(t,!pending,true,pending));
@@ -1185,7 +1193,10 @@ function loadReviewTx(){
     head.appendChild(lbl); c.appendChild(head);
 
     var l=el('div','list');
-    res.transactions.forEach(function(t){ l.appendChild(reviewTxRow(t)); });
+    groupByDay(res.transactions).forEach(function(g){
+      l.appendChild(dayHeadEl(g));
+      g.rows.forEach(function(t){ l.appendChild(reviewTxRow(t)); });
+    });
     if(!res.transactions.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
     c.appendChild(l);
 
@@ -1241,7 +1252,7 @@ function reviewTxRow(t){
   sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
     inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
   }));
-  sub.appendChild(document.createTextNode(' · '+fmtDate(t.Date)));
+  // date omitted — the list groups rows under date headers
   if(isForeign) sub.appendChild(document.createTextNode(' · '+money(amtPhp)));
   grow.appendChild(sub);
   r.appendChild(grow);
