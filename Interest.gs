@@ -52,7 +52,7 @@ function addDailyInterestTransactions(lookbackDays) {
         const prior = posted[id] || 0;
         // Closing balance for that day, net of interest we already credited ON that
         // day — otherwise each repair would compound on its own previous output.
-        const balance = acct_num_(acct_pick_(a, ACCT_START_HEADERS)) +
+        const balance = acct_num_(a["Starting Balance"]) +
                         (deltas[a.Name] ? deltas[a.Name].net : 0) - prior;
         const net = interest_net_(balance, acct_num_(a["Interest Rate"]));
         if (Math.abs(net - prior) < 0.005) return;   // already correct (incl. both zero)

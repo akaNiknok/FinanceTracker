@@ -52,10 +52,12 @@ const TG_SCHEMA_ = {
  * Always returns success: a non-2xx tells Telegram to redeliver, and a message we
  * already failed to parse will fail again. Problems are reported in the chat.
  */
-function tg_webhook_(e, body) {
+// `update` is the Telegram update object (the router merges query params onto it;
+// the extra `action`/`token` keys are ignored here).
+function tg_webhook_(update) {
   try {
-    if (tg_seen_(body && body.update_id)) return { status: "success", message: "duplicate update" };
-    tg_handleUpdate_(body);
+    if (tg_seen_(update && update.update_id)) return { status: "success", message: "duplicate update" };
+    tg_handleUpdate_(update);
   } catch (err) {
     console.error("telegram: " + (err && err.stack ? err.stack : err));
   }
