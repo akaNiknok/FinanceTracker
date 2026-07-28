@@ -22,7 +22,8 @@ const ROUTES_READ_ = {
   getBudgets:       function (e, b) { return api_getBudgets(rt_args_(e, b)); },
   getRecurring:     function (e, b) { return api_getRecurring(); },
   getCalendar:      function (e, b) { return api_getCalendar(); },
-  getLedger:        function (e, b) { return api_getLedger(); }
+  getLedger:        function (e, b) { return api_getLedger(); },
+  getAuthStatus:    function (e, b) { return auth_status_(e, b); }
 };
 const ROUTES_WRITE_ = {
   createTransaction: function (e, b) { return api_createTransaction(rt_args_(e, b)); },
@@ -31,7 +32,10 @@ const ROUTES_WRITE_ = {
   deleteTransaction: function (e, b) { return api_deleteTransaction(rt_args_(e, b)); },
   updateAccount:     function (e, b) { return api_updateAccount(rt_args_(e, b)); },
   bulkUpdateTransactions: function (e, b) { return api_bulkUpdateTransactions(rt_args_(e, b)); },
-  bulkDeleteTransactions: function (e, b) { return api_bulkDeleteTransactions(rt_args_(e, b)); }
+  bulkDeleteTransactions: function (e, b) { return api_bulkDeleteTransactions(rt_args_(e, b)); },
+  // The Telegram webhook (Telegram.gs). A write route so ENFORCE_TOKEN covers it —
+  // the token rides in the webhook URL, which only Telegram and we ever see.
+  telegram:          function (e, b) { return tg_webhook_(e, b); }
 };
 
 function doGet(e) {

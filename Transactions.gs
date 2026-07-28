@@ -96,6 +96,13 @@ function api_createTransfer(args) {
 
   const sheet = su_sheet_(SHEET_TX);
   const h = su_headerMap_(sheet);
+  // Same idempotency contract as api_createTransaction — the Telegram bot derives
+  // its ID from update_id, so a webhook retry must not post the transfer twice.
+  if (args.ID) {
+    const existing = su_findRowById_(sheet, h, args.ID);
+    if (existing) return { status: "duplicate", message: "ID already exists.",
+                           transaction: tx_rowObject_(sheet, h, existing) };
+  }
   const fx = fx_resolveRate_(accts[account].Currency, args.ExchangeRate);
 
   const input = {

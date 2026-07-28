@@ -43,6 +43,27 @@ function auth_requireWrite_(e, body) {
   throw new Error("Unauthorized: valid API token required.");
 }
 
+/**
+ * What the server sees about the caller. Read-only, echoes back only the
+ * caller's own identity (never OWNER_EMAIL), so it is safe behind the read
+ * guard. Exists to make the Phase 3 manifest flip verifiable instead of a
+ * leap of faith: call it from n8n with the OAuth credential BEFORE flipping
+ * `access` to MYSELF — if isOwner is false, the flip would lock the bot out.
+ */
+function auth_status_(e, body) {
+  const email = Session.getActiveUser().getEmail();
+  const expected = cfgApiToken_();
+  const given = auth_extractToken_(e, body);
+  return {
+    activeUser: email || null,          // "" when the caller is anonymous
+    isOwner: auth_isOwner_(),
+    enforceToken: cfgEnforceToken_(),
+    tokenAccepted: !!(expected && given && given === expected),
+    writeAllowed: auth_isOwner_() || !cfgEnforceToken_() ||
+                  !!(expected && given && given === expected)
+  };
+}
+
 /** Guard a read that may expose raw data (debug dumps). Same policy as writes. */
 function auth_requireRead_(e, body) {
   if (auth_isOwner_()) return;
