@@ -999,12 +999,13 @@ function ledgerDeleteRow(row){
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- *  EXCHANGE — fair USD↔PHP swap with the brother. Both of you would otherwise
- *  pay a Wise fee — you cashing out USD→PHP, him buying USD with PHP→USD — and
- *  the two routes carry DIFFERENT fees, so we take each as the actual amount
- *  Wise quotes (your fee in USD, his in PHP). Wise deducts its fee from the
- *  SOURCE, then converts the remainder at mid-market, so your floor = (usd −
- *  feeYou)×mid and his ceiling = mid + feeBro. Trading direct avoids both fees;
+ *  EXCHANGE — fair USD↔PHP swap with the other person. Both of you would
+ *  otherwise pay a Wise fee — you cashing out USD→PHP, they buying USD with
+ *  PHP→USD — and the two routes carry DIFFERENT fees, so we take each as the
+ *  actual amount Wise quotes (your fee in USD, theirs in PHP). Wise deducts its
+ *  fee from the SOURCE, then converts the remainder at mid-market, so your floor
+ *  = (usd − feeYou)×mid and their ceiling = mid + feeBro (the `bro`/`Bro` names
+ *  are historical — they mean "the other person"). Trading direct avoids both fees;
  *  the slider splits that pot. At the mid-market rate each of you simply keeps
  *  your own avoided fee (only the 50/50 point when the two fees are equal).
  *  Defaults reproduce a sample Wise quote ($3.68 out, ₱154.83 in; tunable).
@@ -1013,83 +1014,60 @@ function renderExchange(){
   if(!S.boot){ loading(); ensureBoot().then(renderExchange).catch(showErr); return; }
   var w=el('div','screen');
   w.appendChild(el('div','screen-title','Swap · Fair USD↔PHP'));
-  w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with your brother'));
+  w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with the other person'));
 
   var rate0 = (S.boot.fxUsdPhp!=null && S.boot.fxUsdPhp>0) ? Number(S.boot.fxUsdPhp).toFixed(4) : '';
   var card=el('div','card');
   card.innerHTML=
-    '<div class="field"><label>I\'m entering</label><select id="exSide">'+
-      '<option value="usd">Dollars I\'m giving (USD)</option>'+
-      '<option value="php">Pesos I need (PHP)</option>'+
-    '</select></div>'+
     '<div class="field-row">'+
-      '<div class="field"><label>Amount</label><input id="exAmt" type="number" min="0" step="any" value="1000"></div>'+
+      '<div class="field"><label>Dollars I\'m giving ($)</label><input id="exAmt" type="number" min="0" step="any" value="1000"></div>'+
       '<div class="field"><label>Mid-market rate (₱ per $1)</label><input id="exRate" type="number" min="0" step="any" value="'+rate0+'">'+
         '<div class="hint">Live rate, editable</div></div>'+
     '</div>'+
     '<div class="field-row">'+
-      '<div class="field"><label>Your Wise fee — USD→PHP ($)</label><input id="exFeeYou" type="number" min="0" step="any" value="3.68">'+
-        '<div class="hint">actual fee cashing out USD</div></div>'+
-      '<div class="field"><label>Brother\'s Wise fee — PHP→USD (₱)</label><input id="exFeeBro" type="number" min="0" step="any" value="154.83">'+
-        '<div class="hint">actual fee buying USD with PHP</div></div>'+
+      '<div class="field"><label>Your Wise fee — USD→PHP ($)</label><input id="exFeeYou" type="number" min="0" step="any" value="3.68"></div>'+
+      '<div class="field"><label>Their Wise fee — PHP→USD (₱)</label><input id="exFeeBro" type="number" min="0" step="any" value="154.83"></div>'+
     '</div>'+
     '<div class="field"><label>Your share of the saved fee: <span id="exSplitLbl">50%</span></label>'+
-      '<input id="exSplit" type="range" min="0" max="100" step="5" value="50" style="width:100%;accent-color:var(--accent)">'+
-      '<div class="hint">50% = fair breakeven · higher = you keep more · lower = brother gets a better rate</div></div>';
+      '<input id="exSplit" type="range" min="0" max="100" step="5" value="50" style="width:100%;accent-color:var(--accent)"></div>';
   w.appendChild(card);
   w.appendChild(el('div','',null)).id='exOut';
-  w.appendChild(el('div','hint','No PH tax applies to a fair-value swap or a sibling remittance — the only real cost avoided is the Wise transfer fee each of you would pay, so both fees together are the pot you\'re splitting.'));
   paint(w);
 
-  ['exSide','exAmt','exRate','exFeeYou','exFeeBro','exSplit'].forEach(function(id){
+  ['exAmt','exRate','exFeeYou','exFeeBro','exSplit'].forEach(function(id){
     $('#'+id).addEventListener('input', exCalc);
   });
   exCalc();
 }
 
 function exCalc(){
-  var side=$('#exSide').value, amt=parseFloat($('#exAmt').value)||0;
-  var rate=parseFloat($('#exRate').value)||0;
+  var usd=parseFloat($('#exAmt').value)||0, rate=parseFloat($('#exRate').value)||0;
   var feeYouUsd=parseFloat($('#exFeeYou').value)||0, feeBroPhp=parseFloat($('#exFeeBro').value)||0;
   var split=parseFloat($('#exSplit').value)||0;
   $('#exSplitLbl').textContent=split+'%';
   var out=$('#exOut');
-  if(!(amt>0)||!(rate>0)){ out.innerHTML='<div class="empty">Enter an amount and a rate.</div>'; return; }
+  if(!(usd>0)||!(rate>0)){ out.innerHTML='<div class="empty">Enter an amount and a rate.</div>'; return; }
 
-  // Reduce both entry modes to a USD notional being swapped.
-  var usd = side==='usd' ? amt : amt/rate;
-  var midPhp = usd*rate;                              // value at mid-market
+  var midPhp = usd*rate;
   // Wise deducts its fee from the SOURCE, then converts the remainder at mid.
-  var yourFeePhp = feeYouUsd*rate;                    // your USD fee, in ₱
-  var broFeePhp = feeBroPhp;                          // his fee is already in ₱
-  var wiseNetPhp = midPhp - yourFeePhp;               // ₱ you'd receive cashing out USD→PHP (your floor)
-  var broWiseCostPhp = midPhp + broFeePhp;            // ₱ he'd send to net the USD via PHP→USD (his ceiling)
+  var wiseNetPhp = midPhp - feeYouUsd*rate;           // ₱ you'd receive cashing out USD→PHP (your floor)
+  var broWiseCostPhp = midPhp + feeBroPhp;            // ₱ they'd send to net the USD via PHP→USD (their ceiling)
   var potPhp = broWiseCostPhp - wiseNetPhp;           // total saved by trading direct = both avoided fees
   var dealPhp = wiseNetPhp + split/100*potPhp;        // fair deal: your `split` of the whole pot
-  var fairRate = dealPhp/usd;
-  var youSave = dealPhp - wiseNetPhp;                 // vs. cashing out on Wise yourself
-  var broSave = broWiseCostPhp - dealPhp;             // vs. him buying USD on Wise
 
   function stat(label,val,sub){return '<div class="stat"><div class="stat-label">'+esc(label)+
     '</div><div class="stat-value">'+val+'</div>'+(sub?'<div class="stat-sub">'+sub+'</div>':'')+'</div>';}
 
   out.innerHTML=
-    '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">Fair rate</div>'+
-      '<div class="stat-value"><span style="font-size:14px;color:var(--text-dim)">₱</span> '+num(fairRate)+' <span style="font-size:14px;color:var(--text-dim)">per $1</span></div>'+
-      '<div class="stat-sub" style="font-size:15px;font-weight:650;color:var(--text);margin-top:8px">Brother pays '+money(dealPhp)+' for '+moneyCur(usd,'USD')+' — you receive '+money(dealPhp)+'</div></div>'+
+    '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">They send you</div>'+
+      '<div class="stat-value">'+money(dealPhp)+' <span style="font-size:14px;color:var(--text-dim)">for '+moneyCur(usd,'USD')+'</span></div>'+
+      '<div class="stat-sub" style="font-size:15px;font-weight:650;color:var(--text);margin-top:8px">Fair rate ₱'+num(dealPhp/usd)+' per $1</div></div>'+
     '<div class="grid grid-2">'+
-      stat('Mid-market value', money(midPhp), num(rate)+' ₱/$') +
-      stat('Total saved', money(potPhp), 'both avoided Wise fees') +
-      stat('Wise fee — you', money(yourFeePhp), moneyCur(feeYouUsd,'USD')+' cashing out USD→PHP') +
-      stat('Wise fee — brother', money(broFeePhp), 'buying USD PHP→USD') +
-      stat('If you used Wise', money(wiseNetPhp), 'you\'d receive this') +
-      stat('If he used Wise', money(broWiseCostPhp), 'he\'d pay this') +
-      stat('You save vs Wise', '<span class="pos">'+money(youSave)+'</span>', 'your '+split+'% share') +
-      stat('Brother saves vs Wise', '<span class="pos">'+money(broSave)+'</span>', 'his '+(100-split)+'% share') +
+      stat('You save vs Wise', '<span class="pos">'+money(dealPhp-wiseNetPhp)+'</span>', 'your '+split+'% of '+money(potPhp)) +
+      stat('They save vs Wise', '<span class="pos">'+money(broWiseCostPhp-dealPhp)+'</span>', 'their '+(100-split)+'% of '+money(potPhp)) +
     '</div>'+
-    '<div class="hint" style="margin-top:10px">Any rate between '+num(wiseNetPhp/usd)+
-      ' (your Wise net) and '+num(broWiseCostPhp/usd)+' (his Wise cost) leaves you both better off than using Wise. '+
-      'At the '+num(rate)+' mid-market rate you each keep your own avoided fee; the slider shifts who keeps more of the '+money(potPhp)+' saved.</div>';
+    '<div class="hint" style="margin-top:10px">Any rate from '+num(wiseNetPhp/usd)+' to '+num(broWiseCostPhp/usd)+
+      ' beats Wise for you both; at mid-market ('+num(rate)+') you each keep your own avoided fee.</div>';
 }
 
 /* ════════════════════════════════════════════════════════════════════════
