@@ -9,9 +9,11 @@
  * Notes on the two things that made this look hard from the n8n side:
  *   • ContentService's 302 — irrelevant. Telegram only needs the delivery to not
  *     fail; the bot's reply is sent out-of-band via sendMessage, not in the body.
- *   • update_id dedup — handled durably instead of in a cache: every update maps
- *     to a deterministic transaction ID ("tg-<update_id>"), and both create paths
- *     are idempotent on a supplied ID, so a Telegram retry can never double-post.
+ *   • update_id dedup — real, and it takes two layers. `tg_seen_` claims the
+ *     update_id in CacheService before any work, so a redelivery is answered
+ *     instantly instead of re-running the slow path; the deterministic
+ *     "tg-<update_id>" transaction ID (both create paths are idempotent on a
+ *     supplied ID) then guarantees no second row if one slips through anyway.
  *
  * Script Properties required: TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, GEMINI_API_KEY
  * (+ WEB_APP_URL, used only by tg_setWebhook).
@@ -49,11 +51,37 @@ const TG_SCHEMA_ = {
  */
 function tg_webhook_(e, body) {
   try {
+    if (tg_seen_(body && body.update_id)) return { status: "success", message: "duplicate update" };
     tg_handleUpdate_(body);
   } catch (err) {
     console.error("telegram: " + (err && err.stack ? err.stack : err));
   }
   return { status: "success" };
+}
+
+/**
+ * Claim an update_id, returning true if it was already claimed.
+ *
+ * Telegram redelivers an update until it gets a timely response, and one pass
+ * through Gemini + Sheets is slow enough to lose that race. So a redelivery has
+ * to be answered *before* any work — otherwise every retry is as slow as the
+ * original, times out the same way, and the redelivery never stops (it also
+ * re-replies each time, which is how this showed up: an endless "Already logged").
+ *
+ * This is a different job from the tg-<update_id> transaction ID: that one keeps
+ * a retry from writing a second row, this one keeps the retry storm from starting.
+ *
+ * ponytail: claimed up front, so an execution that dies mid-way is not retried
+ * either — you resend the message. Better than the storm; revisit only if real
+ * failures turn out to be common.
+ */
+function tg_seen_(updateId) {
+  if (!updateId) return false;
+  const cache = CacheService.getScriptCache();
+  const key = "tg-update-" + updateId;
+  if (cache.get(key)) return true;
+  cache.put(key, "1", 3600);   // Telegram gives up well inside an hour
+  return false;
 }
 
 function tg_handleUpdate_(update) {
