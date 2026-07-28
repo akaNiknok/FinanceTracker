@@ -1,0 +1,6 @@
+# Deploy:  cd worker && npx wrangler deploy
+# Secrets: npx wrangler secret put GAS_URL       (run tg_gasEndpoint() to get it)
+#          npx wrangler secret put SECRET_TOKEN  (same value as TELEGRAM_SECRET_TOKEN)
+name = "financetracker-telegram"
+main = "worker.js"
+compatibility_date = "2026-07-29"
