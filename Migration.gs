@@ -1,5 +1,9 @@
 /**
- * Migration.gs — one-shot setup for the system overhaul (Phase 1 foundation).
+ * Migration.gs — one-shot schema setup for the workbook.
+ *
+ * ALL of these have already been applied to the live workbook (confirmed 2026-08-02);
+ * they are kept only for rebuilding a workbook from scratch. Old step-by-step runbook:
+ * `git show v1.3.4:MIGRATION.md`.
  *
  * Run ONCE from the Apps Script editor, in this order:
  *   1) setupMigration()          — backs up Transactions, adds the `ID` column,
@@ -10,7 +14,7 @@
  *
  * Everything is idempotent and column lookups are by HEADER NAME, so it tolerates
  * columns being in a different order. A timestamped backup sheet is made before any
- * change. See MIGRATION.md for the full step-by-step + manual copy-paste fallback.
+ * change.
  *
  * REVIEW BEFORE RUNNING: MIG_MONTH_FORMAT must match what your Dashboard pivots expect.
  */
@@ -127,7 +131,7 @@ function applyDerivationFormulas() {
       sheet.getRange(2, col).setFormula(formula);
       Logger.log("OK  %-13s ← %s", colName, formula);
     } catch (err) {
-      Logger.log("FAIL %-12s (%s). Paste it manually — see MIGRATION.md.\n     %s", colName, err.message, formula);
+      Logger.log("FAIL %-12s (%s). Paste it into the column's row-2 cell manually.\n     %s", colName, err.message, formula);
     }
   });
   Logger.log("== applyDerivationFormulas done. Spot-check a few rows, then redeploy the SAME deploymentId. ==");

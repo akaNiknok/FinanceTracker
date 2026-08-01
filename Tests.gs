@@ -1,5 +1,5 @@
 /**
- * Tests.gs — manual verification runners for the Phase 1 service layer.
+ * Tests.gs — manual verification runners for the service layer.
  * Select a function in the Apps Script editor and Run, then read the Logs.
  * Nothing here is web-exposed. test_createReadDelete_ mutates then cleans up
  * after itself; test_balanceReconciliation is the one that validates the balance

@@ -3,8 +3,7 @@
  * model (which columns the service may WRITE vs. which are formula-derived and
  * must never be touched), and settings read from Script Properties.
  *
- * Phase 1 foundation (see OVERHAUL_PLAN.md §4). Flat namespace: every function
- * name here is unique across all .gs files.
+ * Flat namespace: every function name here is unique across all .gs files.
  */
 
 // ── Sheet names ───────────────────────────────────────────────────────────────
@@ -37,9 +36,9 @@ const BASE_CURRENCY = "PHP";
 // ── Settings (Script Properties, with safe fallbacks) ─────────────────────────
 // Set these in the Apps Script editor: Project Settings → Script Properties.
 //   OWNER_EMAIL       — Google account allowed to use the authenticated UI.
-//   API_TOKEN         — shared secret the API requires for mutations (n8n/UI).
-//   ENFORCE_TOKEN     — "true" to require API_TOKEN on writes (default: off, so
-//                       the live n8n bot keeps working until Phase 3 cuts over).
+//   API_TOKEN         — shared secret the `?action=` API requires for mutations.
+//   ENFORCE_TOKEN     — "true" to require API_TOKEN on writes (LIVE since
+//                       2026-07-29; the token rides in the Worker's GAS_URL secret).
 //   USD_PHP_FALLBACK  — exchange rate used if the live FX fetch fails.
 //   MONTHLY_INCOME_PHP — planning base for percent-of-income budget targets.
 //   TELEGRAM_BOT_TOKEN — BotFather token for the private bot (Telegram.gs).
