@@ -1612,7 +1612,8 @@ function openTransferModal(t){
   var accs=acctOptions();
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
-  var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], t?t.Category:'', {placeholder:'Select category'});
+  var defCat=xferCats.indexOf('Transfer: Internal')>=0?'Transfer: Internal':'';
+  var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], (t&&t.Category)||defCat, {placeholder:'Select category'});
   var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
   var fTo=comboEl(accs, t?t.ToAccount:'', {placeholder:'To account'});
   var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
@@ -1664,9 +1665,8 @@ function openTransferModal(t){
     foot.unshift(del);
   }
   openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, foot));
-  // Fresh transfer starts at From; a draft switched over from the tx form already has one,
-  // so it starts at the Category it had to drop.
-  if(!isEdit&&!fCat.value) focusCombo(t?fCat:fFrom);
+  // Category is prefilled (default or carried over) → start at From; only focus Category if it's empty.
+  if(!isEdit) focusCombo(fCat.value?fFrom:fCat);
 }
 
 function confirmDelete(t){
