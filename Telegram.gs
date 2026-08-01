@@ -22,8 +22,10 @@
  * (+ WEB_APP_URL, used only by tg_setWebhook).
  */
 
-const TG_API_   = "https://api.telegram.org/bot";
-const TG_MODEL_ = "gemini-flash-latest";
+const TG_API_    = "https://api.telegram.org/bot";
+// Tried in order; the next one is used if the previous errors (overload, 5xx,
+// a model id that stopped existing). Cheapest-capable first.
+const TG_MODELS_ = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"];
 const TG_HELP_  = "✦ Just send a transaction in plain language.\n" +
                   "e.g. `lunch 250 maya` or `moved 5k from bpi to maribank`\n" +
                   "_(/sync is gone — categories and accounts are read live.)_";
@@ -141,20 +143,42 @@ function tg_handleUpdate_(update) {
 function tg_parse_(text, unixDate) {
   const key = cfgGeminiKey_();
   if (!key) throw new Error("GEMINI_API_KEY is not set.");
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: tg_prompt_(unixDate) }] },
+    contents: [{ role: "user", parts: [{ text: text }] }],
+    generationConfig: { temperature: 0, responseMimeType: "application/json",
+                        responseSchema: TG_SCHEMA_ }
+  });
+  return tg_tryModels_(TG_MODELS_, function (model) {
+    return JSON.parse(tg_generate_(model, key, payload));
+  });
+}
+
+/**
+ * Call `fn` with each model until one returns; the last failure surfaces if none do.
+ * ponytail: retries the whole call, so a 503 on the primary just costs one extra
+ * round trip. No per-status logic — a bad response is a bad response either way.
+ */
+function tg_tryModels_(models, fn) {
+  for (var i = 0; i < models.length; i++) {
+    try { return fn(models[i]); }
+    catch (err) {
+      console.warn("gemini " + models[i] + " failed: " + tg_msg_(err));
+      if (i === models.length - 1) throw err;
+    }
+  }
+}
+
+/** One generateContent call → the model's raw text. Throws on non-200/empty. */
+function tg_generate_(model, key, payload) {
   const res = UrlFetchApp.fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/" + TG_MODEL_ +
+    "https://generativelanguage.googleapis.com/v1beta/models/" + model +
       ":generateContent?key=" + encodeURIComponent(key),
     { method: "post", contentType: "application/json", muteHttpExceptions: true,
-      payload: JSON.stringify({
-        systemInstruction: { parts: [{ text: tg_prompt_(unixDate) }] },
-        contents: [{ role: "user", parts: [{ text: text }] }],
-        generationConfig: { temperature: 0, responseMimeType: "application/json",
-                            responseSchema: TG_SCHEMA_ }
-      })
-    });
+      payload: payload });
   if (res.getResponseCode() !== 200)
     throw new Error("Gemini " + res.getResponseCode() + ": " + res.getContentText().slice(0, 200));
-  return JSON.parse(tg_geminiText_(JSON.parse(res.getContentText())));
+  return tg_geminiText_(JSON.parse(res.getContentText()));
 }
 
 /** Pull the model's text out of a generateContent response. Throws if it's empty. */

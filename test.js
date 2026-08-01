@@ -14,8 +14,10 @@ const src = fs.readdirSync(__dirname)
   .map(function (f) { return fs.readFileSync(path.join(__dirname, f), "utf8"); })
   .join("\n;\n");
 
-// ponytail: Logger is the only GAS global the pure tests touch — stub just that.
+// ponytail: Logger (+ console, for tg_tryModels_'s fallback warning) are the only
+// globals the pure tests touch — stub just those.
 const sandbox = {
+  console: console,
   Logger: { log: function () {
     const a = Array.prototype.slice.call(arguments);
     console.log("  " + (typeof a[0] === "string"

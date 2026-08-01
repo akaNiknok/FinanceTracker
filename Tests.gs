@@ -117,6 +117,21 @@ function test_telegram() {
                              Account: "BPI", Amount: 5000, ToAccount: "IBKR", ToAmount: 81 }, "duplicate");
   if (xfer.indexOf("Already logged") === -1 || xfer.indexOf("› To: _IBKR_") === -1 || xfer.indexOf("`81`") === -1)
     throw new Error("tg_receipt_ FAIL (transfer): " + xfer);
+
+  // Model fallback: first success wins, a dead model is skipped, all-dead rethrows.
+  const tried = [];
+  const call = function (failUntil) {
+    return function (m) { tried.push(m); if (tried.length <= failUntil) throw new Error("503 " + m); return m; };
+  };
+  if (tg_tryModels_(["a", "b", "c"], call(0)) !== "a" || tried.length !== 1)
+    throw new Error("tg_tryModels_ FAIL: should stop at the first success");
+  tried.length = 0;
+  if (tg_tryModels_(["a", "b", "c"], call(2)) !== "c" || tried.join() !== "a,b,c")
+    throw new Error("tg_tryModels_ FAIL: should fall through to the last model");
+  tried.length = 0;
+  let threw = "";
+  try { tg_tryModels_(["a", "b"], call(9)); } catch (e) { threw = e.message; }
+  if (threw !== "503 b") throw new Error("tg_tryModels_ FAIL: last error should surface, got " + threw);
   Logger.log("test_telegram OK");
 }
 
