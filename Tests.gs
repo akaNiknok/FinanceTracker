@@ -8,7 +8,8 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_telegram"];
+                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_telegram",
+                  "test_telegramQuery"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -117,7 +118,56 @@ function test_telegram() {
                              Account: "BPI", Amount: 5000, ToAccount: "IBKR", ToAmount: 81 }, "duplicate");
   if (xfer.indexOf("Already logged") === -1 || xfer.indexOf("› To: _IBKR_") === -1 || xfer.indexOf("`81`") === -1)
     throw new Error("tg_receipt_ FAIL (transfer): " + xfer);
+
+  // Model fallback: first success wins, a dead model is skipped, all-dead rethrows.
+  const tried = [];
+  const call = function (failUntil) {
+    return function (m) { tried.push(m); if (tried.length <= failUntil) throw new Error("503 " + m); return m; };
+  };
+  if (tg_tryModels_(["a", "b", "c"], call(0)) !== "a" || tried.length !== 1)
+    throw new Error("tg_tryModels_ FAIL: should stop at the first success");
+  tried.length = 0;
+  if (tg_tryModels_(["a", "b", "c"], call(2)) !== "c" || tried.join() !== "a,b,c")
+    throw new Error("tg_tryModels_ FAIL: should fall through to the last model");
+  tried.length = 0;
+  let threw = "";
+  try { tg_tryModels_(["a", "b"], call(9)); } catch (e) { threw = e.message; }
+  if (threw !== "503 b") throw new Error("tg_tryModels_ FAIL: last error should surface, got " + threw);
   Logger.log("test_telegram OK");
+}
+
+/** Telegram query path: month normalisation, filter mapping, summary arithmetic. */
+function test_telegramQuery() {
+  // Whatever form the model emits must become the sheet's derived Month key.
+  if (tg_monthKey_("2026-08") !== "2026-Aug" || tg_monthKey_("2026-Aug") !== "2026-Aug")
+    throw new Error("tg_monthKey_ FAIL: " + tg_monthKey_("2026-08") + " / " + tg_monthKey_("2026-Aug"));
+
+  // Only the filters the model supplied are passed through — a blank must not
+  // become month:"" (api_listTransactions would still treat it as unset, but an
+  // empty category would silently match nothing).
+  const all = tg_queryFilters_({ month: "2026-08", category: "Food", account: "Maya", search: "lunch" });
+  if (all.month !== "2026-Aug" || all.category !== "Food" || all.account !== "Maya" ||
+      all.search !== "lunch" || all.limit !== 500)
+    throw new Error("tg_queryFilters_ FAIL (all): " + JSON.stringify(all));
+  [null, {}, { month: "", category: null }].forEach(function (q) {
+    const got = tg_queryFilters_(q);
+    if (Object.keys(got).join() !== "limit")
+      throw new Error("tg_queryFilters_ FAIL (empty): " + JSON.stringify(got));
+  });
+
+  if (tg_querySummary_([], 0) !== "No matching transactions.")
+    throw new Error("tg_querySummary_ FAIL: empty result");
+  // Income (+) and expense (−) rows both count toward "how much moved through".
+  const rows = [{ Date: "2026-08-01", Category: "Food", Description: "lunch", "Amount (PHP)": -250 },
+                { Date: "2026-08-02", Category: "Food", Description: "", "Amount (PHP)": 100.5 }];
+  const s = tg_querySummary_(rows);
+  if (s.indexOf("*₱350.5* across 2 tx") !== 0 || s.indexOf("— lunch `₱250`") === -1 || s.indexOf("more") !== -1)
+    throw new Error("tg_querySummary_ FAIL: " + s);
+  // total > rows.length (page cut short) reports the true count and says so.
+  const capped = tg_querySummary_(rows, 9);
+  if (capped.indexOf("across 9 tx") === -1 || capped.indexOf("› _…7 more_") === -1)
+    throw new Error("tg_querySummary_ FAIL (capped): " + capped);
+  Logger.log("test_telegramQuery OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */

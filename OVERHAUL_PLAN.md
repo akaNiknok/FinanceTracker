@@ -164,16 +164,19 @@ project (`Financial_System.md`), not the app.
 
 ## 6. Phase 3 — n8n / Telegram upgrades
 
-- **Auth**: HTTP nodes switch to the authenticated API (no more anonymous URL).
-- **Richer Gemini parsing** (structured output):
-  - **Transfers** and **multi-transaction** messages → array output → batch create.
-  - **Queries / read-back**: intent detection (log vs. query); query intents hit the
-    read API and format a reply ("Food this month: ₱X across N tx").
-  - **Corrections / undo**: "undo last", "change last to 500", "that was groceries not
-    gas" → resolve recent tx by ID (bot remembers last IDs per chat) → update/delete.
-- **Confirmations**: ambiguous parses echo the parsed result with inline confirm/cancel
-  before writing.
-- Keep `/sync` and the error-handler workflow; update redacted-secrets docs.
+Shipped 2026-08-02 (n8n is gone; this all lives in `Telegram.gs`):
+
+- **Auth**: ✅ `ENFORCE_TOKEN=true`, token in the Worker's `GAS_URL` secret.
+- **Richer Gemini parsing** (structured output): ✅ one call returns
+  `{intent, items[], query, error}`.
+  - **Transfers** and **multi-transaction** messages → `items[]` → one create per item. ✅
+  - **Queries / read-back**: `intent=query` → `api_listTransactions` → "₱X across N tx". ✅
+  - **Undo**: `undo` / `/undo` deletes the previous message's IDs (`TG_LAST_IDS`). ✅
+    "change last to 500" was **not** built — undo + resend is the same two taps.
+- **Confirmations**: **dropped.** Inline confirm/cancel needs `callback_query` updates
+  plus per-chat pending state, and taxes every message to catch the rare bad parse.
+  Undo is the same safety net, paid for only when something is actually wrong.
+- `/sync` and the error-handler workflow died with n8n.
 
 ## 7. Cross-cutting
 

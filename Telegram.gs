@@ -3,8 +3,9 @@
  *
  * Telegram POSTs each update to the Web App URL with `?action=telegram` (see
  * tg_setWebhook), the router dispatches it here, and this file does what the n8n
- * workflow used to do: authorize the sender, parse the message with Gemini into a
- * structured transaction, hand it to the service layer, and reply in the chat.
+ * workflow used to do: authorize the sender, parse the message with Gemini, hand
+ * it to the service layer, and reply in the chat. One message can log several
+ * transactions, ask a question about past ones, or undo the previous message.
  *
  * Notes on the two things that made this look hard from the n8n side:
  *   • ContentService's 302 — real, and the one thing GAS cannot solve alone.
@@ -15,23 +16,30 @@
  *   • update_id dedup — real, and it takes two layers. `tg_seen_` claims the
  *     update_id in CacheService before any work, so a redelivery is answered
  *     instantly instead of re-running the slow path; the deterministic
- *     "tg-<update_id>" transaction ID (both create paths are idempotent on a
+ *     "tg-<update_id>-<i>" transaction ID (both create paths are idempotent on a
  *     supplied ID) then guarantees no second row if one slips through anyway.
  *
  * Script Properties required: TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, GEMINI_API_KEY
  * (+ WEB_APP_URL, used only by tg_setWebhook).
  */
 
-const TG_API_   = "https://api.telegram.org/bot";
-const TG_MODEL_ = "gemini-flash-latest";
+const TG_API_    = "https://api.telegram.org/bot";
+// Tried in order; the next one is used if the previous errors (overload, 5xx,
+// a model id that stopped existing). Cheapest-capable first.
+const TG_MODELS_ = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"];
 const TG_HELP_  = "✦ Just send a transaction in plain language.\n" +
                   "e.g. `lunch 250 maya` or `moved 5k from bpi to maribank`\n" +
-                  "_(/sync is gone — categories and accounts are read live.)_";
+                  "Several in one message work too (one per line).\n" +
+                  "Ask questions: `how much on food this month`\n" +
+                  "Take it back: `undo` (or /undo) removes the last message's rows.";
+
+// The property holding the IDs written by the last logged message (undo target).
+const TG_LAST_IDS_ = "TG_LAST_IDS";
 
 // Gemini structured-output schema (OpenAPI subset: nullable, not union types).
-// Only `error` is required — a non-transaction message must be able to come back
-// as {error:"..."} without the model inventing a Category/Account to satisfy it.
-const TG_SCHEMA_ = {
+// Only `intent`/`error` are required — a non-transaction message must be able to
+// come back as {error:"..."} without the model inventing a Category to satisfy it.
+const TG_TX_SCHEMA_ = {
   type: "OBJECT",
   properties: {
     Date:         { type: "STRING", description: "Transaction date, ISO yyyy-MM-dd" },
@@ -41,10 +49,28 @@ const TG_SCHEMA_ = {
     Amount:       { type: "NUMBER", description: "Positive amount leaving/entering the source account" },
     ExchangeRate: { type: "NUMBER", nullable: true, description: "PHP per 1 USD, only if explicitly mentioned" },
     ToAccount:    { type: "STRING", nullable: true, description: "Destination account, transfers only" },
-    ToAmount:     { type: "NUMBER", nullable: true, description: "Amount received in the destination account, transfers only" },
-    error:        { type: "STRING", nullable: true, description: "Short error message if this is not a financial transaction, else null" }
+    ToAmount:     { type: "NUMBER", nullable: true, description: "Amount received in the destination account, transfers only" }
+  }
+};
+
+const TG_SCHEMA_ = {
+  type: "OBJECT",
+  properties: {
+    // Plain STRING, not an enum: an unrecognised value falls back to "log", which
+    // is the pre-existing behaviour — safer than risking a schema the API rejects.
+    intent: { type: "STRING", description: '"log" to record transactions, "query" to answer a question about past ones, "undo" to take back the previous message' },
+    items:  { type: "ARRAY", nullable: true, items: TG_TX_SCHEMA_,
+              description: "One entry per transaction in the message (intent=log). A message may contain several." },
+    query:  { type: "OBJECT", nullable: true, description: "Filters for intent=query; omit the ones the message does not imply",
+              properties: {
+                month:    { type: "STRING", nullable: true, description: "Month to restrict to, yyyy-MM. Null means all time" },
+                category: { type: "STRING", nullable: true, description: "Exact match from VALID CATEGORIES" },
+                account:  { type: "STRING", nullable: true, description: "Exact match from VALID ACCOUNTS" },
+                search:   { type: "STRING", nullable: true, description: "Free-text words to match in the description" }
+              } },
+    error:  { type: "STRING", nullable: true, description: "Short error message if the message is neither a transaction, a question about them, nor an undo; else null" }
   },
-  required: ["error"]
+  required: ["intent", "error"]
 };
 
 // ── webhook entry point (Router: ROUTES_WRITE_.telegram) ──────────────────────
@@ -101,7 +127,11 @@ function tg_handleUpdate_(update) {
   }
 
   const text = String(msg.text).trim();
-  if (text.charAt(0) === "/") { tg_send_(chat, TG_HELP_, replyTo); return; }
+  if (text.charAt(0) === "/") {
+    if (text.slice(1).split(/[\s@]/)[0] === "undo") tg_undo_(chat, replyTo);
+    else tg_send_(chat, TG_HELP_, replyTo);
+    return;
+  }
 
   let parsed;
   try {
@@ -115,25 +145,136 @@ function tg_handleUpdate_(update) {
     return;
   }
 
-  const args = {
-    ID:           "tg-" + update.update_id,            // idempotent under Telegram retries
-    Date:         parsed.Date,
-    Category:     parsed.Category,
-    Description:  parsed.Description,
-    Account:      parsed.Account,
-    Amount:       parsed.Amount,
-    ExchangeRate: parsed.ExchangeRate,
-    ToAccount:    parsed.ToAccount,
-    ToAmount:     parsed.ToAmount
-  };
-  try {
-    // Transfers were never possible over the old bare-body POST (it always hit
-    // api_createTransaction, which rejects Transfer categories). Route them now.
-    const res = parsed.ToAccount ? api_createTransfer(args) : api_createTransaction(args);
-    tg_send_(chat, tg_receipt_(parsed, res.status), replyTo);
-  } catch (err) {
-    tg_send_(chat, "❌ *Failed to add transaction*\n› " + tg_msg_(err), replyTo);
+  if (parsed.intent === "undo")  { tg_undo_(chat, replyTo); return; }
+  if (parsed.intent === "query") {
+    try { tg_send_(chat, tg_queryReply_(parsed.query), replyTo); }
+    catch (err) { tg_send_(chat, "❌ *Query failed*\n› " + tg_msg_(err), replyTo); }
+    return;
   }
+
+  const items = parsed.items || [];
+  if (!items.length) {
+    tg_send_(chat, "❌ *Failed to add transaction*\n› Nothing to log.", replyTo);
+    return;
+  }
+  tg_logItems_(chat, update.update_id, items, replyTo);
+}
+
+// ── log (one or many transactions per message) ────────────────────────────────
+/**
+ * Create every parsed item, reply once, and remember the IDs for undo. A failing
+ * item reports itself and the rest still land — a five-line message shouldn't be
+ * lost because line three named an account that doesn't exist.
+ *
+ * ponytail: one service call per item. There is no bulk create, and a message
+ * carries a handful of transactions, not hundreds.
+ */
+function tg_logItems_(chat, updateId, items, replyTo) {
+  const out = [], ids = [];
+  items.forEach(function (p, i) {
+    const args = {
+      ID:           "tg-" + updateId + "-" + i,        // idempotent under Telegram retries
+      Date:         p.Date,
+      Category:     p.Category,
+      Description:  p.Description,
+      Account:      p.Account,
+      Amount:       p.Amount,
+      ExchangeRate: p.ExchangeRate,
+      ToAccount:    p.ToAccount,
+      ToAmount:     p.ToAmount
+    };
+    try {
+      // Transfers were never possible over the old bare-body POST (it always hit
+      // api_createTransaction, which rejects Transfer categories). Route them now.
+      const res = p.ToAccount ? api_createTransfer(args) : api_createTransaction(args);
+      out.push(tg_receipt_(p, res.status));
+      ids.push(args.ID);
+    } catch (err) {
+      out.push("❌ *Failed to add transaction*\n› " + tg_msg_(err));
+    }
+  });
+  // Only the rows that actually landed, so undo can't chase a failed item.
+  if (ids.length) PropertiesService.getScriptProperties().setProperty(TG_LAST_IDS_, JSON.stringify(ids));
+  tg_send_(chat, out.join("\n\n"), replyTo);
+}
+
+// ── undo (the last logged message) ────────────────────────────────────────────
+/**
+ * Delete the rows written by the previous message. One level deep, and the
+ * pointer is cleared afterwards so a second "undo" can't delete someone else's
+ * row once these IDs are gone. Script Properties, not CacheService: an undo an
+ * hour later must still work.
+ */
+function tg_undo_(chat, replyTo) {
+  const props = PropertiesService.getScriptProperties();
+  let ids = [];
+  try { ids = JSON.parse(props.getProperty(TG_LAST_IDS_) || "[]"); } catch (err) { ids = []; }
+  if (!ids.length) { tg_send_(chat, "✦ *Nothing to undo.*", replyTo); return; }
+
+  const out = ["↩︎ *Removed*"];
+  ids.forEach(function (id) {
+    try {
+      const t = api_deleteTransaction({ ID: id }).transaction;
+      out.push("› _" + t.Category + "_ " + tg_php_(t["Amount (PHP)"] || t.Amount));
+    } catch (err) {
+      out.push("› ❌ " + tg_msg_(err));
+    }
+  });
+  props.deleteProperty(TG_LAST_IDS_);
+  tg_send_(chat, out.join("\n"), replyTo);
+}
+
+// ── query / read-back ─────────────────────────────────────────────────────────
+/** Answer a "how much on X" message from the ledger. */
+function tg_queryReply_(query) {
+  const args = tg_queryFilters_(query);
+  const res  = api_listTransactions(args);
+  const label = [args.category, args.account, args.search, args.month || "all time"]
+    .filter(Boolean).join(" · ");
+  return "🔎 *" + label + "*\n" + tg_querySummary_(res.transactions, res.total);
+}
+
+/** Parsed query object → api_listTransactions args. */
+function tg_queryFilters_(query) {
+  const q = query || {};
+  // ponytail: one page. 500 rows is more than any single month; paginate only if
+  // an all-time query ever needs a total that big to be exact.
+  const args = { limit: 500 };
+  if (q.month)    args.month    = tg_monthKey_(q.month);
+  if (q.category) args.category = q.category;
+  if (q.account)  args.account  = q.account;
+  if (q.search)   args.search   = q.search;
+  return args;
+}
+
+/** "2026-08" / "2026-Aug" → the sheet's derived Month key ("2026-Aug"). */
+function tg_monthKey_(s) {
+  const d = bud_parseMonth_(s);   // tolerant of both forms; falls back to today
+  return d.getFullYear() + "-" +
+    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()];
+}
+
+/**
+ * Rows → the reply body: total, count, and the most recent few. Amounts are
+ * summed absolute (the ledger signs expenses and income differently, and a
+ * filtered query is always "how much moved through this").
+ */
+function tg_querySummary_(rows, total) {
+  rows = rows || [];
+  const n = (total === undefined) ? rows.length : total;
+  if (!n) return "No matching transactions.";
+  const sum = rows.reduce(function (s, r) { return s + Math.abs(Number(r["Amount (PHP)"]) || 0); }, 0);
+  const lines = rows.slice(0, 5).map(function (r) {
+    return "› _" + String(r.Date).slice(0, 10) + "_ " + r.Category +
+           (r.Description ? " — " + r.Description : "") +
+           " `" + tg_php_(r["Amount (PHP)"]) + "`";
+  });
+  if (n > lines.length) lines.push("› _…" + (n - lines.length) + " more_");
+  return "*" + tg_php_(sum) + "* across " + n + " tx\n" + lines.join("\n");
+}
+
+function tg_php_(n) {
+  return "₱" + Math.abs(Number(n) || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 // ── Gemini parse ──────────────────────────────────────────────────────────────
@@ -141,20 +282,42 @@ function tg_handleUpdate_(update) {
 function tg_parse_(text, unixDate) {
   const key = cfgGeminiKey_();
   if (!key) throw new Error("GEMINI_API_KEY is not set.");
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: tg_prompt_(unixDate) }] },
+    contents: [{ role: "user", parts: [{ text: text }] }],
+    generationConfig: { temperature: 0, responseMimeType: "application/json",
+                        responseSchema: TG_SCHEMA_ }
+  });
+  return tg_tryModels_(TG_MODELS_, function (model) {
+    return JSON.parse(tg_generate_(model, key, payload));
+  });
+}
+
+/**
+ * Call `fn` with each model until one returns; the last failure surfaces if none do.
+ * ponytail: retries the whole call, so a 503 on the primary just costs one extra
+ * round trip. No per-status logic — a bad response is a bad response either way.
+ */
+function tg_tryModels_(models, fn) {
+  for (var i = 0; i < models.length; i++) {
+    try { return fn(models[i]); }
+    catch (err) {
+      console.warn("gemini " + models[i] + " failed: " + tg_msg_(err));
+      if (i === models.length - 1) throw err;
+    }
+  }
+}
+
+/** One generateContent call → the model's raw text. Throws on non-200/empty. */
+function tg_generate_(model, key, payload) {
   const res = UrlFetchApp.fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/" + TG_MODEL_ +
+    "https://generativelanguage.googleapis.com/v1beta/models/" + model +
       ":generateContent?key=" + encodeURIComponent(key),
     { method: "post", contentType: "application/json", muteHttpExceptions: true,
-      payload: JSON.stringify({
-        systemInstruction: { parts: [{ text: tg_prompt_(unixDate) }] },
-        contents: [{ role: "user", parts: [{ text: text }] }],
-        generationConfig: { temperature: 0, responseMimeType: "application/json",
-                            responseSchema: TG_SCHEMA_ }
-      })
-    });
+      payload: payload });
   if (res.getResponseCode() !== 200)
     throw new Error("Gemini " + res.getResponseCode() + ": " + res.getContentText().slice(0, 200));
-  return JSON.parse(tg_geminiText_(JSON.parse(res.getContentText())));
+  return tg_geminiText_(JSON.parse(res.getContentText()));
 }
 
 /** Pull the model's text out of a generateContent response. Throws if it's empty. */
@@ -181,11 +344,20 @@ function tg_prompt_(unixDate) {
     .join("\n");
 
   return [
-    "You are a financial transaction parser. Extract structured data from the user's message.",
+    "You are a personal finance assistant. Classify the user's message and extract structured data.",
     "",
     'VALID CATEGORIES ("Name" (Type) - Description):', cats,
     "",
     'VALID ACCOUNTS ("Name" (Currency)):', accts,
+    "",
+    "INTENT:",
+    'A. "log" — the message records money moving. Put ONE entry in items per transaction;',
+    "   a message may describe several (e.g. one per line). Leave query null.",
+    'B. "query" — the message asks about transactions already recorded ("how much on food",',
+    '   "what did I spend at bpi"). Fill query with only the filters the message implies,',
+    "   and leave items empty.",
+    'C. "undo" — the message asks to take back / cancel / delete what was just logged.',
+    "   Leave items and query null.",
     "",
     "RULES:",
     "1. Date must be ISO yyyy-MM-dd. If no date is mentioned, use: " + today,
@@ -195,7 +367,8 @@ function tg_prompt_(unixDate) {
     "5. For a transfer between accounts: use a Transfer-type category and set BOTH ToAccount and ToAmount",
     "6. ExchangeRate is PHP per 1 USD — only set it if explicitly mentioned, otherwise null",
     "7. If it is not a transfer, ToAccount and ToAmount must be null",
-    "8. If the message is not a financial transaction, set error to a short reason and leave the rest null"
+    '8. query.month is yyyy-MM; "this month" is ' + today.slice(0, 7) + ", and no period mentioned means null (all time)",
+    "9. If the message is none of the three intents, set error to a short reason and leave the rest null"
   ].join("\n");
 }
 
