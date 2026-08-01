@@ -1,13 +1,14 @@
 # FinanceTracker — System Overhaul Plan
 
-Status: **Phase 1 verified + Phase 2 implemented** (2026-06-25). Phase 1: migration
-done owner-side; service layer + `?action=` JSON API; owner ran `test_all`/
-`test_balanceReconciliation` (all 26 accounts reconcile). Phase 2: responsive
-`HtmlService` SPA (`WebApp.gs` + `Index/Stylesheet/App.html`) served on bare GET,
-talking to the service layer via `google.script.run` — see `CLAUDE.md` "Web App
-frontend (Phase 2)" + the 2026-06-25 MEMORY note. **Pending:** owner `npm run push`
-+ redeploy same `deploymentId`. **Next: Phase 3** (auth cutover + bot upgrades).
-All five open items resolved (§8).
+Status: **all three phases shipped and live** (v1.3.4, 2026-08-02). Phase 1: migration
+done owner-side (incl. `setupAccountColor`); service layer + `?action=` JSON API; owner
+ran `test_all`/`test_balanceReconciliation` (all 26 accounts reconcile). Phase 2:
+responsive `HtmlService` SPA (`WebApp.gs` + `Index/Stylesheet/App.html`) served on bare
+GET, talking to the service layer via `google.script.run` — see `CLAUDE.md` "Web App
+frontend (Phase 2)". Phase 3: n8n retired, bot lives in `Telegram.gs` behind a Cloudflare
+Worker, `ENFORCE_TOKEN=true`, multi-transaction/query/undo smoke-tested in production —
+see §6 for what was deliberately dropped. All five open items resolved (§8). Nothing in
+this plan is outstanding; it is kept as the design record.
 
 ## 1. Goal
 
