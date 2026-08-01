@@ -1391,9 +1391,10 @@ function openModal(node){
     }
   };
 }
-// Escape closes the modal — unless an open combo dropdown should eat it first.
+// Escape closes the modal. An open combo dropdown eats the key before it gets here
+// (comboEl's keydown stops propagation), so there's nothing to test for at this level.
 document.addEventListener('keydown',function(e){
-  if(e.key==='Escape' && !$('#modalRoot').hidden && !(e.target.closest && e.target.closest('.combo.open'))) closeModal();
+  if(e.key==='Escape' && !$('#modalRoot').hidden) closeModal();
 });
 function closeModal(){
   var root=$('#modalRoot'); root.hidden=true; root.style.top=''; root.style.height='';
@@ -1487,7 +1488,9 @@ function comboEl(options,value,opts){
     if(e.key==='ArrowDown'){ e.preventDefault(); if(list.hidden){open();} else {active=Math.min(filtered.length-1,active+1);highlight();scrollActive();} }
     else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(0,active-1); highlight(); scrollActive(); }
     else if(e.key==='Enter'){ if(!list.hidden&&active>=0&&filtered[active]){ e.preventDefault(); choose(filtered[active]); } }
-    else if(e.key==='Escape'){ close(); input.value=_label; }
+    // Escape dismisses the dropdown only — swallow it so the document handler below
+    // doesn't also close the whole modal. With the list already shut it bubbles as usual.
+    else if(e.key==='Escape'){ if(!list.hidden) e.stopPropagation(); close(); input.value=_label; }
   };
   // Strict picker: on blur, snap the text back to the last valid label.
   input.onblur=function(){ setTimeout(function(){ if(input.value!==_label)input.value=_label; close(); },120); };
