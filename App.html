@@ -1391,9 +1391,10 @@ function openModal(node){
     }
   };
 }
-// Escape closes the modal — unless an open combo dropdown should eat it first.
+// Escape closes the modal. An open combo dropdown eats the key before it gets here
+// (comboEl's keydown stops propagation), so there's nothing to test for at this level.
 document.addEventListener('keydown',function(e){
-  if(e.key==='Escape' && !$('#modalRoot').hidden && !(e.target.closest && e.target.closest('.combo.open'))) closeModal();
+  if(e.key==='Escape' && !$('#modalRoot').hidden) closeModal();
 });
 function closeModal(){
   var root=$('#modalRoot'); root.hidden=true; root.style.top=''; root.style.height='';
@@ -1487,7 +1488,9 @@ function comboEl(options,value,opts){
     if(e.key==='ArrowDown'){ e.preventDefault(); if(list.hidden){open();} else {active=Math.min(filtered.length-1,active+1);highlight();scrollActive();} }
     else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(0,active-1); highlight(); scrollActive(); }
     else if(e.key==='Enter'){ if(!list.hidden&&active>=0&&filtered[active]){ e.preventDefault(); choose(filtered[active]); } }
-    else if(e.key==='Escape'){ close(); input.value=_label; }
+    // Escape dismisses the dropdown only — swallow it so the document handler below
+    // doesn't also close the whole modal. With the list already shut it bubbles as usual.
+    else if(e.key==='Escape'){ if(!list.hidden) e.stopPropagation(); close(); input.value=_label; }
   };
   // Strict picker: on blur, snap the text back to the last valid label.
   input.onblur=function(){ setTimeout(function(){ if(input.value!==_label)input.value=_label; close(); },120); };
@@ -1505,6 +1508,20 @@ function comboEl(options,value,opts){
 function prefGet(k){ try{ return localStorage.getItem('ft.'+k)||''; }catch(e){ return ''; } }
 function prefSet(k,v){ try{ if(v) localStorage.setItem('ft.'+k,String(v)); }catch(e){} }
 function focusCombo(c){ var i=c&&c.querySelector('.combo-input'); if(i){ i.focus(); i.select(); } }
+// Amount for a form field: absolute value, blank when there's nothing usable
+// (a carried-over draft may hold '' or a half-typed number).
+function amtField(v){ return (v===''||v==null||isNaN(v))?'':Math.abs(v); }
+
+/* —— transaction ⇄ transfer switcher (new rows only) ——————————————————————
+ * The FAB is the only add path on most screens, so a transfer shouldn't mean a detour
+ * to the Transactions screen: this swaps the modal in place, carrying the shared fields.
+ * Edits are excluded — an existing row's shape is fixed. */
+function typeToggleEl(mode,onSwitch){
+  var seg=function(m,label){ return '<button type="button" aria-pressed="'+(m===mode)+'"'+(m===mode?' class="on"':'')+'>'+label+'</button>'; };
+  var w=el('div','seg-toggle', seg('tx','Transaction')+seg('xfer','Transfer'));
+  w.children[mode==='tx'?1:0].onclick=onSwitch;   // only the inactive half does anything
+  return w;
+}
 
 /* —— add / edit a normal transaction —— */
 function openTxModal(t){
@@ -1517,13 +1534,14 @@ function openTxModal(t){
     return String((S.boot.categories[c]||{}).Type)!=='Transfer';
   }).sort();
   var accs=acctOptions();
-  // default account for a brand-new tx = last one used (if it still exists)
-  var defAcc=(!isEdit&&!t) ? (accs.some(function(a){return (a.value||a)===prefGet('lastAcct');})?prefGet('lastAcct'):'') : '';
+  // default account for any new tx = last one used (if it still exists); a draft carried
+  // in from the transfer form may have no account yet, so this backfills that too.
+  var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===prefGet('lastAcct');})?prefGet('lastAcct'):'');
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
   var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
-  var fAcc=comboEl(accs, t?t.Account:defAcc, {placeholder:'Select account'});
-  var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
+  var fAcc=comboEl(accs, (t&&t.Account)||defAcc, {placeholder:'Select account'});
+  var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
   var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
   // A stamped rate belongs to the old account's currency — reassigning to a different
@@ -1532,6 +1550,10 @@ function openTxModal(t){
   fAcc.onchange=function(){ if(acctCurrency(fAcc.value)!==origCur) fFx.value=''; };
 
   var body=el('div');
+  // Category is dropped on purpose: transfer categories are a disjoint set.
+  if(!isEdit) body.appendChild(typeToggleEl('tx',function(){
+    openTransferModal({Date:fDate.value,Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
+  }));
   body.appendChild(fieldEl('Date', fDate));
   body.appendChild(fieldEl('Category', fCat));
   body.appendChild(fieldEl('Account', fAcc));
@@ -1575,8 +1597,9 @@ function openTxModal(t){
     foot.unshift(del);
   }
   openModal(modalShell(isEdit?'Edit transaction':'Add transaction', body, foot));
-  // For a new tx, jump straight into Category so you can type/filter without a click.
-  if(!isEdit&&!t) focusCombo(fCat);
+  // Jump straight into Category so you can type/filter without a click — but only when
+  // it's empty, which also skips the reopen-after-failure path (that one keeps its value).
+  if(!isEdit&&!fCat.value) focusCombo(fCat);
 }
 
 /* —— transfer —— */
@@ -1592,11 +1615,14 @@ function openTransferModal(t){
   var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], t?t.Category:'', {placeholder:'Select category'});
   var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
   var fTo=comboEl(accs, t?t.ToAccount:'', {placeholder:'To account'});
-  var fAmt=inputEl('number', t?Math.abs(Number(t.Amount)):'', '0.00'); fAmt.step='0.01';
-  var fToAmt=inputEl('number', t&&t.ToAmount?Math.abs(Number(t.ToAmount)):'', 'same as amount'); fToAmt.step='0.01';
+  var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
+  var fToAmt=inputEl('number', t?amtField(t.ToAmount):'', 'same as amount'); fToAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
 
   var body=el('div');
+  if(!isEdit) body.appendChild(typeToggleEl('xfer',function(){
+    openTxModal({Date:fDate.value,Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
+  }));
   body.appendChild(fieldEl('Date', fDate));
   body.appendChild(fieldEl('Category', fCat));
   var rowAcc=el('div','field-row');
@@ -1638,7 +1664,9 @@ function openTransferModal(t){
     foot.unshift(del);
   }
   openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, foot));
-  if(!isEdit&&!t) focusCombo(fFrom);
+  // Fresh transfer starts at From; a draft switched over from the tx form already has one,
+  // so it starts at the Category it had to drop.
+  if(!isEdit&&!fCat.value) focusCombo(t?fCat:fFrom);
 }
 
 function confirmDelete(t){
