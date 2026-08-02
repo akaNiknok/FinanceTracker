@@ -518,3 +518,79 @@ function cleanupSyntheticInterest() {
   Logger.log("Deleting %s row(s): %s ... %s", ids.length, ids[0], ids[ids.length - 1]);
   Logger.log(JSON.stringify(api_bulkDeleteTransactions({ ids: ids })));
 }
+
+// ── One-shot: merge two accounts into one ─────────────────────────────────────
+/**
+ * 2026-08-03. "Maya" and "Maya Savings" are one wallet in practice; owner wants the
+ * history combined retroactively. `Name` is the immutable FK the ledger points at,
+ * so a merge is: rewrite every Account/ToAccount reference, fold the Starting
+ * Balance into the survivor, drop the absorbed Accounts row. Everything else is
+ * derived — `Current Balance`, `Amount (PHP)`, budget actuals and the Dashboard all
+ * refollow on their own.
+ *
+ * Transfers BETWEEN the two accounts are DELETED, not rewritten: after the merge
+ * they'd be self-transfers (net zero) that still draw down their segment's budget.
+ * That does change budget actuals for the months they sat in — which is the point.
+ *
+ * Transactions is backed up first and the deleted account row is logged verbatim.
+ * Run once from the editor; a rerun is a no-op (the source account is gone).
+ */
+const MIG_MERGE_FROM = "Maya Savings"; // absorbed, then deleted
+const MIG_MERGE_INTO = "Maya";         // survives, keeps its own rate/notes/color
+function mergeAccounts() {
+  const accts = su_readObjects_(SHEET_ACCOUNTS);
+  const from = accts.filter(function (a) { return a.Name === MIG_MERGE_FROM; })[0];
+  const into = accts.filter(function (a) { return a.Name === MIG_MERGE_INTO; })[0];
+  if (!from) { Logger.log("No account named '%s' — already merged?", MIG_MERGE_FROM); return; }
+  if (!into) throw new Error("No account named: " + MIG_MERGE_INTO);
+  // Starting Balances are summed as-is, so a currency mismatch (or the liability
+  // positive-owed convention meeting an asset) would silently corrupt the total.
+  if (String(from.Currency) !== String(into.Currency))
+    throw new Error("Currency mismatch: " + from.Currency + " vs " + into.Currency);
+  if (String(from.Type) !== String(into.Type))
+    throw new Error("Type mismatch: " + from.Type + " vs " + into.Type);
+
+  Logger.log("Backup: %s", mig_backupSheet_(mig_getTxSheet_()).getName());
+  const part = mig_mergePartition_(su_readObjects_(SHEET_TX), MIG_MERGE_FROM, MIG_MERGE_INTO);
+
+  if (part.self.length)
+    Logger.log("Deleted %s transfer(s) between the two: %s", part.self.length,
+               JSON.stringify(api_bulkDeleteTransactions({ ids: part.self })));
+  // Reassigning Account re-stamps ExchangeRate from the target's currency (blank for
+  // PHP) — correct here, and the only reason both must share a currency.
+  if (part.src.length)
+    Logger.log("Account → %s: %s", MIG_MERGE_INTO,
+               JSON.stringify(api_bulkUpdateTransactions({ ids: part.src, patch: { Account: MIG_MERGE_INTO } })));
+  if (part.dst.length)
+    Logger.log("ToAccount → %s: %s", MIG_MERGE_INTO,
+               JSON.stringify(api_bulkUpdateTransactions({ ids: part.dst, patch: { ToAccount: MIG_MERGE_INTO } })));
+
+  const start = acct_num_(into["Starting Balance"]) + acct_num_(from["Starting Balance"]);
+  api_updateAccount({ Name: MIG_MERGE_INTO, "Starting Balance": start });
+
+  Logger.log("Deleting Accounts row %s (keep this to restore): %s", from.__row, JSON.stringify(tx_clean_(from)));
+  su_sheet_(SHEET_ACCOUNTS).deleteRow(from.__row);
+  su_invalidateMemo_(SHEET_ACCOUNTS);
+  SpreadsheetApp.flush();
+  cache_bumpVersion_();
+  Logger.log("== merge done: %s absorbed into %s. Starting Balance now %s. Run test_balanceReconciliation. ==",
+             MIG_MERGE_FROM, MIG_MERGE_INTO, start);
+}
+
+/**
+ * Split the ledger for a merge: transfers between the pair (dead after the merge),
+ * rows sourced from the absorbed account, rows destined for it. A row with BOTH
+ * sides on the pair lands in `self` only, so it is never both deleted and patched.
+ */
+function mig_mergePartition_(rows, fromName, intoName) {
+  const pair = {}; pair[fromName] = true; pair[intoName] = true;
+  const out = { self: [], src: [], dst: [] };
+  rows.forEach(function (r) {
+    const id = String(r.ID);
+    const to = (r.ToAccount === null || r.ToAccount === undefined) ? "" : String(r.ToAccount);
+    if (to !== "" && pair[String(r.Account)] && pair[to]) { out.self.push(id); return; }
+    if (String(r.Account) === fromName) out.src.push(id);
+    if (to === fromName) out.dst.push(id);
+  });
+  return out;
+}

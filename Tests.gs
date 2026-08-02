@@ -8,8 +8,8 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_parsePeriod",
-                  "test_telegram", "test_telegramQuery"];
+                  "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
+                  "test_parseDate", "test_parsePeriod", "test_telegram", "test_telegramQuery"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -109,6 +109,27 @@ function test_interestNet() {
     if (got !== c[2]) throw new Error("interest_net_ FAIL: (" + c[0] + "," + c[1] + ") → " + got + " want " + c[2]);
   });
   Logger.log("test_interestNet OK");
+}
+
+/** mig_mergePartition_ — an account merge must not delete and patch the same row. */
+function test_mergePartition() {
+  const rows = [
+    { ID: 1, Account: "Maya Savings", ToAccount: "" },        // src
+    { ID: 2, Account: "Maya", ToAccount: "" },                // untouched (survivor)
+    { ID: 3, Account: "Maya", ToAccount: "Maya Savings" },    // self (both sides)
+    { ID: 4, Account: "Maya Savings", ToAccount: "Maya" },    // self (other direction)
+    { ID: 5, Account: "BPI", ToAccount: "Maya Savings" },     // dst
+    { ID: 6, Account: "Maya Savings", ToAccount: "BPI" },     // src (transfer out)
+    { ID: 7, Account: "BPI", ToAccount: null },               // untouched, null ToAccount
+    { ID: 8, Account: "Maya Savings", ToAccount: "Maya Savings" } // legacy junk → self, not both
+  ];
+  const got = mig_mergePartition_(rows, "Maya Savings", "Maya");
+  const want = { self: ["3", "4", "8"], src: ["1", "6"], dst: ["5"] };
+  ["self", "src", "dst"].forEach(function (k) {
+    if (got[k].join() !== want[k].join())
+      throw new Error("mig_mergePartition_ FAIL " + k + ": " + got[k].join() + " want " + want[k].join());
+  });
+  Logger.log("test_mergePartition OK");
 }
 
 /** acct_isInvestment_ — Dashboard tile + Investments screen must agree on this predicate. */
