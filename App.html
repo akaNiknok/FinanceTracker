@@ -144,7 +144,9 @@ function buildMonthList(){
     var months=(now.getFullYear()-min.getFullYear())*12+(now.getMonth()-min.getMonth())+1;
     count=Math.min(120,Math.max(15,months));
   }
-  for(var i=0;i<count;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
+  // Starts at i=-1 (NEXT month) so income booked forward via Period — salary paid on
+  // the 29th for the following month — is both selectable and viewable.
+  for(var i=-1;i<count;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
   return out;
 }
 // "2026-Jun" → Date(first of month); null on bad input.
@@ -1420,6 +1422,21 @@ function fieldEl(label,inputNode,hint){
 }
 function inputEl(type,value,ph){var i=el('input');i.type=type||'text';if(value!=null)i.value=value;if(ph)i.placeholder=ph;return i;}
 
+/* —— reporting-period override (shared by the tx + transfer modals) ————————
+ * Blank = the usual case: Month derives from Date. Setting it books the row into a
+ * different month for every month-keyed report (cash flow, budgets, filters) while
+ * Date keeps the real cash movement — for salary that lands a day or two early.
+ */
+function periodEl(t){
+  return comboEl([{value:'',label:'(from date)'}].concat(monthOptions()), (t&&t.Period)||'');
+}
+function periodRowEl(fDate,fPeriod){
+  var row=el('div','field-row');
+  row.appendChild(fieldEl('Date', fDate));
+  row.appendChild(fieldEl('Reports in', fPeriod, "blank = the date's own month"));
+  return row;
+}
+
 /* —— fuzzy combobox (searchable replacement for <select>) ——————————————————
  * comboEl(options, value, opts) returns a wrapper element that exposes a `.value`
  * (selected option value) and `.onchange` handler — drop-in for selectEl's API.
@@ -1539,6 +1556,7 @@ function openTxModal(t){
   var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===prefGet('lastAcct');})?prefGet('lastAcct'):'');
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fPeriod=periodEl(t);
   var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
   var fAcc=comboEl(accs, (t&&t.Account)||defAcc, {placeholder:'Select account'});
   var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
@@ -1552,9 +1570,9 @@ function openTxModal(t){
   var body=el('div');
   // Category is dropped on purpose: transfer categories are a disjoint set.
   if(!isEdit) body.appendChild(typeToggleEl('tx',function(){
-    openTransferModal({Date:fDate.value,Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
+    openTransferModal({Date:fDate.value,Period:fPeriod.value,Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
   }));
-  body.appendChild(fieldEl('Date', fDate));
+  body.appendChild(periodRowEl(fDate, fPeriod));
   body.appendChild(fieldEl('Category', fCat));
   body.appendChild(fieldEl('Account', fAcc));
   var rowAmt=el('div','field-row');
@@ -1569,6 +1587,7 @@ function openTxModal(t){
       Date:fDate.value, Category:fCat.value, Account:fAcc.value,
       Amount:parseFloat(fAmt.value), Description:fDesc.value
     };
+    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
     if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
     else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
@@ -1612,6 +1631,7 @@ function openTransferModal(t){
   var accs=acctOptions();
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fPeriod=periodEl(t);
   var defCat=xferCats.indexOf('Transfer: Internal')>=0?'Transfer: Internal':'';
   var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], (t&&t.Category)||defCat, {placeholder:'Select category'});
   var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
@@ -1622,9 +1642,9 @@ function openTransferModal(t){
 
   var body=el('div');
   if(!isEdit) body.appendChild(typeToggleEl('xfer',function(){
-    openTxModal({Date:fDate.value,Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
+    openTxModal({Date:fDate.value,Period:fPeriod.value,Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
   }));
-  body.appendChild(fieldEl('Date', fDate));
+  body.appendChild(periodRowEl(fDate, fPeriod));
   body.appendChild(fieldEl('Category', fCat));
   var rowAcc=el('div','field-row');
   rowAcc.appendChild(fieldEl('From', fFrom));
@@ -1643,6 +1663,7 @@ function openTransferModal(t){
     if(isNaN(amount)){toast('Enter an amount','err');return;}
     var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
+    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
     if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
     if(isEdit){
       save.disabled=true; save.textContent='Saving…';

@@ -22,7 +22,12 @@
 // ── Config (review these) ─────────────────────────────────────────────────────
 const MIG_TX_SHEET    = "Transactions";
 const MIG_ID_HEADER   = "ID";
-const MIG_MONTH_FORMAT = "yyyy-mm"; // e.g. "yyyy-mm" → 2026-06 · "mmm-yyyy" → Jun-2026 · "mmmm" → June
+// MUST stay "yyyy-mmm" (→ 2026-Jun): dash_currentMonth_, the UI month keys and every
+// Month filter compare against this exact shape. Changing it silently empties every
+// month-keyed report.
+const MIG_MONTH_FORMAT = "yyyy-mmm";
+const MIG_PERIOD_HEADER = "Period"; // optional reporting-month override (setupTxPeriod)
+const MIG_PERIOD_TEXT_FORMAT = "yyyy-MMM"; // Utilities.formatDate equivalent of MIG_MONTH_FORMAT
 
 // AccountType migration (setupAccountType): derive Accounts.Type from Subtype.
 const MIG_ACCT_SHEET     = "Accounts";
@@ -107,7 +112,7 @@ function applyDerivationFormulas() {
 
   // Categories: A=Category, B=Type, C=Segment.  Accounts: A=Name, B=Currency.
   const formulas = {
-    "Month":        '=ARRAYFORMULA(IF(LEN(' + d + '2:' + d + '), TEXT(' + d + '2:' + d + ',"' + MIG_MONTH_FORMAT + '"), ""))',
+    "Month":        mig_monthFormula_(h),
     "Type":         '=ARRAYFORMULA(IF(LEN(' + cat + '2:' + cat + '), IFERROR(VLOOKUP(' + cat + '2:' + cat + ', Categories!$A:$C, 2, FALSE), ""), ""))',
     "Segment":      '=ARRAYFORMULA(IF(LEN(' + cat + '2:' + cat + '), IFERROR(VLOOKUP(' + cat + '2:' + cat + ', Categories!$A:$C, 3, FALSE), ""), ""))',
     "Currency":     '=ARRAYFORMULA(IF(LEN(' + acc + '2:' + acc + '), IFERROR(VLOOKUP(' + acc + '2:' + acc + ', Accounts!$A:$B, 2, FALSE), ""), ""))',
@@ -370,7 +375,76 @@ function setupAccountColor() {
   Logger.log("Added '%s' column at position %s. Set a hex color per account (or use the Web App).", MIG_ACCT_COLOR_HEADER, lastCol + 1);
 }
 
+// ── 7. Period override column (run once) ──────────────────────────────────────
+// Adds the optional "Period" input column and makes Month prefer it. Point: income
+// that arrives in the wrong calendar month (salary paid early, on the 31st) can be
+// reported under the month it belongs to while Date keeps the real cash movement —
+// so balances, reconciliation and daily interest stay honest. Everything month-keyed
+// (cash flow, budget actuals, spendBySegment, the Transactions filter) reads Month,
+// so no service-layer change is needed. Idempotent.
+function setupTxPeriod() {
+  const sheet = mig_getTxSheet_();
+  let h = mig_headerMap_(sheet);
+  if (!h["Date"] || !h["Month"])
+    throw new Error("Transactions needs 'Date' and 'Month' — run setupMigration()/applyDerivationFormulas() first.");
+
+  if (!h[MIG_PERIOD_HEADER]) {
+    const lastCol = sheet.getLastColumn();
+    if (sheet.getMaxColumns() === lastCol) sheet.insertColumnAfter(lastCol);
+    sheet.getRange(1, lastCol + 1).setValue(MIG_PERIOD_HEADER);
+    h = mig_headerMap_(sheet);
+    Logger.log("Added '%s' column at position %s.", MIG_PERIOD_HEADER, h[MIG_PERIOD_HEADER]);
+  } else {
+    Logger.log("'%s' already present at position %s.", MIG_PERIOD_HEADER, h[MIG_PERIOD_HEADER]);
+  }
+
+  // Force the column to PLAIN TEXT. Without it Sheets coerces "2026-Aug" — written by
+  // the API or typed by hand — into a date, and Month spills the raw serial (46235)
+  // because LEN() still sees 5 characters. Formatting the column is the fix at source;
+  // both write paths inherit it.
+  const pCol = h[MIG_PERIOD_HEADER];
+  sheet.getRange(2, pCol, Math.max(sheet.getMaxRows() - 1, 1), 1).setNumberFormat("@");
+  Logger.log("Set '%s' column format to plain text.", MIG_PERIOD_HEADER);
+
+  const lastRow = sheet.getLastRow();
+  // Repair rows written before the format was applied: a coerced Date becomes its
+  // canonical yyyy-MMM text again. Anything already text is left alone.
+  if (lastRow >= 2) {
+    const range = sheet.getRange(2, pCol, lastRow - 1, 1);
+    const vals = range.getValues();
+    let fixed = 0;
+    vals.forEach(function (r) {
+      if (r[0] instanceof Date) {
+        r[0] = Utilities.formatDate(r[0], Session.getScriptTimeZone(), MIG_PERIOD_TEXT_FORMAT);
+        fixed++;
+      }
+    });
+    if (fixed) { range.setValues(vals); Logger.log("Repaired %s date-coerced Period cell(s).", fixed); }
+  }
+
+  const formula = mig_monthFormula_(h);
+  if (lastRow >= 3) sheet.getRange(3, h["Month"], lastRow - 2, 1).clearContent(); // let the array spill
+  sheet.getRange(2, h["Month"]).setFormula(formula);
+  Logger.log("Month ← %s", formula);
+  Logger.log("== setupTxPeriod done. Spot-check Month, then redeploy the SAME deploymentId. ==");
+}
+
 // ── private helpers (trailing underscore = not web-exposed) ────────────────────
+/**
+ * Month = the Period override when a row sets one, else the row's own Date month.
+ * Shared by applyDerivationFormulas + setupTxPeriod so the two can't drift; degrades
+ * to the plain Date derivation on a workbook without the Period column.
+ */
+function mig_monthFormula_(h) {
+  const d = mig_colLetter_(h["Date"]);
+  const own = 'TEXT(' + d + '2:' + d + ',"' + MIG_MONTH_FORMAT + '")';
+  const pCol = h[MIG_PERIOD_HEADER] ? mig_colLetter_(h[MIG_PERIOD_HEADER]) : null;
+  const val = pCol
+    ? 'IF(LEN(' + pCol + '2:' + pCol + '), ' + pCol + '2:' + pCol + ', ' + own + ')'
+    : own;
+  return '=ARRAYFORMULA(IF(LEN(' + d + '2:' + d + '), ' + val + ', ""))';
+}
+
 /** Apply a validation rule to a whole column (row 2 → last allocated row). */
 function mig_applyValidationToColumn_(sheet, col, rule) {
   const last = sheet.getMaxRows();

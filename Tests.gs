@@ -8,8 +8,8 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_telegram",
-                  "test_telegramQuery"];
+                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_parsePeriod",
+                  "test_telegram", "test_telegramQuery"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -55,6 +55,30 @@ function test_assertShape() {
     if (!threw) throw new Error("tx_assertShape_ FAIL: expected reject for " + JSON.stringify(c));
   });
   Logger.log("test_assertShape OK");
+}
+
+/**
+ * tx_parsePeriod_ — normalizes the reporting-month override to the "yyyy-MMM" the
+ * Month ARRAYFORMULA emits, and rejects anything that would write a key no report
+ * can ever match.
+ */
+function test_parsePeriod() {
+  const ok = { "2026-Aug": "2026-Aug", "2026-08": "2026-Aug", "2026-8": "2026-Aug",
+               "2026-aug": "2026-Aug", "2026-AUGUST": "2026-Aug", " 2026-Jan ": "2026-Jan",
+               "2026-12": "2026-Dec" };
+  Object.keys(ok).forEach(function (input) {
+    const got = tx_parsePeriod_(input);
+    if (got !== ok[input]) throw new Error("tx_parsePeriod_ FAIL: " + input + " → " + got + " (want " + ok[input] + ")");
+  });
+  ["", null, undefined, "  "].forEach(function (blank) {
+    if (tx_parsePeriod_(blank) !== "") throw new Error("tx_parsePeriod_ FAIL: blank should clear the override");
+  });
+  ["2026-13", "2026-00", "August", "2026", "26-Aug", "2026-Aug-01", "next month"].forEach(function (bad) {
+    let threw = false;
+    try { tx_parsePeriod_(bad); } catch (e) { threw = true; }
+    if (!threw) throw new Error("tx_parsePeriod_ FAIL: expected reject for " + JSON.stringify(bad));
+  });
+  Logger.log("test_parsePeriod OK");
 }
 
 /** tx_byDateDesc_ — newest date first; same-day ties fall back to row order (later row first). */

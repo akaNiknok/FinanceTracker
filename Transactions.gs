@@ -61,6 +61,8 @@ function api_createTransaction(args) {
     Amount:      parseFloat(args.Amount)
   };
   if (!fx.blank) input.ExchangeRate = fx.rate;
+  const period = tx_parsePeriod_(args.Period);
+  if (period) input.Period = period;
 
   const row = su_appendInputRow_(sheet, h, input);
   const created = tx_rowObject_(sheet, h, row);
@@ -116,6 +118,8 @@ function api_createTransfer(args) {
     ToAmount:    toAmount
   };
   if (!fx.blank) input.ExchangeRate = fx.rate;
+  const period = tx_parsePeriod_(args.Period);
+  if (period) input.Period = period;
 
   const row = su_appendInputRow_(sheet, h, input);
   cache_bumpVersion_();
@@ -175,6 +179,7 @@ function api_updateTransaction(args) {
   TX_CLIENT_FIELDS.forEach(function (f) { if (args[f] !== undefined) patch[f] = args[f]; });
   if (Object.keys(patch).length === 0) throw new Error("Nothing to update.");
   if (patch.Date !== undefined) patch.Date = tx_parseDate_(patch.Date);
+  if (patch.Period !== undefined) patch.Period = tx_parsePeriod_(patch.Period); // "" clears the override
   if (patch.Amount !== undefined) patch.Amount = parseFloat(patch.Amount);
   if (patch.ToAmount !== undefined && patch.ToAmount !== "") patch.ToAmount = parseFloat(patch.ToAmount);
 
@@ -239,6 +244,7 @@ function api_bulkUpdateTransactions(args) {
   TX_CLIENT_FIELDS.forEach(function (f) { if (patch[f] !== undefined) p[f] = patch[f]; });
   if (Object.keys(p).length === 0) throw new Error("Nothing to update.");
   if (p.Date !== undefined) p.Date = tx_parseDate_(p.Date);
+  if (p.Period !== undefined) p.Period = tx_parsePeriod_(p.Period);
   if (p.Amount !== undefined) p.Amount = parseFloat(p.Amount);
   if (p.ToAmount !== undefined && p.ToAmount !== "") p.ToAmount = parseFloat(p.ToAmount);
 
@@ -283,7 +289,9 @@ function api_bulkUpdateTransactions(args) {
       if (TX_INPUT_COLS.indexOf(header) === -1) return;   // never touch derived cols
       const col = h[header];
       if (!col || p[header] === undefined) return;
-      sheet.getRangeList(rows.map(function (r) { return su_a1_(r, col); })).setValue(p[header]);
+      const rl = sheet.getRangeList(rows.map(function (r) { return su_a1_(r, col); }));
+      if (header === "Period" && p[header] !== "") rl.setNumberFormat("@"); // else Sheets date-coerces it (see su_setInputCells_)
+      rl.setValue(p[header]);
     });
   }
   SpreadsheetApp.flush();
@@ -364,6 +372,29 @@ function tx_idRowMap_(sheet, headerMap) {
  * avoid the UTC-midnight day-shift `new Date("yyyy-MM-dd")` would introduce. Also
  * tolerates a real Date (n8n/JSON path) or any other parseable value; blank → now.
  */
+/**
+ * Coerce a client-supplied reporting period into the canonical "yyyy-MMM" the
+ * Month ARRAYFORMULA emits (e.g. "2026-Aug"); blank clears the override. Accepts
+ * "2026-08" / "2026-august" / any case and normalizes. A typo would silently match
+ * no month in ANY reporting path (cash flow, budgets, filters), so garbage throws
+ * rather than writing a dead key.
+ */
+var TX_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function tx_parsePeriod_(v) {
+  if (v === undefined || v === null) return "";
+  const s = String(v).trim();
+  if (s === "") return "";
+  const m = /^(\d{4})-(\d{1,2}|[A-Za-z]{3,})$/.exec(s);
+  let i = -1;
+  if (m) {
+    i = /^\d+$/.test(m[2])
+      ? parseInt(m[2], 10) - 1
+      : TX_MONTH_NAMES.map(function (n) { return n.toLowerCase(); }).indexOf(m[2].slice(0, 3).toLowerCase());
+  }
+  if (i < 0 || i > 11) throw new Error('Invalid Period: "' + v + '" (expected yyyy-MMM, e.g. 2026-Aug).');
+  return m[1] + "-" + TX_MONTH_NAMES[i];
+}
+
 function tx_parseDate_(v) {
   if (v instanceof Date) return v;
   if (v === undefined || v === null || v === "") return new Date();

@@ -91,7 +91,13 @@ function su_setInputCells_(sheet, headerMap, row, obj) {
     if (!col) return;                                     // column absent in sheet
     const val = obj[header];
     if (val === undefined) return;
-    sheet.getRange(row, col).setValue(val);
+    const cell = sheet.getRange(row, col);
+    // "Period" is a text month key ("2026-Aug"). Sheets coerces that to a date on
+    // setValue, and Month then spills the raw serial (LEN() still sees 5 chars), so
+    // stamp the text format first. setupTxPeriod formats the whole column; this covers
+    // a row appended past the formatted range.
+    if (header === "Period" && val !== "") cell.setNumberFormat("@");
+    cell.setValue(val);
   });
 }
 

@@ -19,15 +19,19 @@ const SHEET_LEDGER    = "Ledger";
 // not listed here (Month, Type, Segment, Currency, Amount (PHP), ToCurrency, the
 // "." index) is a header-anchored ARRAYFORMULA created by the migration — writing
 // into those cells #REF!s the spill, so we NEVER set them.
+// "Period" is the reporting-month override: blank (the normal case) means Month
+// derives from Date; set it to a "yyyy-MMM" key and Month uses that instead, so a
+// salary paid Jul 31 can report under August without lying about the cash date
+// (balances + daily interest still key off Date). See Migration.setupTxPeriod.
 const TX_INPUT_COLS = [
-  "ID", "Date", "Category", "Description", "Account", "Amount",
+  "ID", "Date", "Period", "Category", "Description", "Account", "Amount",
   "ExchangeRate", "ToAccount", "ToAmount"
 ];
 
 // Fields a client is allowed to supply when creating/updating a transaction.
 // (ID is assigned server-side; derived fields are ignored if sent.)
 const TX_CLIENT_FIELDS = [
-  "Date", "Category", "Description", "Account", "Amount",
+  "Date", "Period", "Category", "Description", "Account", "Amount",
   "ExchangeRate", "ToAccount", "ToAmount"
 ];
 
