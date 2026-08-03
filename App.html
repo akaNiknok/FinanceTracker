@@ -720,16 +720,26 @@ function renderAccounts(){
   }).catch(showErr);
 }
 
+/* Native amount is the headline (shares qty / USD), PHP equivalent underneath —
+   same main/amt-sub shape as the foreign-currency transaction rows. */
+function acctMain(a){
+  if(a.isShares) return num(a.balanceNative)+' shares';
+  if(a.currency&&a.currency!=='PHP') return moneyCur(a.balanceNative,a.currency);
+  return money(a.balancePhp);
+}
+function acctAmtHtml(a){
+  var foreign=a.isShares||(a.currency&&a.currency!=='PHP');
+  return '<div class="amt '+(a.isLiability?'neg':'')+'">'+acctMain(a)+
+    (foreign?'<span class="amt-sub">'+money(a.balancePhp)+'</span>':'')+'</div>';
+}
+
 function accountRow(a){
   var r=el('div','litem click');
-  var native='';
-  if(a.isShares) native=num(a.balanceNative)+' shares';
-  else if(a.currency&&a.currency!=='PHP') native=num(a.balanceNative)+' '+esc(a.currency);
-  var meta=esc(a.subtype||'')+(native?(' · '+native):'');
+  var meta=esc(a.subtype||'');
   var credit = a.creditLimit?(' · '+money(a.availableCredit)+' avail'):'';
   r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
     '<div class="grow"><div class="t1">'+esc(a.name)+'</div><div class="t2">'+meta+credit+'</div></div>'+
-    '<div class="amt '+(a.isLiability?'neg':'')+'">'+money(a.balancePhp)+'</div>';
+    acctAmtHtml(a);
   if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
     var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
     r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
@@ -1142,7 +1152,7 @@ function reviewAcctRow(a){
   var r=el('div','litem click rail'+(sel?' sel':''));
   r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
     '<div class="grow"><div class="t1">'+esc(a.name)+'</div></div>'+
-    '<div class="amt '+(a.isLiability?'neg':'')+'">'+money(a.balancePhp)+'</div>';
+    acctAmtHtml(a);
   if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
     var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
     r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
@@ -1716,7 +1726,8 @@ function confirmDelete(t){
 function openAccountModal(a){
   var body=el('div');
   var info=el('div','card'); info.style.marginBottom='14px';
-  info.innerHTML='<div class="row-between"><span class="dim">Balance</span><strong>'+money(a.balancePhp)+'</strong></div>'+
+  info.innerHTML='<div class="row-between"><span class="dim">Balance</span><strong>'+acctMain(a)+
+      (acctMain(a)!==money(a.balancePhp)?' <span class="dim">('+money(a.balancePhp)+')</span>':'')+'</strong></div>'+
     '<div class="row-between"><span class="dim">Type</span><span>'+esc(a.type||'—')+' · '+esc(a.subtype||'—')+'</span></div>'+
     (a.currency?'<div class="row-between"><span class="dim">Currency</span><span>'+esc(a.currency)+'</span></div>':'');
   body.appendChild(info);
