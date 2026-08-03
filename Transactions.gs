@@ -188,6 +188,8 @@ function api_updateTransaction(args) {
   const effCat = patch.Category  !== undefined ? patch.Category  : cur.Category;
   const effTo  = patch.ToAccount !== undefined ? patch.ToAccount : cur.ToAccount;
   tx_assertShape_(cats[effCat] ? cats[effCat].Type : null, tx_hasTo_(effTo)); // issue #8
+  const mirrored = tx_mirrorToAmount_(cur, patch);
+  if (mirrored !== undefined) patch.ToAmount = mirrored;
   // Re-stamp ExchangeRate when Account (currency) changes or the client sends one
   // explicitly — incl. "" to clear a manual override (issue #7). Untouched otherwise
   // so history never reprices.
@@ -330,6 +332,20 @@ function api_bulkDeleteTransactions(args) {
 // ── helpers ───────────────────────────────────────────────────────────────────
 /** Truthy ToAccount (present + non-blank). */
 function tx_hasTo_(v) { return !!(v && String(v).trim() !== ""); }
+
+/**
+ * A same-currency transfer stores ToAmount == Amount, so an Amount-only edit has to
+ * move both — otherwise the destination account keeps crediting the old figure while
+ * the source moves (Accounts.gs nets source −Amount, dest +ToAmount). An unequal pair
+ * is a deliberate cross-currency amount and is left alone; so is an explicit ToAmount
+ * in the patch. Returns the ToAmount to write, or undefined for "don't touch".
+ */
+function tx_mirrorToAmount_(cur, patch) {
+  if (patch.Amount === undefined || patch.ToAmount !== undefined) return undefined;
+  if (!tx_hasTo_(cur.ToAccount)) return undefined;
+  if (Number(cur.ToAmount) !== Number(cur.Amount)) return undefined;
+  return patch.Amount;
+}
 
 /**
  * Invariant: a Transfer-type category ⇔ the row has a ToAccount. A mismatch would

@@ -9,7 +9,8 @@
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
-                  "test_parseDate", "test_parsePeriod", "test_telegram", "test_telegramQuery"];
+                  "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
+                  "test_telegram", "test_telegramQuery"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -55,6 +56,24 @@ function test_assertShape() {
     if (!threw) throw new Error("tx_assertShape_ FAIL: expected reject for " + JSON.stringify(c));
   });
   Logger.log("test_assertShape OK");
+}
+
+/** tx_mirrorToAmount_ — an Amount edit drags ToAmount along on same-currency transfers. */
+function test_mirrorToAmount() {
+  const xfer = { ToAccount: "IBKR", Amount: 500, ToAmount: 500 };
+  const cases = [
+    [xfer, { Amount: 600 }, 600],                                  // same-currency → mirror
+    [xfer, { Amount: 600, ToAmount: 9 }, undefined],               // explicit override wins
+    [xfer, { Description: "x" }, undefined],                       // Amount untouched
+    [{ ToAccount: "IBKR", Amount: 5000, ToAmount: 81 }, { Amount: 6000 }, undefined], // cross-currency
+    [{ ToAccount: "", Amount: 500, ToAmount: "" }, { Amount: 600 }, undefined]        // not a transfer
+  ];
+  cases.forEach(function (c) {
+    const got = tx_mirrorToAmount_(c[0], c[1]);
+    if (got !== c[2]) throw new Error("tx_mirrorToAmount_ FAIL: " + JSON.stringify(c[1]) +
+                                      " → " + got + ", expected " + c[2]);
+  });
+  Logger.log("test_mirrorToAmount OK");
 }
 
 /**

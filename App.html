@@ -1637,7 +1637,9 @@ function openTransferModal(t){
   var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
   var fTo=comboEl(accs, t?t.ToAccount:'', {placeholder:'To account'});
   var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
-  var fToAmt=inputEl('number', t?amtField(t.ToAmount):'', 'same as amount'); fToAmt.step='0.01';
+  // Prefilled only when it's a real cross-currency override — mirroring Amount back into
+  // the field would re-send a stale ToAmount on an amount edit (server mirrors when blank).
+  var fToAmt=inputEl('number', (t&&Number(t.ToAmount)!==Number(t.Amount))?amtField(t.ToAmount):'', 'same as amount'); fToAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
 
   var body=el('div');
