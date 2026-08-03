@@ -933,6 +933,10 @@ function renderTax(){
 }
 
 function isFiledCol(c){ return /^filed/i.test(c); }
+/* Date-ish column → native date picker in the add-row modal. su_dateStr_ already
+ * hands dates back as yyyy-MM-dd, the same value <input type="date"> produces, and
+ * Sheets parses that ISO string straight into a real date on setValue. */
+function isDateCol(c){ return /date/i.test(c); }
 function ledgerTruthy(v){
   if(v===true) return true;
   if(v===false||v==null||v==='') return false;
@@ -975,7 +979,7 @@ function openLedgerAdd(cols, derived){
       var row=el('label','ck-row'); row.appendChild(cb); row.appendChild(el('span',null,esc(c)));
       body.appendChild(row);
     } else {
-      var inp=inputEl('text',''); inputs[c]=inp;
+      var inp=inputEl(isDateCol(c)?'date':'text',''); inputs[c]=inp;
       body.appendChild(fieldEl(c, inp));
     }
   });
