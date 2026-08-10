@@ -229,7 +229,7 @@ function tg_logKeyboard_(updateId, indices, ids) {
   // Telegram caps callback_data at 64 bytes; past that, /undo still covers it.
   if (data.length <= 64) row.push({ text: "↩︎ Undo", callback_data: data });
   const url = cfg_("WEB_APP_URL", "");
-  if (url) row.push({ text: "✏️ Edit details", url: url + "?screen=transactions" +
+  if (url) row.push({ text: "✎ Edit details", url: url + "?screen=transactions" +
                       (ids.length === 1 ? "&tx=" + encodeURIComponent(ids[0]) : "") });
   return row.length ? [row] : null;
 }
@@ -286,7 +286,7 @@ function tg_queryReply_(query) {
   const res  = api_listTransactions(args);
   const label = [args.category, args.account, args.search, args.month || "all time"]
     .filter(Boolean).join(" · ");
-  return "🔎 *" + label + "*\n" + tg_querySummary_(res.transactions, res.total);
+  return "⌕ *" + label + "*\n" + tg_querySummary_(res.transactions, res.total);
 }
 
 /** Parsed query object → api_listTransactions args. */
@@ -342,7 +342,7 @@ function tg_balance_(chat, query, replyTo) {
  */
 function tg_balanceText_(accounts, name) {
   const hits = tg_matchAccounts_(accounts || [], name);
-  if (!hits.length) return "🔎 No account matching *" + name + "*.";
+  if (!hits.length) return "⌕ No account matching *" + name + "*.";
   const lines = hits.map(function (a) {
     const ccy = String(a.currency || "PHP").toUpperCase();
     const native = (ccy !== "PHP" && a.balanceNative !== null && a.balanceNative !== undefined)
@@ -354,7 +354,7 @@ function tg_balanceText_(accounts, name) {
     const total = hits.reduce(function (s, a) { return s + (Number(a.netWorthPhp) || 0); }, 0);
     lines.push("*Total* `" + (total < 0 ? "-" : "") + tg_php_(total) + "`");
   }
-  return "💰 *Balance" + (hits.length > 1 ? "s" : "") + "*\n" + lines.join("\n");
+  return "◈ *Balance" + (hits.length > 1 ? "s" : "") + "*\n" + lines.join("\n");
 }
 
 /**

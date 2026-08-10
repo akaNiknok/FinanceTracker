@@ -250,7 +250,7 @@ function test_telegramBalance() {
 
   // One account: case-insensitive partial name, and no total line for a single row.
   const one = tg_balanceText_(accts, "maya");
-  if (one !== "💰 *Balance*\n› _Maya_ `₱1,200.5`") throw new Error("tg_balanceText_ FAIL (single): " + one);
+  if (one !== "◈ *Balance*\n› _Maya_ `₱1,200.5`") throw new Error("tg_balanceText_ FAIL (single): " + one);
   if (tg_balanceText_(accts, "gcash").indexOf("No account matching") === -1)
     throw new Error("tg_balanceText_ FAIL: unknown account should say so");
   Logger.log("test_telegramBalance OK");
