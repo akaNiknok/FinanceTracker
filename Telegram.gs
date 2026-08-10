@@ -124,7 +124,7 @@ function tg_handleUpdate_(update) {
   const replyTo = msg.message_id;
 
   if (String(msg.from && msg.from.id) !== String(cfgTelegramUserId_())) {
-    tg_send_(chat, "⛔ *Unauthorized. This bot is private.*");
+    tg_send_(chat, "× *Unauthorized. This bot is private.*");
     return;
   }
 
@@ -141,11 +141,11 @@ function tg_handleUpdate_(update) {
   try {
     parsed = tg_parse_(text, msg.date);
   } catch (err) {
-    tg_send_(chat, "❌ *Failed to add transaction*\n› " + tg_msg_(err), replyTo);
+    tg_send_(chat, "× *Failed to add transaction*\n› " + tg_msg_(err), replyTo);
     return;
   }
   if (parsed.error) {
-    tg_send_(chat, "❌ *Failed to add transaction*\n› " + parsed.error, replyTo);
+    tg_send_(chat, "× *Failed to add transaction*\n› " + parsed.error, replyTo);
     return;
   }
 
@@ -153,13 +153,13 @@ function tg_handleUpdate_(update) {
   if (parsed.intent === "balance") { tg_balance_(chat, parsed.query, replyTo); return; }
   if (parsed.intent === "query") {
     try { tg_send_(chat, tg_queryReply_(parsed.query), replyTo); }
-    catch (err) { tg_send_(chat, "❌ *Query failed*\n› " + tg_msg_(err), replyTo); }
+    catch (err) { tg_send_(chat, "× *Query failed*\n› " + tg_msg_(err), replyTo); }
     return;
   }
 
   const items = parsed.items || [];
   if (!items.length) {
-    tg_send_(chat, "❌ *Failed to add transaction*\n› Nothing to log.", replyTo);
+    tg_send_(chat, "× *Failed to add transaction*\n› Nothing to log.", replyTo);
     return;
   }
   tg_logItems_(chat, update.update_id, items, replyTo);
@@ -196,7 +196,7 @@ function tg_logItems_(chat, updateId, items, replyTo) {
       ids.push(args.ID);
       idx.push(i);
     } catch (err) {
-      out.push("❌ *Failed to add transaction*\n› " + tg_msg_(err));
+      out.push("× *Failed to add transaction*\n› " + tg_msg_(err));
     }
   });
   // Only the rows that actually landed, so undo can't chase a failed item.
@@ -227,7 +227,7 @@ function tg_logKeyboard_(updateId, indices, ids) {
   const row = [];
   const data = tg_undoData_(updateId, indices);
   // Telegram caps callback_data at 64 bytes; past that, /undo still covers it.
-  if (data.length <= 64) row.push({ text: "↩︎ Undo", callback_data: data });
+  if (data.length <= 64) row.push({ text: "← Undo", callback_data: data });
   const url = cfg_("WEB_APP_URL", "");
   if (url) row.push({ text: "✎ Edit details", url: url + "?screen=transactions" +
                       (ids.length === 1 ? "&tx=" + encodeURIComponent(ids[0]) : "") });
@@ -264,13 +264,13 @@ function tg_undo_(chat, replyTo) {
 
 /** Delete those rows and describe what went; shared by /undo and the Undo button. */
 function tg_deleteIds_(ids) {
-  const out = ["↩︎ *Removed*"];
+  const out = ["← *Removed*"];
   ids.forEach(function (id) {
     try {
       const t = api_deleteTransaction({ ID: id }).transaction;
       out.push("› _" + t.Category + "_ " + tg_php_(t["Amount (PHP)"] || t.Amount));
     } catch (err) {
-      out.push("› ❌ " + tg_msg_(err));
+      out.push("› × " + tg_msg_(err));
     }
   });
   // Cleared either way: the button and /undo point at the same rows, so whichever
@@ -332,7 +332,7 @@ function tg_querySummary_(rows, total) {
 /** Reply with what's in the accounts right now; `query.account` narrows it to one. */
 function tg_balance_(chat, query, replyTo) {
   try { tg_send_(chat, tg_balanceText_(api_getAccounts().accounts, query && query.account), replyTo); }
-  catch (err) { tg_send_(chat, "❌ *Balance lookup failed*\n› " + tg_msg_(err), replyTo); }
+  catch (err) { tg_send_(chat, "× *Balance lookup failed*\n› " + tg_msg_(err), replyTo); }
 }
 
 /**

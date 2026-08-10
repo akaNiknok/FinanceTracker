@@ -11,7 +11,7 @@ var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_intere
                   "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
-                  "test_telegramUndoData"];
+                  "test_telegramUndoData", "test_telegramNoEmoji"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -265,6 +265,25 @@ function test_telegramUndoData() {
     if (tg_undoIds_(bad).length) throw new Error("tg_undoIds_ FAIL: accepted " + JSON.stringify(bad));
   });
   Logger.log("test_telegramUndoData OK");
+}
+
+/**
+ * No emoji in anything the bot says. Telegram renders every Emoji=Yes codepoint with
+ * its own emoji font and ignores the VS15 text-presentation selector, so "↩︎" came out
+ * as a yellow ↩️ anyway. Only Emoji=No glyphs stay text: ← × ✎ ⌕ ◈ ✦ › →.
+ * Reads the function sources so a new string anywhere in these paths is covered too.
+ */
+function test_telegramNoEmoji() {
+  const fns = [tg_webhook_, tg_logItems_, tg_logKeyboard_, tg_callback_, tg_undo_,
+               tg_deleteIds_, tg_balance_, tg_balanceText_, tg_queryReply_];
+  const hits = [];
+  fns.forEach(function (f) {
+    (f.toString().match(/[^\x00-\x7F]/g) || []).forEach(function (ch) {
+      if (/\p{Emoji}/u.test(ch) && hits.indexOf(ch) === -1) hits.push(ch);
+    });
+  });
+  if (hits.length) throw new Error("test_telegramNoEmoji FAIL: emoji in bot output: " + hits.join(" "));
+  Logger.log("test_telegramNoEmoji OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */
