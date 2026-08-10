@@ -1,10 +1,9 @@
 /**
- * WebApp.gs — serves the responsive Web App UI (Phase 2).
+ * WebApp.gs — serves the responsive Web App UI.
  *
- * Router.doGet calls ui_serveApp_() when the request carries no ?action / ?sheet /
- * ?sync — i.e. a plain browser hit on the deployment URL. The page is a single
- * vanilla-JS SPA (no framework — GAS has no bundler) that talks to the Phase 1
- * service layer DIRECTLY via google.script.run, so it needs no token or fetch URL
+ * Router.doGet calls ui_serveApp_() on a bare GET — i.e. a plain browser hit on the
+ * deployment URL. The page is a single vanilla-JS SPA (no framework — GAS has no
+ * bundler) that talks to the service layer DIRECTLY via google.script.run, so it needs no token or fetch URL
  * (calls execute as the deploying owner). Reads: api_getBootstrap/getDashboard/
  * listTransactions/getAccounts/getBudgets/getInvestments/getLedger. Writes:
  * api_createTransaction/createTransfer/updateTransaction/deleteTransaction/

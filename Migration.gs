@@ -1,5 +1,9 @@
 /**
- * Migration.gs — one-shot setup for the system overhaul (Phase 1 foundation).
+ * Migration.gs — one-shot schema setup for the workbook.
+ *
+ * ALL of these have already been applied to the live workbook (confirmed 2026-08-02);
+ * they are kept only for rebuilding a workbook from scratch. Old step-by-step runbook:
+ * `git show v1.3.4:MIGRATION.md`.
  *
  * Run ONCE from the Apps Script editor, in this order:
  *   1) setupMigration()          — backs up Transactions, adds the `ID` column,
@@ -10,7 +14,7 @@
  *
  * Everything is idempotent and column lookups are by HEADER NAME, so it tolerates
  * columns being in a different order. A timestamped backup sheet is made before any
- * change. See MIGRATION.md for the full step-by-step + manual copy-paste fallback.
+ * change.
  *
  * REVIEW BEFORE RUNNING: MIG_MONTH_FORMAT must match what your Dashboard pivots expect.
  */
@@ -18,7 +22,12 @@
 // ── Config (review these) ─────────────────────────────────────────────────────
 const MIG_TX_SHEET    = "Transactions";
 const MIG_ID_HEADER   = "ID";
-const MIG_MONTH_FORMAT = "yyyy-mm"; // e.g. "yyyy-mm" → 2026-06 · "mmm-yyyy" → Jun-2026 · "mmmm" → June
+// MUST stay "yyyy-mmm" (→ 2026-Jun): dash_currentMonth_, the UI month keys and every
+// Month filter compare against this exact shape. Changing it silently empties every
+// month-keyed report.
+const MIG_MONTH_FORMAT = "yyyy-mmm";
+const MIG_PERIOD_HEADER = "Period"; // optional reporting-month override (setupTxPeriod)
+const MIG_PERIOD_TEXT_FORMAT = "yyyy-MMM"; // Utilities.formatDate equivalent of MIG_MONTH_FORMAT
 
 // AccountType migration (setupAccountType): derive Accounts.Type from Subtype.
 const MIG_ACCT_SHEET     = "Accounts";
@@ -103,7 +112,7 @@ function applyDerivationFormulas() {
 
   // Categories: A=Category, B=Type, C=Segment.  Accounts: A=Name, B=Currency.
   const formulas = {
-    "Month":        '=ARRAYFORMULA(IF(LEN(' + d + '2:' + d + '), TEXT(' + d + '2:' + d + ',"' + MIG_MONTH_FORMAT + '"), ""))',
+    "Month":        mig_monthFormula_(h),
     "Type":         '=ARRAYFORMULA(IF(LEN(' + cat + '2:' + cat + '), IFERROR(VLOOKUP(' + cat + '2:' + cat + ', Categories!$A:$C, 2, FALSE), ""), ""))',
     "Segment":      '=ARRAYFORMULA(IF(LEN(' + cat + '2:' + cat + '), IFERROR(VLOOKUP(' + cat + '2:' + cat + ', Categories!$A:$C, 3, FALSE), ""), ""))',
     "Currency":     '=ARRAYFORMULA(IF(LEN(' + acc + '2:' + acc + '), IFERROR(VLOOKUP(' + acc + '2:' + acc + ', Accounts!$A:$B, 2, FALSE), ""), ""))',
@@ -127,7 +136,7 @@ function applyDerivationFormulas() {
       sheet.getRange(2, col).setFormula(formula);
       Logger.log("OK  %-13s ← %s", colName, formula);
     } catch (err) {
-      Logger.log("FAIL %-12s (%s). Paste it manually — see MIGRATION.md.\n     %s", colName, err.message, formula);
+      Logger.log("FAIL %-12s (%s). Paste it into the column's row-2 cell manually.\n     %s", colName, err.message, formula);
     }
   });
   Logger.log("== applyDerivationFormulas done. Spot-check a few rows, then redeploy the SAME deploymentId. ==");
@@ -366,7 +375,76 @@ function setupAccountColor() {
   Logger.log("Added '%s' column at position %s. Set a hex color per account (or use the Web App).", MIG_ACCT_COLOR_HEADER, lastCol + 1);
 }
 
+// ── 7. Period override column (run once) ──────────────────────────────────────
+// Adds the optional "Period" input column and makes Month prefer it. Point: income
+// that arrives in the wrong calendar month (salary paid early, on the 31st) can be
+// reported under the month it belongs to while Date keeps the real cash movement —
+// so balances, reconciliation and daily interest stay honest. Everything month-keyed
+// (cash flow, budget actuals, spendBySegment, the Transactions filter) reads Month,
+// so no service-layer change is needed. Idempotent.
+function setupTxPeriod() {
+  const sheet = mig_getTxSheet_();
+  let h = mig_headerMap_(sheet);
+  if (!h["Date"] || !h["Month"])
+    throw new Error("Transactions needs 'Date' and 'Month' — run setupMigration()/applyDerivationFormulas() first.");
+
+  if (!h[MIG_PERIOD_HEADER]) {
+    const lastCol = sheet.getLastColumn();
+    if (sheet.getMaxColumns() === lastCol) sheet.insertColumnAfter(lastCol);
+    sheet.getRange(1, lastCol + 1).setValue(MIG_PERIOD_HEADER);
+    h = mig_headerMap_(sheet);
+    Logger.log("Added '%s' column at position %s.", MIG_PERIOD_HEADER, h[MIG_PERIOD_HEADER]);
+  } else {
+    Logger.log("'%s' already present at position %s.", MIG_PERIOD_HEADER, h[MIG_PERIOD_HEADER]);
+  }
+
+  // Force the column to PLAIN TEXT. Without it Sheets coerces "2026-Aug" — written by
+  // the API or typed by hand — into a date, and Month spills the raw serial (46235)
+  // because LEN() still sees 5 characters. Formatting the column is the fix at source;
+  // both write paths inherit it.
+  const pCol = h[MIG_PERIOD_HEADER];
+  sheet.getRange(2, pCol, Math.max(sheet.getMaxRows() - 1, 1), 1).setNumberFormat("@");
+  Logger.log("Set '%s' column format to plain text.", MIG_PERIOD_HEADER);
+
+  const lastRow = sheet.getLastRow();
+  // Repair rows written before the format was applied: a coerced Date becomes its
+  // canonical yyyy-MMM text again. Anything already text is left alone.
+  if (lastRow >= 2) {
+    const range = sheet.getRange(2, pCol, lastRow - 1, 1);
+    const vals = range.getValues();
+    let fixed = 0;
+    vals.forEach(function (r) {
+      if (r[0] instanceof Date) {
+        r[0] = Utilities.formatDate(r[0], Session.getScriptTimeZone(), MIG_PERIOD_TEXT_FORMAT);
+        fixed++;
+      }
+    });
+    if (fixed) { range.setValues(vals); Logger.log("Repaired %s date-coerced Period cell(s).", fixed); }
+  }
+
+  const formula = mig_monthFormula_(h);
+  if (lastRow >= 3) sheet.getRange(3, h["Month"], lastRow - 2, 1).clearContent(); // let the array spill
+  sheet.getRange(2, h["Month"]).setFormula(formula);
+  Logger.log("Month ← %s", formula);
+  Logger.log("== setupTxPeriod done. Spot-check Month, then redeploy the SAME deploymentId. ==");
+}
+
 // ── private helpers (trailing underscore = not web-exposed) ────────────────────
+/**
+ * Month = the Period override when a row sets one, else the row's own Date month.
+ * Shared by applyDerivationFormulas + setupTxPeriod so the two can't drift; degrades
+ * to the plain Date derivation on a workbook without the Period column.
+ */
+function mig_monthFormula_(h) {
+  const d = mig_colLetter_(h["Date"]);
+  const own = 'TEXT(' + d + '2:' + d + ',"' + MIG_MONTH_FORMAT + '")';
+  const pCol = h[MIG_PERIOD_HEADER] ? mig_colLetter_(h[MIG_PERIOD_HEADER]) : null;
+  const val = pCol
+    ? 'IF(LEN(' + pCol + '2:' + pCol + '), ' + pCol + '2:' + pCol + ', ' + own + ')'
+    : own;
+  return '=ARRAYFORMULA(IF(LEN(' + d + '2:' + d + '), ' + val + ', ""))';
+}
+
 /** Apply a validation rule to a whole column (row 2 → last allocated row). */
 function mig_applyValidationToColumn_(sheet, col, rule) {
   const last = sheet.getMaxRows();
@@ -439,4 +517,80 @@ function cleanupSyntheticInterest() {
   if (!ids.length) { Logger.log("No script-generated interest rows found."); return; }
   Logger.log("Deleting %s row(s): %s ... %s", ids.length, ids[0], ids[ids.length - 1]);
   Logger.log(JSON.stringify(api_bulkDeleteTransactions({ ids: ids })));
+}
+
+// ── One-shot: merge two accounts into one ─────────────────────────────────────
+/**
+ * 2026-08-03. "Maya" and "Maya Savings" are one wallet in practice; owner wants the
+ * history combined retroactively. `Name` is the immutable FK the ledger points at,
+ * so a merge is: rewrite every Account/ToAccount reference, fold the Starting
+ * Balance into the survivor, drop the absorbed Accounts row. Everything else is
+ * derived — `Current Balance`, `Amount (PHP)`, budget actuals and the Dashboard all
+ * refollow on their own.
+ *
+ * Transfers BETWEEN the two accounts are DELETED, not rewritten: after the merge
+ * they'd be self-transfers (net zero) that still draw down their segment's budget.
+ * That does change budget actuals for the months they sat in — which is the point.
+ *
+ * Transactions is backed up first and the deleted account row is logged verbatim.
+ * Run once from the editor; a rerun is a no-op (the source account is gone).
+ */
+const MIG_MERGE_FROM = "Maya Savings"; // absorbed, then deleted
+const MIG_MERGE_INTO = "Maya";         // survives, keeps its own rate/notes/color
+function mergeAccounts() {
+  const accts = su_readObjects_(SHEET_ACCOUNTS);
+  const from = accts.filter(function (a) { return a.Name === MIG_MERGE_FROM; })[0];
+  const into = accts.filter(function (a) { return a.Name === MIG_MERGE_INTO; })[0];
+  if (!from) { Logger.log("No account named '%s' — already merged?", MIG_MERGE_FROM); return; }
+  if (!into) throw new Error("No account named: " + MIG_MERGE_INTO);
+  // Starting Balances are summed as-is, so a currency mismatch (or the liability
+  // positive-owed convention meeting an asset) would silently corrupt the total.
+  if (String(from.Currency) !== String(into.Currency))
+    throw new Error("Currency mismatch: " + from.Currency + " vs " + into.Currency);
+  if (String(from.Type) !== String(into.Type))
+    throw new Error("Type mismatch: " + from.Type + " vs " + into.Type);
+
+  Logger.log("Backup: %s", mig_backupSheet_(mig_getTxSheet_()).getName());
+  const part = mig_mergePartition_(su_readObjects_(SHEET_TX), MIG_MERGE_FROM, MIG_MERGE_INTO);
+
+  if (part.self.length)
+    Logger.log("Deleted %s transfer(s) between the two: %s", part.self.length,
+               JSON.stringify(api_bulkDeleteTransactions({ ids: part.self })));
+  // Reassigning Account re-stamps ExchangeRate from the target's currency (blank for
+  // PHP) — correct here, and the only reason both must share a currency.
+  if (part.src.length)
+    Logger.log("Account → %s: %s", MIG_MERGE_INTO,
+               JSON.stringify(api_bulkUpdateTransactions({ ids: part.src, patch: { Account: MIG_MERGE_INTO } })));
+  if (part.dst.length)
+    Logger.log("ToAccount → %s: %s", MIG_MERGE_INTO,
+               JSON.stringify(api_bulkUpdateTransactions({ ids: part.dst, patch: { ToAccount: MIG_MERGE_INTO } })));
+
+  const start = acct_num_(into["Starting Balance"]) + acct_num_(from["Starting Balance"]);
+  api_updateAccount({ Name: MIG_MERGE_INTO, "Starting Balance": start });
+
+  Logger.log("Deleting Accounts row %s (keep this to restore): %s", from.__row, JSON.stringify(tx_clean_(from)));
+  su_sheet_(SHEET_ACCOUNTS).deleteRow(from.__row);
+  su_invalidateMemo_(SHEET_ACCOUNTS);
+  SpreadsheetApp.flush();
+  cache_bumpVersion_();
+  Logger.log("== merge done: %s absorbed into %s. Starting Balance now %s. Run test_balanceReconciliation. ==",
+             MIG_MERGE_FROM, MIG_MERGE_INTO, start);
+}
+
+/**
+ * Split the ledger for a merge: transfers between the pair (dead after the merge),
+ * rows sourced from the absorbed account, rows destined for it. A row with BOTH
+ * sides on the pair lands in `self` only, so it is never both deleted and patched.
+ */
+function mig_mergePartition_(rows, fromName, intoName) {
+  const pair = {}; pair[fromName] = true; pair[intoName] = true;
+  const out = { self: [], src: [], dst: [] };
+  rows.forEach(function (r) {
+    const id = String(r.ID);
+    const to = (r.ToAccount === null || r.ToAccount === undefined) ? "" : String(r.ToAccount);
+    if (to !== "" && pair[String(r.Account)] && pair[to]) { out.self.push(id); return; }
+    if (String(r.Account) === fromName) out.src.push(id);
+    if (to === fromName) out.dst.push(id);
+  });
+  return out;
 }

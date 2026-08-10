@@ -1,9 +1,9 @@
 <script>
 /* ============================================================================
- * App.html — the FinanceTracker SPA (Phase 2).
- * Vanilla JS. Talks to the Phase 1 service layer via google.script.run (so no
- * fetch URL / token — calls run as the deploying owner). Six screens:
- * Dashboard · Transactions · Accounts · Budgets · Investments · Tax.
+ * App.html — the FinanceTracker SPA.
+ * Vanilla JS. Talks to the service layer via google.script.run (so no fetch URL
+ * / token — calls run as the deploying owner). Eight screens: Dashboard ·
+ * Transactions · Budgets · Accounts · Review · Investments · Exchange · Tax.
  * ========================================================================== */
 
 /* ── server bridge: google.script.run → Promise ──────────────────────────── */
@@ -144,7 +144,9 @@ function buildMonthList(){
     var months=(now.getFullYear()-min.getFullYear())*12+(now.getMonth()-min.getMonth())+1;
     count=Math.min(120,Math.max(15,months));
   }
-  for(var i=0;i<count;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
+  // Starts at i=-1 (NEXT month) so income booked forward via Period — salary paid on
+  // the 29th for the following month — is both selectable and viewable.
+  for(var i=-1;i<count;i++){var d=new Date(now.getFullYear(),now.getMonth()-i,1);out.push(monthKey(d));}
   return out;
 }
 // "2026-Jun" → Date(first of month); null on bad input.
@@ -198,8 +200,13 @@ function boot(){
       if(s!==S.screen) go(s,true);
     });
     google.script.url.getLocation(function(loc){    // deep link: ?screen=budgets
-      var s=(loc.parameter||{}).screen;
-      if(s && s!==S.screen) go(s,true);
+      var p=loc.parameter||{};
+      if(p.screen && p.screen!==S.screen) go(p.screen,true);
+      // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
+      if(p.tx) gs('api_listTransactions',{id:p.tx,limit:1}).then(function(r){
+        var t=(r.transactions||[])[0];
+        if(t) openTxModal(t); else toast('That transaction no longer exists.','err');
+      }).catch(function(e){ toast(e.message||e,'err'); });
     });
   }catch(e){}
   // Scroll-wheel over a focused number input silently changes the value — block it.
@@ -718,16 +725,26 @@ function renderAccounts(){
   }).catch(showErr);
 }
 
+/* Native amount is the headline (shares qty / USD), PHP equivalent underneath —
+   same main/amt-sub shape as the foreign-currency transaction rows. */
+function acctMain(a){
+  if(a.isShares) return num(a.balanceNative)+' shares';
+  if(a.currency&&a.currency!=='PHP') return moneyCur(a.balanceNative,a.currency);
+  return money(a.balancePhp);
+}
+function acctAmtHtml(a){
+  var foreign=a.isShares||(a.currency&&a.currency!=='PHP');
+  return '<div class="amt '+(a.isLiability?'neg':'')+'">'+acctMain(a)+
+    (foreign?'<span class="amt-sub">'+money(a.balancePhp)+'</span>':'')+'</div>';
+}
+
 function accountRow(a){
   var r=el('div','litem click');
-  var native='';
-  if(a.isShares) native=num(a.balanceNative)+' shares';
-  else if(a.currency&&a.currency!=='PHP') native=num(a.balanceNative)+' '+esc(a.currency);
-  var meta=esc(a.subtype||'')+(native?(' · '+native):'');
+  var meta=esc(a.subtype||'');
   var credit = a.creditLimit?(' · '+money(a.availableCredit)+' avail'):'';
   r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
     '<div class="grow"><div class="t1">'+esc(a.name)+'</div><div class="t2">'+meta+credit+'</div></div>'+
-    '<div class="amt '+(a.isLiability?'neg':'')+'">'+money(a.balancePhp)+'</div>';
+    acctAmtHtml(a);
   if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
     var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
     r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
@@ -921,6 +938,10 @@ function renderTax(){
 }
 
 function isFiledCol(c){ return /^filed/i.test(c); }
+/* Date-ish column → native date picker in the add-row modal. su_dateStr_ already
+ * hands dates back as yyyy-MM-dd, the same value <input type="date"> produces, and
+ * Sheets parses that ISO string straight into a real date on setValue. */
+function isDateCol(c){ return /date/i.test(c); }
 function ledgerTruthy(v){
   if(v===true) return true;
   if(v===false||v==null||v==='') return false;
@@ -963,7 +984,7 @@ function openLedgerAdd(cols, derived){
       var row=el('label','ck-row'); row.appendChild(cb); row.appendChild(el('span',null,esc(c)));
       body.appendChild(row);
     } else {
-      var inp=inputEl('text',''); inputs[c]=inp;
+      var inp=inputEl(isDateCol(c)?'date':'text',''); inputs[c]=inp;
       body.appendChild(fieldEl(c, inp));
     }
   });
@@ -1140,7 +1161,7 @@ function reviewAcctRow(a){
   var r=el('div','litem click rail'+(sel?' sel':''));
   r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
     '<div class="grow"><div class="t1">'+esc(a.name)+'</div></div>'+
-    '<div class="amt '+(a.isLiability?'neg':'')+'">'+money(a.balancePhp)+'</div>';
+    acctAmtHtml(a);
   if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
     var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
     r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
@@ -1420,6 +1441,21 @@ function fieldEl(label,inputNode,hint){
 }
 function inputEl(type,value,ph){var i=el('input');i.type=type||'text';if(value!=null)i.value=value;if(ph)i.placeholder=ph;return i;}
 
+/* —— reporting-period override (shared by the tx + transfer modals) ————————
+ * Blank = the usual case: Month derives from Date. Setting it books the row into a
+ * different month for every month-keyed report (cash flow, budgets, filters) while
+ * Date keeps the real cash movement — for salary that lands a day or two early.
+ */
+function periodEl(t){
+  return comboEl([{value:'',label:'(from date)'}].concat(monthOptions()), (t&&t.Period)||'');
+}
+function periodRowEl(fDate,fPeriod){
+  var row=el('div','field-row');
+  row.appendChild(fieldEl('Date', fDate));
+  row.appendChild(fieldEl('Reports in', fPeriod, "blank = the date's own month"));
+  return row;
+}
+
 /* —— fuzzy combobox (searchable replacement for <select>) ——————————————————
  * comboEl(options, value, opts) returns a wrapper element that exposes a `.value`
  * (selected option value) and `.onchange` handler — drop-in for selectEl's API.
@@ -1539,6 +1575,7 @@ function openTxModal(t){
   var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===prefGet('lastAcct');})?prefGet('lastAcct'):'');
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fPeriod=periodEl(t);
   var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
   var fAcc=comboEl(accs, (t&&t.Account)||defAcc, {placeholder:'Select account'});
   var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
@@ -1552,9 +1589,9 @@ function openTxModal(t){
   var body=el('div');
   // Category is dropped on purpose: transfer categories are a disjoint set.
   if(!isEdit) body.appendChild(typeToggleEl('tx',function(){
-    openTransferModal({Date:fDate.value,Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
+    openTransferModal({Date:fDate.value,Period:fPeriod.value,Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
   }));
-  body.appendChild(fieldEl('Date', fDate));
+  body.appendChild(periodRowEl(fDate, fPeriod));
   body.appendChild(fieldEl('Category', fCat));
   body.appendChild(fieldEl('Account', fAcc));
   var rowAmt=el('div','field-row');
@@ -1569,6 +1606,7 @@ function openTxModal(t){
       Date:fDate.value, Category:fCat.value, Account:fAcc.value,
       Amount:parseFloat(fAmt.value), Description:fDesc.value
     };
+    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
     if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
     else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
@@ -1612,19 +1650,22 @@ function openTransferModal(t){
   var accs=acctOptions();
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fPeriod=periodEl(t);
   var defCat=xferCats.indexOf('Transfer: Internal')>=0?'Transfer: Internal':'';
   var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], (t&&t.Category)||defCat, {placeholder:'Select category'});
   var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
   var fTo=comboEl(accs, t?t.ToAccount:'', {placeholder:'To account'});
   var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
-  var fToAmt=inputEl('number', t?amtField(t.ToAmount):'', 'same as amount'); fToAmt.step='0.01';
+  // Prefilled only when it's a real cross-currency override — mirroring Amount back into
+  // the field would re-send a stale ToAmount on an amount edit (server mirrors when blank).
+  var fToAmt=inputEl('number', (t&&Number(t.ToAmount)!==Number(t.Amount))?amtField(t.ToAmount):'', 'same as amount'); fToAmt.step='0.01';
   var fDesc=inputEl('text', t?t.Description:'', 'Description');
 
   var body=el('div');
   if(!isEdit) body.appendChild(typeToggleEl('xfer',function(){
-    openTxModal({Date:fDate.value,Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
+    openTxModal({Date:fDate.value,Period:fPeriod.value,Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
   }));
-  body.appendChild(fieldEl('Date', fDate));
+  body.appendChild(periodRowEl(fDate, fPeriod));
   body.appendChild(fieldEl('Category', fCat));
   var rowAcc=el('div','field-row');
   rowAcc.appendChild(fieldEl('From', fFrom));
@@ -1643,6 +1684,7 @@ function openTransferModal(t){
     if(isNaN(amount)){toast('Enter an amount','err');return;}
     var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
+    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
     if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
     if(isEdit){
       save.disabled=true; save.textContent='Saving…';
@@ -1693,7 +1735,8 @@ function confirmDelete(t){
 function openAccountModal(a){
   var body=el('div');
   var info=el('div','card'); info.style.marginBottom='14px';
-  info.innerHTML='<div class="row-between"><span class="dim">Balance</span><strong>'+money(a.balancePhp)+'</strong></div>'+
+  info.innerHTML='<div class="row-between"><span class="dim">Balance</span><strong>'+acctMain(a)+
+      (acctMain(a)!==money(a.balancePhp)?' <span class="dim">('+money(a.balancePhp)+')</span>':'')+'</strong></div>'+
     '<div class="row-between"><span class="dim">Type</span><span>'+esc(a.type||'—')+' · '+esc(a.subtype||'—')+'</span></div>'+
     (a.currency?'<div class="row-between"><span class="dim">Currency</span><span>'+esc(a.currency)+'</span></div>':'');
   body.appendChild(info);

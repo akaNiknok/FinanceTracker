@@ -3,8 +3,7 @@
  * model (which columns the service may WRITE vs. which are formula-derived and
  * must never be touched), and settings read from Script Properties.
  *
- * Phase 1 foundation (see OVERHAUL_PLAN.md §4). Flat namespace: every function
- * name here is unique across all .gs files.
+ * Flat namespace: every function name here is unique across all .gs files.
  */
 
 // ── Sheet names ───────────────────────────────────────────────────────────────
@@ -20,15 +19,19 @@ const SHEET_LEDGER    = "Ledger";
 // not listed here (Month, Type, Segment, Currency, Amount (PHP), ToCurrency, the
 // "." index) is a header-anchored ARRAYFORMULA created by the migration — writing
 // into those cells #REF!s the spill, so we NEVER set them.
+// "Period" is the reporting-month override: blank (the normal case) means Month
+// derives from Date; set it to a "yyyy-MMM" key and Month uses that instead, so a
+// salary paid Jul 31 can report under August without lying about the cash date
+// (balances + daily interest still key off Date). See Migration.setupTxPeriod.
 const TX_INPUT_COLS = [
-  "ID", "Date", "Category", "Description", "Account", "Amount",
+  "ID", "Date", "Period", "Category", "Description", "Account", "Amount",
   "ExchangeRate", "ToAccount", "ToAmount"
 ];
 
 // Fields a client is allowed to supply when creating/updating a transaction.
 // (ID is assigned server-side; derived fields are ignored if sent.)
 const TX_CLIENT_FIELDS = [
-  "Date", "Category", "Description", "Account", "Amount",
+  "Date", "Period", "Category", "Description", "Account", "Amount",
   "ExchangeRate", "ToAccount", "ToAmount"
 ];
 
@@ -37,9 +40,9 @@ const BASE_CURRENCY = "PHP";
 // ── Settings (Script Properties, with safe fallbacks) ─────────────────────────
 // Set these in the Apps Script editor: Project Settings → Script Properties.
 //   OWNER_EMAIL       — Google account allowed to use the authenticated UI.
-//   API_TOKEN         — shared secret the API requires for mutations (n8n/UI).
-//   ENFORCE_TOKEN     — "true" to require API_TOKEN on writes (default: off, so
-//                       the live n8n bot keeps working until Phase 3 cuts over).
+//   API_TOKEN         — shared secret the `?action=` API requires for mutations.
+//   ENFORCE_TOKEN     — "true" to require API_TOKEN on writes (LIVE since
+//                       2026-07-29; the token rides in the Worker's GAS_URL secret).
 //   USD_PHP_FALLBACK  — exchange rate used if the live FX fetch fails.
 //   MONTHLY_INCOME_PHP — planning base for percent-of-income budget targets.
 //   TELEGRAM_BOT_TOKEN — BotFather token for the private bot (Telegram.gs).

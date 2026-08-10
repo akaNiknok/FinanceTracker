@@ -1,7 +1,7 @@
 /**
  * Fx.gs — exchange-rate stamping for transactions.
  *
- * Policy (OVERHAUL_PLAN §4.1): ExchangeRate is a STATIC input column that the
+ * Policy: ExchangeRate is a STATIC input column that the
  * service stamps once at write time and never recomputes — so historical rows
  * never reprice. Resolution order for a transaction in `currency`:
  *   1. caller-supplied ExchangeRate (manual override) — used verbatim

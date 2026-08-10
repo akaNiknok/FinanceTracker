@@ -1,5 +1,5 @@
 /**
- * Tests.gs — manual verification runners for the Phase 1 service layer.
+ * Tests.gs — manual verification runners for the service layer.
  * Select a function in the Apps Script editor and Run, then read the Logs.
  * Nothing here is web-exposed. test_createReadDelete_ mutates then cleans up
  * after itself; test_balanceReconciliation is the one that validates the balance
@@ -8,8 +8,10 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_telegram",
-                  "test_telegramQuery"];
+                  "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
+                  "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
+                  "test_telegram", "test_telegramQuery", "test_telegramBalance",
+                  "test_telegramUndoData"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -57,6 +59,48 @@ function test_assertShape() {
   Logger.log("test_assertShape OK");
 }
 
+/** tx_mirrorToAmount_ — an Amount edit drags ToAmount along on same-currency transfers. */
+function test_mirrorToAmount() {
+  const xfer = { ToAccount: "IBKR", Amount: 500, ToAmount: 500 };
+  const cases = [
+    [xfer, { Amount: 600 }, 600],                                  // same-currency → mirror
+    [xfer, { Amount: 600, ToAmount: 9 }, undefined],               // explicit override wins
+    [xfer, { Description: "x" }, undefined],                       // Amount untouched
+    [{ ToAccount: "IBKR", Amount: 5000, ToAmount: 81 }, { Amount: 6000 }, undefined], // cross-currency
+    [{ ToAccount: "", Amount: 500, ToAmount: "" }, { Amount: 600 }, undefined]        // not a transfer
+  ];
+  cases.forEach(function (c) {
+    const got = tx_mirrorToAmount_(c[0], c[1]);
+    if (got !== c[2]) throw new Error("tx_mirrorToAmount_ FAIL: " + JSON.stringify(c[1]) +
+                                      " → " + got + ", expected " + c[2]);
+  });
+  Logger.log("test_mirrorToAmount OK");
+}
+
+/**
+ * tx_parsePeriod_ — normalizes the reporting-month override to the "yyyy-MMM" the
+ * Month ARRAYFORMULA emits, and rejects anything that would write a key no report
+ * can ever match.
+ */
+function test_parsePeriod() {
+  const ok = { "2026-Aug": "2026-Aug", "2026-08": "2026-Aug", "2026-8": "2026-Aug",
+               "2026-aug": "2026-Aug", "2026-AUGUST": "2026-Aug", " 2026-Jan ": "2026-Jan",
+               "2026-12": "2026-Dec" };
+  Object.keys(ok).forEach(function (input) {
+    const got = tx_parsePeriod_(input);
+    if (got !== ok[input]) throw new Error("tx_parsePeriod_ FAIL: " + input + " → " + got + " (want " + ok[input] + ")");
+  });
+  ["", null, undefined, "  "].forEach(function (blank) {
+    if (tx_parsePeriod_(blank) !== "") throw new Error("tx_parsePeriod_ FAIL: blank should clear the override");
+  });
+  ["2026-13", "2026-00", "August", "2026", "26-Aug", "2026-Aug-01", "next month"].forEach(function (bad) {
+    let threw = false;
+    try { tx_parsePeriod_(bad); } catch (e) { threw = true; }
+    if (!threw) throw new Error("tx_parsePeriod_ FAIL: expected reject for " + JSON.stringify(bad));
+  });
+  Logger.log("test_parsePeriod OK");
+}
+
 /** tx_byDateDesc_ — newest date first; same-day ties fall back to row order (later row first). */
 function test_byDateDesc() {
   const rows = [
@@ -85,6 +129,27 @@ function test_interestNet() {
     if (got !== c[2]) throw new Error("interest_net_ FAIL: (" + c[0] + "," + c[1] + ") → " + got + " want " + c[2]);
   });
   Logger.log("test_interestNet OK");
+}
+
+/** mig_mergePartition_ — an account merge must not delete and patch the same row. */
+function test_mergePartition() {
+  const rows = [
+    { ID: 1, Account: "Maya Savings", ToAccount: "" },        // src
+    { ID: 2, Account: "Maya", ToAccount: "" },                // untouched (survivor)
+    { ID: 3, Account: "Maya", ToAccount: "Maya Savings" },    // self (both sides)
+    { ID: 4, Account: "Maya Savings", ToAccount: "Maya" },    // self (other direction)
+    { ID: 5, Account: "BPI", ToAccount: "Maya Savings" },     // dst
+    { ID: 6, Account: "Maya Savings", ToAccount: "BPI" },     // src (transfer out)
+    { ID: 7, Account: "BPI", ToAccount: null },               // untouched, null ToAccount
+    { ID: 8, Account: "Maya Savings", ToAccount: "Maya Savings" } // legacy junk → self, not both
+  ];
+  const got = mig_mergePartition_(rows, "Maya Savings", "Maya");
+  const want = { self: ["3", "4", "8"], src: ["1", "6"], dst: ["5"] };
+  ["self", "src", "dst"].forEach(function (k) {
+    if (got[k].join() !== want[k].join())
+      throw new Error("mig_mergePartition_ FAIL " + k + ": " + got[k].join() + " want " + want[k].join());
+  });
+  Logger.log("test_mergePartition OK");
 }
 
 /** acct_isInvestment_ — Dashboard tile + Investments screen must agree on this predicate. */
@@ -168,6 +233,38 @@ function test_telegramQuery() {
   if (capped.indexOf("across 9 tx") === -1 || capped.indexOf("› _…7 more_") === -1)
     throw new Error("tg_querySummary_ FAIL (capped): " + capped);
   Logger.log("test_telegramQuery OK");
+}
+
+/** tg_balanceText_ — account filtering, native-vs-PHP display, signed net-worth total. */
+function test_telegramBalance() {
+  const accts = [
+    { name: "Maya", currency: "PHP", balancePhp: 1200.5, balanceNative: 1200.5, netWorthPhp: 1200.5, isLiability: false },
+    { name: "IBKR USD", currency: "USD", balancePhp: 5600, balanceNative: 100, netWorthPhp: 5600, isLiability: false },
+    { name: "BPI Credit Card", currency: "PHP", balancePhp: 8000, balanceNative: 8000, netWorthPhp: -8000, isLiability: true }
+  ];
+  const all = tg_balanceText_(accts, null);
+  // Non-PHP leads native, PHP behind it; liabilities are flagged and pull the total down.
+  if (all.indexOf("› _IBKR USD_ `$100` · `₱5,600`") === -1) throw new Error("tg_balanceText_ FAIL (native): " + all);
+  if (all.indexOf("› _BPI Credit Card_ `₱8,000` owed") === -1) throw new Error("tg_balanceText_ FAIL (liability): " + all);
+  if (all.indexOf("*Total* `-₱1,199.5`") === -1) throw new Error("tg_balanceText_ FAIL (total): " + all);
+
+  // One account: case-insensitive partial name, and no total line for a single row.
+  const one = tg_balanceText_(accts, "maya");
+  if (one !== "◈ *Balance*\n› _Maya_ `₱1,200.5`") throw new Error("tg_balanceText_ FAIL (single): " + one);
+  if (tg_balanceText_(accts, "gcash").indexOf("No account matching") === -1)
+    throw new Error("tg_balanceText_ FAIL: unknown account should say so");
+  Logger.log("test_telegramBalance OK");
+}
+
+/** Undo button payload — round-trips to the same IDs tg_logItems_ wrote, and only ours. */
+function test_telegramUndoData() {
+  const ids = tg_undoIds_(tg_undoData_(90210, [0, 2]));
+  if (ids.join("|") !== "tg-90210-0|tg-90210-2")
+    throw new Error("tg_undoIds_ FAIL: " + JSON.stringify(ids));
+  ["", null, "u:90210:", "u:abc:0", "undo", "u:90210:0;DROP"].forEach(function (bad) {
+    if (tg_undoIds_(bad).length) throw new Error("tg_undoIds_ FAIL: accepted " + JSON.stringify(bad));
+  });
+  Logger.log("test_telegramUndoData OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */

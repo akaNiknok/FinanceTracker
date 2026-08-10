@@ -36,7 +36,7 @@ function auth_extractToken_(e, body) {
  */
 function auth_requireWrite_(e, body) {
   if (auth_isOwner_()) return;            // signed-in owner (restricted deploy)
-  if (!cfgEnforceToken_()) return;        // Phase 1 default: anonymous writes ok
+  if (!cfgEnforceToken_()) return;        // rollback switch: anonymous writes ok
   const expected = cfgApiToken_();
   const given = auth_extractToken_(e, body);
   if (expected && given && given === expected) return;
