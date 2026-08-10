@@ -11,7 +11,7 @@ var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_intere
                   "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
-                  "test_telegramUndoData", "test_telegramNoEmoji"];
+                  "test_telegramUndoData", "test_telegramUndoGlyph"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -268,22 +268,18 @@ function test_telegramUndoData() {
 }
 
 /**
- * No emoji in anything the bot says. Telegram renders every Emoji=Yes codepoint with
- * its own emoji font and ignores the VS15 text-presentation selector, so "↩︎" came out
- * as a yellow ↩️ anyway. Only Emoji=No glyphs stay text: ← × ✎ ⌕ ◈ ✦ › →.
- * Reads the function sources so a new string anywhere in these paths is covered too.
+ * The undo glyph stays text. "↩" (U+21A9) is Emoji=Yes, so Telegram renders it with its
+ * own emoji font and ignores the U+FE0E text-presentation selector — "↩︎ Undo" shipped
+ * as a yellow ↩️ twice. "↻" (U+21BB) isn't in the emoji set, so it can't be substituted.
+ * Error marks (❌ ⛔) are deliberately emoji and deliberately not covered here.
  */
-function test_telegramNoEmoji() {
-  const fns = [tg_webhook_, tg_logItems_, tg_logKeyboard_, tg_callback_, tg_undo_,
-               tg_deleteIds_, tg_balance_, tg_balanceText_, tg_queryReply_];
-  const hits = [];
-  fns.forEach(function (f) {
-    (f.toString().match(/[^\x00-\x7F]/g) || []).forEach(function (ch) {
-      if (/\p{Emoji}/u.test(ch) && hits.indexOf(ch) === -1) hits.push(ch);
-    });
+function test_telegramUndoGlyph() {
+  [tg_logKeyboard_, tg_deleteIds_].forEach(function (f) {
+    if (f.toString().indexOf("↩") !== -1)
+      throw new Error("test_telegramUndoGlyph FAIL: ↩ (U+21A9) is Emoji=Yes — VS15 won't stop "
+                      + "Telegram emoji-fying it; use ↻");
   });
-  if (hits.length) throw new Error("test_telegramNoEmoji FAIL: emoji in bot output: " + hits.join(" "));
-  Logger.log("test_telegramNoEmoji OK");
+  Logger.log("test_telegramUndoGlyph OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */
