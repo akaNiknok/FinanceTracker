@@ -37,6 +37,14 @@ const TX_CLIENT_FIELDS = [
 
 const BASE_CURRENCY = "PHP";
 
+// ── Ledger (BIR 8% tracker / Tax screen) ─────────────────────────────────────
+// A Ledger row REFERENCES a transaction instead of duplicating it: everything
+// derivable (date, gross, currency, PHP amount, 8% liability) is a per-row sheet
+// formula keyed off this column, so the only typed cells left are BSP Rate /
+// Filed? / Notes. See Migration.setupLedgerSchema.
+const LEDGER_TXID_HEADER = "Transaction ID";
+const LEDGER_TX_CATEGORY = "Income: Salary"; // the only category the Tax screen offers to link
+
 // ── Settings (Script Properties, with safe fallbacks) ─────────────────────────
 // Set these in the Apps Script editor: Project Settings → Script Properties.
 //   OWNER_EMAIL       — Google account allowed to use the authenticated UI.
