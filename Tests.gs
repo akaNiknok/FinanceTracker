@@ -10,7 +10,7 @@
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
-                  "test_telegram", "test_telegramQuery"];
+                  "test_telegram", "test_telegramQuery", "test_telegramBalance"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -232,6 +232,27 @@ function test_telegramQuery() {
   if (capped.indexOf("across 9 tx") === -1 || capped.indexOf("› _…7 more_") === -1)
     throw new Error("tg_querySummary_ FAIL (capped): " + capped);
   Logger.log("test_telegramQuery OK");
+}
+
+/** tg_balanceText_ — account filtering, native-vs-PHP display, signed net-worth total. */
+function test_telegramBalance() {
+  const accts = [
+    { name: "Maya", currency: "PHP", balancePhp: 1200.5, balanceNative: 1200.5, netWorthPhp: 1200.5, isLiability: false },
+    { name: "IBKR USD", currency: "USD", balancePhp: 5600, balanceNative: 100, netWorthPhp: 5600, isLiability: false },
+    { name: "BPI Credit Card", currency: "PHP", balancePhp: 8000, balanceNative: 8000, netWorthPhp: -8000, isLiability: true }
+  ];
+  const all = tg_balanceText_(accts, null);
+  // Non-PHP leads native, PHP behind it; liabilities are flagged and pull the total down.
+  if (all.indexOf("› _IBKR USD_ `$100` · `₱5,600`") === -1) throw new Error("tg_balanceText_ FAIL (native): " + all);
+  if (all.indexOf("› _BPI Credit Card_ `₱8,000` owed") === -1) throw new Error("tg_balanceText_ FAIL (liability): " + all);
+  if (all.indexOf("*Total* `-₱1,199.5`") === -1) throw new Error("tg_balanceText_ FAIL (total): " + all);
+
+  // One account: case-insensitive partial name, and no total line for a single row.
+  const one = tg_balanceText_(accts, "maya");
+  if (one !== "💰 *Balance*\n› _Maya_ `₱1,200.5`") throw new Error("tg_balanceText_ FAIL (single): " + one);
+  if (tg_balanceText_(accts, "gcash").indexOf("No account matching") === -1)
+    throw new Error("tg_balanceText_ FAIL: unknown account should say so");
+  Logger.log("test_telegramBalance OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */

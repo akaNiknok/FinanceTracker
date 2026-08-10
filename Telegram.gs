@@ -31,6 +31,7 @@ const TG_HELP_  = "✦ Just send a transaction in plain language.\n" +
                   "e.g. `lunch 250 maya` or `moved 5k from bpi to maribank`\n" +
                   "Several in one message work too (one per line).\n" +
                   "Ask questions: `how much on food this month`\n" +
+                  "Check balances: `how much do I have` / `how much is in maya` (or /balance)\n" +
                   "Take it back: `undo` (or /undo) removes the last message's rows.";
 
 // The property holding the IDs written by the last logged message (undo target).
@@ -58,17 +59,17 @@ const TG_SCHEMA_ = {
   properties: {
     // Plain STRING, not an enum: an unrecognised value falls back to "log", which
     // is the pre-existing behaviour — safer than risking a schema the API rejects.
-    intent: { type: "STRING", description: '"log" to record transactions, "query" to answer a question about past ones, "undo" to take back the previous message' },
+    intent: { type: "STRING", description: '"log" to record transactions, "query" to answer a question about past ones, "balance" to report what is in the accounts right now, "undo" to take back the previous message' },
     items:  { type: "ARRAY", nullable: true, items: TG_TX_SCHEMA_,
               description: "One entry per transaction in the message (intent=log). A message may contain several." },
-    query:  { type: "OBJECT", nullable: true, description: "Filters for intent=query; omit the ones the message does not imply",
+    query:  { type: "OBJECT", nullable: true, description: "Filters for intent=query (intent=balance uses account only); omit the ones the message does not imply",
               properties: {
                 month:    { type: "STRING", nullable: true, description: "Month to restrict to, yyyy-MM. Null means all time" },
                 category: { type: "STRING", nullable: true, description: "Exact match from VALID CATEGORIES" },
                 account:  { type: "STRING", nullable: true, description: "Exact match from VALID ACCOUNTS" },
                 search:   { type: "STRING", nullable: true, description: "Free-text words to match in the description" }
               } },
-    error:  { type: "STRING", nullable: true, description: "Short error message if the message is neither a transaction, a question about them, nor an undo; else null" }
+    error:  { type: "STRING", nullable: true, description: "Short error message if the message is none of the four intents; else null" }
   },
   required: ["intent", "error"]
 };
@@ -128,8 +129,10 @@ function tg_handleUpdate_(update) {
 
   const text = String(msg.text).trim();
   if (text.charAt(0) === "/") {
-    if (text.slice(1).split(/[\s@]/)[0] === "undo") tg_undo_(chat, replyTo);
-    else tg_send_(chat, TG_HELP_, replyTo);
+    const cmd = text.slice(1).split(/[\s@]/)[0];
+    if (cmd === "undo")         tg_undo_(chat, replyTo);
+    else if (cmd === "balance") tg_balance_(chat, null, replyTo);   // no parse needed
+    else                        tg_send_(chat, TG_HELP_, replyTo);
     return;
   }
 
@@ -145,7 +148,8 @@ function tg_handleUpdate_(update) {
     return;
   }
 
-  if (parsed.intent === "undo")  { tg_undo_(chat, replyTo); return; }
+  if (parsed.intent === "undo")    { tg_undo_(chat, replyTo); return; }
+  if (parsed.intent === "balance") { tg_balance_(chat, parsed.query, replyTo); return; }
   if (parsed.intent === "query") {
     try { tg_send_(chat, tg_queryReply_(parsed.query), replyTo); }
     catch (err) { tg_send_(chat, "❌ *Query failed*\n› " + tg_msg_(err), replyTo); }
@@ -273,9 +277,56 @@ function tg_querySummary_(rows, total) {
   return "*" + tg_php_(sum) + "* across " + n + " tx\n" + lines.join("\n");
 }
 
-function tg_php_(n) {
-  return "₱" + Math.abs(Number(n) || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+// ── balances ──────────────────────────────────────────────────────────────────
+/** Reply with what's in the accounts right now; `query.account` narrows it to one. */
+function tg_balance_(chat, query, replyTo) {
+  try { tg_send_(chat, tg_balanceText_(api_getAccounts().accounts, query && query.account), replyTo); }
+  catch (err) { tg_send_(chat, "❌ *Balance lookup failed*\n› " + tg_msg_(err), replyTo); }
 }
+
+/**
+ * Accounts (from api_getAccounts, so the sheet's own balance formulas) → the reply.
+ * Non-PHP accounts lead with their native amount and carry PHP behind it, matching
+ * the web UI. The total is signed net worth: liabilities pull it down.
+ */
+function tg_balanceText_(accounts, name) {
+  const hits = tg_matchAccounts_(accounts || [], name);
+  if (!hits.length) return "🔎 No account matching *" + name + "*.";
+  const lines = hits.map(function (a) {
+    const ccy = String(a.currency || "PHP").toUpperCase();
+    const native = (ccy !== "PHP" && a.balanceNative !== null && a.balanceNative !== undefined)
+      ? "`" + tg_money_(a.balanceNative, ccy) + "` · " : "";
+    return "› _" + a.name + "_ " + native + "`" + tg_php_(a.balancePhp) + "`" +
+           (a.isLiability ? " owed" : "");
+  });
+  if (hits.length > 1) {
+    const total = hits.reduce(function (s, a) { return s + (Number(a.netWorthPhp) || 0); }, 0);
+    lines.push("*Total* `" + (total < 0 ? "-" : "") + tg_php_(total) + "`");
+  }
+  return "💰 *Balance" + (hits.length > 1 ? "s" : "") + "*\n" + lines.join("\n");
+}
+
+/**
+ * No name → every account. Otherwise case-insensitive substring, so a model that
+ * echoes "maya" instead of the exact sheet name still resolves (and "maya" legitimately
+ * matching two accounts lists both rather than guessing).
+ */
+function tg_matchAccounts_(accounts, name) {
+  const q = String(name || "").trim().toLowerCase();
+  if (!q) return accounts;
+  return accounts.filter(function (a) { return String(a.name).toLowerCase().indexOf(q) !== -1; });
+}
+
+/** Absolute amount with its currency's symbol; unknown currencies (SHARES) trail the code. */
+function tg_money_(n, ccy) {
+  const c = String(ccy || "PHP").toUpperCase();
+  const v = Math.abs(Number(n) || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (c === "PHP") return "₱" + v;
+  if (c === "USD") return "$" + v;
+  return v + " " + c;
+}
+
+function tg_php_(n) { return tg_money_(n, "PHP"); }
 
 // ── Gemini parse ──────────────────────────────────────────────────────────────
 /** Message text → the structured transaction object. Throws on API/parse failure. */
@@ -356,7 +407,10 @@ function tg_prompt_(unixDate) {
     'B. "query" — the message asks about transactions already recorded ("how much on food",',
     '   "what did I spend at bpi"). Fill query with only the filters the message implies,',
     "   and leave items empty.",
-    'C. "undo" — the message asks to take back / cancel / delete what was just logged.',
+    'C. "balance" — the message asks how much is in an account RIGHT NOW ("how much do I',
+    '   have", "balance", "how much is in maya", "my bpi balance"). Set query.account only',
+    "   when one account is named; leave query null for all accounts. Leave items empty.",
+    'D. "undo" — the message asks to take back / cancel / delete what was just logged.',
     "   Leave items and query null.",
     "",
     "RULES:",
@@ -368,7 +422,8 @@ function tg_prompt_(unixDate) {
     "6. ExchangeRate is PHP per 1 USD — only set it if explicitly mentioned, otherwise null",
     "7. If it is not a transfer, ToAccount and ToAmount must be null",
     '8. query.month is yyyy-MM; "this month" is ' + today.slice(0, 7) + ", and no period mentioned means null (all time)",
-    "9. If the message is none of the three intents, set error to a short reason and leave the rest null"
+    '9. Past spending/earning is "query"; money sitting in an account today is "balance"',
+    "10. If the message is none of the four intents, set error to a short reason and leave the rest null"
   ].join("\n");
 }
 
