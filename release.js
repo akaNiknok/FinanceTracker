@@ -14,9 +14,16 @@ if (out(`git tag -l ${tag}`)) { console.error(`${tag} already tagged — bump fi
 if (!fs.existsSync('.deploymentid')) { console.error('.deploymentid missing (gitignored file holding the live web-app deploymentId)'); process.exit(1); }
 const depId = fs.readFileSync('.deploymentid', 'utf8').trim();
 
+// ponytail: notes from commit subjects, not --generate-notes — this repo commits
+// straight to develop, so PR-derived notes come out empty. Revisit if it goes PR-based.
+const prev = out('git describe --tags --abbrev=0');
+const log = out(`git log --no-merges --invert-grep --grep="^Bump version" --format="* %s" ${prev}..HEAD`);
+const repo = out('gh repo view --json nameWithOwner -q .nameWithOwner');
+const notes = `## What's Changed\n${log}\n\n**Full Changelog**: https://github.com/${repo}/compare/${prev}...${tag}`;
+
 run('npx clasp push -f');
 run(`npx clasp deploy --deploymentId ${depId} --description "${tag}"`);
 run(`git tag ${tag}`);
 run('git push origin main --tags');
-run(`gh release create ${tag} --generate-notes`);
+execSync(`gh release create ${tag} --title ${tag} --notes-file -`, { stdio: ['pipe', 'inherit', 'inherit'], input: notes });
 console.log(`Released ${tag}`);
