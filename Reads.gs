@@ -11,17 +11,35 @@
  * Ledger for the editable Tax screen: rows keep their 1-based `__row` (so the UI
  * can target a cell), plus `cols` (sheet column order) and `derived` (formula
  * headers the UI renders read-only). Writes live in Ledger.gs.
+ *
+ * `unlinked` = LEDGER_TX_CATEGORY transactions no Ledger row points at yet, so the
+ * screen can offer a one-click "add to Ledger" instead of the owner re-typing the
+ * figures. Computed here rather than diffed client-side: it's one extra pass over a
+ * sheet this execution already reads, and keeps the join in one place.
  */
 function api_getLedger() {
   const sheet = su_sheet_(SHEET_LEDGER);
   const headerMap = su_headerMap_(sheet);
   const cols = Object.keys(headerMap);
+  const linked = {};
   const rows = su_readObjects_(SHEET_LEDGER).map(function (r) {
     const c = { __row: r.__row };
     cols.forEach(function (k) { c[k] = su_dateStr_(r[k]); });
+    const id = String(c[LEDGER_TXID_HEADER] || "").trim();
+    if (id) linked[id] = true;
     return c;
   });
-  return { status: "success", rows: rows, cols: cols, derived: ledger_derivedHeaders_(sheet, headerMap) };
+  const unlinked = headerMap[LEDGER_TXID_HEADER]
+    ? su_readObjects_(SHEET_TX)
+        .filter(function (t) { return t.Category === LEDGER_TX_CATEGORY && !linked[String(t.ID)]; })
+        .sort(tx_byDateDesc_)
+        .map(tx_clean_)
+    : [];   // pre-migration workbook: no link column, nothing to offer
+  return {
+    status: "success", rows: rows, cols: cols,
+    derived: ledger_derivedHeaders_(sheet, headerMap),
+    txIdCol: LEDGER_TXID_HEADER, unlinked: unlinked
+  };
 }
 
 /** Recurring bills / installments (reference notes). Empty if the sheet is absent. */

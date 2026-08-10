@@ -429,6 +429,136 @@ function setupTxPeriod() {
   Logger.log("== setupTxPeriod done. Spot-check Month, then redeploy the SAME deploymentId. ==");
 }
 
+// ── 8. Ledger ← Transactions link (run once) ──────────────────────────────────
+// The BIR 8% ledger was hand-copied from the salary transactions. Now a row just
+// points at a Transactions `ID` and everything derivable is a formula, so the only
+// typed cells left are the BSP reference rate and Filed?. PHP conversion uses that
+// **BSP rate**, NOT the app's ExchangeRate — BIR wants the central bank's rate on the
+// date of receipt, which the app has no feed for, so it stays hand-typed per payslip.
+//
+// Header names below are the owner's EXISTING Ledger columns; only `Transaction ID`
+// and `8% Tax` are new. Nothing here is guessed at runtime — rename a column in the
+// sheet and you must rename it here too, or the migration adds a duplicate.
+//
+// Per-row formulas, not an ARRAYFORMULA: Ledger rows are appended and deleted one at
+// a time (api_deleteLedgerRow does a real deleteRow), which would break a spill anchor.
+// Ledger.gs already treats any formula cell as read-only via getFormula, so no write
+// guard changes are needed. Idempotent; backs the sheet up first.
+const MIG_LEDGER_SHEET = "Ledger";
+const MIG_LEDGER_DATE  = "Date Received";
+const MIG_LEDGER_GROSS = "Wise Amount";         // gross in the payout currency (USD)
+const MIG_LEDGER_BSP   = "BSP Reference Rate";  // typed per row; blank ⇒ 1 (a PHP payslip)
+const MIG_LEDGER_PHP   = "Total Income";        // = Wise Amount × BSP Reference Rate
+const MIG_LEDGER_TAX   = "8% Tax";              // new column
+const MIG_LEDGER_RATE  = 0.08;
+const MIG_LEDGER_GONE  = "⚠ transaction deleted"; // shown in Date Received if the linked tx is gone
+const MIG_LEDGER_INPUTS  = [LEDGER_TXID_HEADER, MIG_LEDGER_BSP, "Filed?"];
+const MIG_LEDGER_DERIVED = [MIG_LEDGER_DATE, MIG_LEDGER_GROSS, MIG_LEDGER_PHP, MIG_LEDGER_TAX];
+
+function setupLedgerSchema() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MIG_LEDGER_SHEET);
+  if (!sheet) throw new Error("Sheet not found: " + MIG_LEDGER_SHEET);
+  Logger.log("== setupLedgerSchema ==");
+  Logger.log("Ledger headers before: %s", JSON.stringify(Object.keys(mig_headerMap_(sheet))));
+  mig_backupSheet_(sheet, MIG_LEDGER_SHEET);
+
+  const lastRow = sheet.getLastRow();
+  const n = Math.max(lastRow - 1, 0);
+  // Snapshot the sheet BEFORE adding columns: the backfill matches on the typed
+  // Date/Gross values that step 3 is about to replace with formulas. Appending
+  // columns never shifts existing ones, so the post-migration header map still
+  // indexes this grid correctly (newly added columns read back undefined).
+  const old = n ? sheet.getRange(2, 1, n, sheet.getLastColumn()).getValues() : [];
+
+  // 1. Ensure every managed column exists (owner columns are left alone).
+  let h = mig_headerMap_(sheet);
+  MIG_LEDGER_INPUTS.concat(MIG_LEDGER_DERIVED).forEach(function (name) {
+    if (h[name]) return;
+    const lastCol = sheet.getLastColumn();
+    if (sheet.getMaxColumns() === lastCol) sheet.insertColumnAfter(lastCol);
+    sheet.getRange(1, lastCol + 1).setValue(name);
+    h = mig_headerMap_(sheet);
+    Logger.log("Added Ledger column '%s' at position %s.", name, h[name]);
+  });
+
+  // 2. Backfill the link on existing rows by matching date + gross to a salary tx.
+  const tidCol = h[LEDGER_TXID_HEADER];
+  const tids = n ? sheet.getRange(2, tidCol, n, 1).getValues() : [];
+  const dIdx = h[MIG_LEDGER_DATE] - 1, gIdx = h[MIG_LEDGER_GROSS] - 1;
+  const txRows = su_readObjects_(MIG_TX_SHEET);
+  let linked = 0, unmatched = 0;
+  for (let i = 0; i < n; i++) {
+    if (String(tids[i][0]).trim() !== "") continue;
+    const row = old[i] || [];
+    const id = mig_matchSalaryTx_(txRows, su_dateStr_(row[dIdx]), row[gIdx]);
+    if (id) { tids[i][0] = id; linked++; }
+    else if (String(row[dIdx] == null ? "" : row[dIdx]) !== "") unmatched++;
+  }
+  if (n) sheet.getRange(2, tidCol, n, 1).setValues(tids);
+  Logger.log("Backfilled %s link(s); %s row(s) left unlinked (ambiguous or not a salary tx — link or leave them by hand).", linked, unmatched);
+
+  // 3. Stamp the derived formulas, but ONLY on linked rows — an unmatched legacy row
+  //    keeps its typed figures rather than being blanked out.
+  const txH = mig_headerMap_(mig_getTxSheet_());
+  ["ID", "Date", "Amount"].forEach(function (c) {
+    if (!txH[c]) throw new Error("Transactions is missing the '" + c + "' column — run setupMigration() first.");
+  });
+  const T = mig_colLetter_(tidCol);
+  const gL = mig_colLetter_(h[MIG_LEDGER_GROSS]);
+  const bL = mig_colLetter_(h[MIG_LEDGER_BSP]);
+  const pL = mig_colLetter_(h[MIG_LEDGER_PHP]);
+  const guard = function (body) { return '=IF(LEN($' + T + '{r}), ' + body + ', "")'; };
+  const tmpl = {};
+  // The deleted-tx warning rides on Date Received: it's the leftmost derived column,
+  // so a broken link is visible in the Sheet itself without a Description column that
+  // this ledger has never had.
+  tmpl[MIG_LEDGER_DATE]  = mig_ledgerLookup_(txH, "Date", T, '"' + MIG_LEDGER_GONE + '"');
+  tmpl[MIG_LEDGER_GROSS] = mig_ledgerLookup_(txH, "Amount", T, '""');
+  // Blank BSP rate passes through as 1, which is what a PHP payslip wants.
+  tmpl[MIG_LEDGER_PHP]   = guard(gL + '{r}*IF(LEN(' + bL + '{r}), ' + bL + '{r}, 1)');
+  tmpl[MIG_LEDGER_TAX]   = guard(pL + '{r}*' + MIG_LEDGER_RATE);
+
+  // ponytail: per-cell setFormula, 4 calls per linked row. One-shot on a sheet with
+  // one row per payslip — batch per column if the Ledger ever gets long.
+  let stamped = 0;
+  for (let i = 0; i < n; i++) {
+    if (String(tids[i][0]).trim() === "") continue;
+    const r = i + 2;
+    MIG_LEDGER_DERIVED.forEach(function (name) {
+      sheet.getRange(r, h[name]).setFormula(tmpl[name].replace(/\{r\}/g, String(r)));
+    });
+    stamped++;
+  }
+  if (n) sheet.getRange(2, h[MIG_LEDGER_DATE], n, 1).setNumberFormat("yyyy-mm-dd");
+  Logger.log("Stamped derivation formulas on %s linked row(s).", stamped);
+  Logger.log("Ledger headers after: %s", JSON.stringify(Object.keys(mig_headerMap_(sheet))));
+  Logger.log("== setupLedgerSchema done. New rows come from the Tax screen's 'Unlinked salary' list. ==");
+}
+
+/** `{r}`-templated per-row lookup of one Transactions column by the Ledger's link ID. */
+function mig_ledgerLookup_(txH, header, tidLetter, fallback) {
+  const ref = "'" + MIG_TX_SHEET + "'!";
+  const idL = mig_colLetter_(txH["ID"]), tgt = mig_colLetter_(txH[header]);
+  return '=IF(LEN($' + tidLetter + '{r}), IFNA(INDEX(' + ref + '$' + tgt + ':$' + tgt +
+         ', MATCH($' + tidLetter + '{r}, ' + ref + '$' + idL + ':$' + idL + ', 0)), ' + fallback + '), "")';
+}
+
+/**
+ * The one salary transaction matching a legacy Ledger row's date + gross, or null.
+ * Ambiguity (two payslips, same day, same amount) returns null on purpose: a wrong
+ * link would silently re-file the wrong figure, and the owner can pick by hand.
+ */
+function mig_matchSalaryTx_(txRows, dateStr, amount) {
+  const amt = Math.abs(Number(amount));
+  if (!dateStr || !isFinite(amt) || amt === 0) return null;
+  const hits = txRows.filter(function (t) {
+    return String(t.Category) === LEDGER_TX_CATEGORY
+        && String(su_dateStr_(t.Date)) === String(dateStr)
+        && Math.abs(Math.abs(Number(t.Amount)) - amt) < 0.005;
+  });
+  return hits.length === 1 ? String(hits[0].ID) : null;
+}
+
 // ── private helpers (trailing underscore = not web-exposed) ────────────────────
 /**
  * Month = the Period override when a row sets one, else the row's own Date month.
@@ -488,10 +618,10 @@ function mig_fillIds_(sheet, idCol) {
   return added;
 }
 
-function mig_backupSheet_(sheet) {
+function mig_backupSheet_(sheet, name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
-  return sheet.copyTo(ss).setName(MIG_TX_SHEET + "_backup_" + stamp);
+  return sheet.copyTo(ss).setName((name || MIG_TX_SHEET) + "_backup_" + stamp);
 }
 
 function mig_colLetter_(col) {

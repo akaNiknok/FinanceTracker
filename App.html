@@ -902,6 +902,7 @@ function renderTax(){
     head.appendChild(addBtn);
     w.appendChild(head);
     w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only)'));
+    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedSalaryCard(res.unlinked,res.txIdCol));
 
     if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); paint(w); return; }
     var card=el('div','card'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
@@ -935,6 +936,32 @@ function renderTax(){
     t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
     paint(w);
   }).catch(showErr);
+}
+
+/* Salary transactions no ledger row references yet. Adding one writes ONLY the link
+ * column — every figure on the row is a sheet formula off that ID, so there is
+ * nothing else to type but the BSP rate. */
+function unlinkedSalaryCard(list, txIdCol){
+  var card=el('div','card');
+  card.appendChild(el('div','card-h','Salary not in the ledger ('+list.length+')'));
+  var l=el('div','list');
+  list.forEach(function(t){
+    var r=el('div','litem');
+    r.innerHTML='<div class="grow"><div class="t1">'+esc(t.Description||'Salary')+'</div>'+
+                '<div class="t2">'+esc(fmtDate(t.Date))+' · '+esc(t.Account||'')+'</div></div>'+
+                '<div class="amt">'+esc(moneyCur(t.Amount,t.Currency))+'</div>';
+    var add=el('button','btn sm primary','+ Add');
+    add.onclick=function(){
+      add.disabled=true; add.textContent='Adding…';
+      var obj={}; obj[txIdCol]=t.ID;
+      gs('api_appendLedgerRow',obj).then(function(){
+        toast('Added to ledger','ok'); S.cache={}; renderTax();
+      }).catch(function(e){ add.disabled=false; add.textContent='+ Add'; toast(e.message||e,'err'); });
+    };
+    r.appendChild(add); l.appendChild(r);
+  });
+  card.appendChild(l);
+  return card;
 }
 
 function isFiledCol(c){ return /^filed/i.test(c); }

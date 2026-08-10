@@ -8,7 +8,7 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
+                  "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
                   "test_telegramUndoData", "test_telegramUndoGlyph"];
@@ -34,6 +34,29 @@ function test_ledgerCoerce() {
     if (got !== c[1]) throw new Error("ledger_coerce_ FAIL: " + JSON.stringify(c[0]) + " → " + JSON.stringify(got));
   });
   Logger.log("test_ledgerCoerce OK");
+}
+
+/** mig_matchSalaryTx_ — the setupLedgerSchema backfill: exactly-one match, or nothing. */
+function test_matchSalaryTx() {
+  const rows = [
+    { ID: "a", Category: LEDGER_TX_CATEGORY, Date: "2026-07-15", Amount: 47200 },
+    { ID: "b", Category: LEDGER_TX_CATEGORY, Date: "2026-07-15", Amount: 47200 },  // ambiguous pair
+    { ID: "c", Category: LEDGER_TX_CATEGORY, Date: "2026-06-15", Amount: 47200 },
+    { ID: "d", Category: "Income: Interest", Date: "2026-05-15", Amount: 47200 }   // wrong category
+  ];
+  const cases = [
+    [["2026-06-15", 47200], "c"],
+    [["2026-06-15", -47200], "c"],      // sign-agnostic
+    [["2026-07-15", 47200], null],      // two candidates → refuse to guess
+    [["2026-05-15", 47200], null],      // not a salary row
+    [["2026-06-15", 47201], null],      // amount must match
+    [["", 47200], null], [["2026-06-15", 0], null], [["2026-06-15", ""], null]
+  ];
+  cases.forEach(function (c) {
+    const got = mig_matchSalaryTx_(rows, c[0][0], c[0][1]);
+    if (got !== c[1]) throw new Error("mig_matchSalaryTx_ FAIL: " + JSON.stringify(c[0]) + " → " + JSON.stringify(got));
+  });
+  Logger.log("test_matchSalaryTx OK");
 }
 
 /** su_a1_ column-letter math (drives the RangeList bulk writes). */
