@@ -20,7 +20,7 @@
  *     supplied ID) then guarantees no second row if one slips through anyway.
  *
  * Script Properties required: TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, GEMINI_API_KEY
- * (+ WEB_APP_URL, used only by tg_setWebhook).
+ * (+ WEB_APP_URL, used by tg_gasEndpoint and by the receipt's "Edit details" link).
  */
 
 const TG_API_    = "https://api.telegram.org/bot";
@@ -117,6 +117,7 @@ function tg_seen_(updateId) {
 }
 
 function tg_handleUpdate_(update) {
+  if (update && update.callback_query) { tg_callback_(update.callback_query); return; }
   const msg = update && update.message;
   if (!msg || !msg.text) return;                       // ignore photos/stickers/edits
   const chat = msg.chat.id;
@@ -174,7 +175,7 @@ function tg_handleUpdate_(update) {
  * carries a handful of transactions, not hundreds.
  */
 function tg_logItems_(chat, updateId, items, replyTo) {
-  const out = [], ids = [];
+  const out = [], ids = [], idx = [];
   items.forEach(function (p, i) {
     const args = {
       ID:           "tg-" + updateId + "-" + i,        // idempotent under Telegram retries
@@ -193,13 +194,57 @@ function tg_logItems_(chat, updateId, items, replyTo) {
       const res = p.ToAccount ? api_createTransfer(args) : api_createTransaction(args);
       out.push(tg_receipt_(p, res.status));
       ids.push(args.ID);
+      idx.push(i);
     } catch (err) {
       out.push("❌ *Failed to add transaction*\n› " + tg_msg_(err));
     }
   });
   // Only the rows that actually landed, so undo can't chase a failed item.
   if (ids.length) PropertiesService.getScriptProperties().setProperty(TG_LAST_IDS_, JSON.stringify(ids));
-  tg_send_(chat, out.join("\n\n"), replyTo);
+  tg_send_(chat, out.join("\n\n"), replyTo, ids.length ? tg_logKeyboard_(updateId, idx, ids) : null);
+}
+
+// ── the Undo / Edit details buttons under a receipt ───────────────────────────
+/**
+ * Undo carries its own IDs in callback_data instead of reading TG_LAST_IDS, so the
+ * button under an older receipt still undoes *that* message. Only the indices that
+ * landed are encoded — a failed item has no row to delete.
+ *
+ * Edit details is a plain URL button into the SPA (?tx= opens the edit modal); it
+ * needs no callback handling at all. With several rows in one message there is no
+ * single row to open, so it just lands on the Transactions screen.
+ */
+function tg_undoData_(updateId, indices) { return "u:" + updateId + ":" + indices.join(","); }
+
+/** Reverse of tg_undoData_ → transaction IDs; [] if the payload isn't ours. */
+function tg_undoIds_(data) {
+  const m = /^u:(\d+):(\d+(?:,\d+)*)$/.exec(String(data || ""));
+  if (!m) return [];
+  return m[2].split(",").map(function (i) { return "tg-" + m[1] + "-" + i; });
+}
+
+function tg_logKeyboard_(updateId, indices, ids) {
+  const row = [];
+  const data = tg_undoData_(updateId, indices);
+  // Telegram caps callback_data at 64 bytes; past that, /undo still covers it.
+  if (data.length <= 64) row.push({ text: "↩︎ Undo", callback_data: data });
+  const url = cfg_("WEB_APP_URL", "");
+  if (url) row.push({ text: "✏️ Edit details", url: url + "?screen=transactions" +
+                      (ids.length === 1 ? "&tx=" + encodeURIComponent(ids[0]) : "") });
+  return row.length ? [row] : null;
+}
+
+/**
+ * An Undo tap. The receipt is rewritten with the removal summary, which also drops
+ * the keyboard — so the button can't be pressed twice against deleted rows.
+ */
+function tg_callback_(cq) {
+  const msg = cq.message || {};
+  const authorized = String(cq.from && cq.from.id) === String(cfgTelegramUserId_());
+  const ids = authorized ? tg_undoIds_(cq.data) : [];
+  if (ids.length) tg_edit_(msg.chat && msg.chat.id, msg.message_id, tg_deleteIds_(ids).join("\n"));
+  tg_api_("answerCallbackQuery", { callback_query_id: cq.id,
+    text: !authorized ? "Unauthorized." : (ids.length ? "Removed." : "Nothing to undo.") });
 }
 
 // ── undo (the last logged message) ────────────────────────────────────────────
@@ -210,11 +255,15 @@ function tg_logItems_(chat, updateId, items, replyTo) {
  * hour later must still work.
  */
 function tg_undo_(chat, replyTo) {
-  const props = PropertiesService.getScriptProperties();
   let ids = [];
-  try { ids = JSON.parse(props.getProperty(TG_LAST_IDS_) || "[]"); } catch (err) { ids = []; }
+  try { ids = JSON.parse(PropertiesService.getScriptProperties().getProperty(TG_LAST_IDS_) || "[]"); }
+  catch (err) { ids = []; }
   if (!ids.length) { tg_send_(chat, "✦ *Nothing to undo.*", replyTo); return; }
+  tg_send_(chat, tg_deleteIds_(ids).join("\n"), replyTo);
+}
 
+/** Delete those rows and describe what went; shared by /undo and the Undo button. */
+function tg_deleteIds_(ids) {
   const out = ["↩︎ *Removed*"];
   ids.forEach(function (id) {
     try {
@@ -224,8 +273,10 @@ function tg_undo_(chat, replyTo) {
       out.push("› ❌ " + tg_msg_(err));
     }
   });
-  props.deleteProperty(TG_LAST_IDS_);
-  tg_send_(chat, out.join("\n"), replyTo);
+  // Cleared either way: the button and /undo point at the same rows, so whichever
+  // fires first must stop the other from chasing them.
+  PropertiesService.getScriptProperties().deleteProperty(TG_LAST_IDS_);
+  return out;
 }
 
 // ── query / read-back ─────────────────────────────────────────────────────────
@@ -446,17 +497,27 @@ function tg_receipt_(p, status) {
  * Markdown message (400) — so a rejected send is retried as plain text rather than
  * silently swallowing the only feedback the user gets.
  */
-function tg_send_(chatId, text, replyTo) {
-  const post = function (payload) {
-    return UrlFetchApp.fetch(TG_API_ + cfgTelegramToken_() + "/sendMessage",
-      { method: "post", contentType: "application/json",
-        payload: JSON.stringify(payload), muteHttpExceptions: true });
-  };
-  const base = { chat_id: chatId, text: text };
-  if (replyTo) base.reply_to_message_id = replyTo;
+function tg_send_(chatId, text, replyTo, keyboard) {
+  const p = { chat_id: chatId, text: text };
+  if (replyTo)  p.reply_to_message_id = replyTo;
+  if (keyboard) p.reply_markup = { inline_keyboard: keyboard };
+  tg_api_("sendMessage", p);
+}
 
-  const res = post(Object.assign({ parse_mode: "Markdown" }, base));
-  if (res.getResponseCode() !== 200) post(base);   // markdown rejected → plain text
+/** Rewrite a message in place (drops its inline keyboard — no reply_markup sent). */
+function tg_edit_(chatId, messageId, text) {
+  tg_api_("editMessageText", { chat_id: chatId, message_id: messageId, text: text });
+}
+
+/** Bot API call with the Markdown→plain retry above. */
+function tg_api_(method, payload) {
+  const post = function (p) {
+    return UrlFetchApp.fetch(TG_API_ + cfgTelegramToken_() + "/" + method,
+      { method: "post", contentType: "application/json",
+        payload: JSON.stringify(p), muteHttpExceptions: true });
+  };
+  const res = post(Object.assign({ parse_mode: "Markdown" }, payload));
+  if (res.getResponseCode() !== 200) post(payload);   // markdown rejected → plain text
 }
 
 function tg_msg_(err) { return (err && err.message) ? err.message : String(err); }
@@ -474,7 +535,8 @@ function tg_msg_(err) { return (err && err.message) ? err.message : String(err);
 function tg_setWebhook() {
   const url = cfg_("WEBHOOK_URL", "");
   if (!url) throw new Error("Set the WEBHOOK_URL script property to the Cloudflare Worker URL first (see worker/).");
-  const payload = { url: url, allowed_updates: ["message"], drop_pending_updates: true };
+  // callback_query = the Undo button under a receipt; without it Telegram drops taps.
+  const payload = { url: url, allowed_updates: ["message", "callback_query"], drop_pending_updates: true };
   const secret = cfg_("TELEGRAM_SECRET_TOKEN", "");
   if (secret) payload.secret_token = secret;   // the Worker checks this header
   const res = UrlFetchApp.fetch(TG_API_ + cfgTelegramToken_() + "/setWebhook",

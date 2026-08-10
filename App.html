@@ -200,8 +200,13 @@ function boot(){
       if(s!==S.screen) go(s,true);
     });
     google.script.url.getLocation(function(loc){    // deep link: ?screen=budgets
-      var s=(loc.parameter||{}).screen;
-      if(s && s!==S.screen) go(s,true);
+      var p=loc.parameter||{};
+      if(p.screen && p.screen!==S.screen) go(p.screen,true);
+      // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
+      if(p.tx) gs('api_listTransactions',{id:p.tx,limit:1}).then(function(r){
+        var t=(r.transactions||[])[0];
+        if(t) openTxModal(t); else toast('That transaction no longer exists.','err');
+      }).catch(function(e){ toast(e.message||e,'err'); });
     });
   }catch(e){}
   // Scroll-wheel over a focused number input silently changes the value — block it.

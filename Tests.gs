@@ -10,7 +10,8 @@
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
-                  "test_telegram", "test_telegramQuery", "test_telegramBalance"];
+                  "test_telegram", "test_telegramQuery", "test_telegramBalance",
+                  "test_telegramUndoData"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -253,6 +254,17 @@ function test_telegramBalance() {
   if (tg_balanceText_(accts, "gcash").indexOf("No account matching") === -1)
     throw new Error("tg_balanceText_ FAIL: unknown account should say so");
   Logger.log("test_telegramBalance OK");
+}
+
+/** Undo button payload — round-trips to the same IDs tg_logItems_ wrote, and only ours. */
+function test_telegramUndoData() {
+  const ids = tg_undoIds_(tg_undoData_(90210, [0, 2]));
+  if (ids.join("|") !== "tg-90210-0|tg-90210-2")
+    throw new Error("tg_undoIds_ FAIL: " + JSON.stringify(ids));
+  ["", null, "u:90210:", "u:abc:0", "undo", "u:90210:0;DROP"].forEach(function (bad) {
+    if (tg_undoIds_(bad).length) throw new Error("tg_undoIds_ FAIL: accepted " + JSON.stringify(bad));
+  });
+  Logger.log("test_telegramUndoData OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */

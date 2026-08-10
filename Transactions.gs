@@ -137,7 +137,10 @@ function api_listTransactions(args) {
   const segment  = args.segment  ? String(args.segment) : "";
   const search   = args.search   ? String(args.search).toLowerCase() : "";
 
+  const id       = args.id       ? String(args.id) : "";   // ?tx= deep link (Telegram "Edit details")
+
   let filtered = rows.filter(function (r) {
+    if (id       && String(r.ID)       !== id) return false;
     if (month    && String(r.Month)    !== month) return false;
     if (account  && String(r.Account)  !== account && String(r.ToAccount) !== account) return false;
     if (category && String(r.Category) !== category) return false;
