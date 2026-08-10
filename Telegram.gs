@@ -227,7 +227,7 @@ function tg_logKeyboard_(updateId, indices, ids) {
   const row = [];
   const data = tg_undoData_(updateId, indices);
   // Telegram caps callback_data at 64 bytes; past that, /undo still covers it.
-  if (data.length <= 64) row.push({ text: "↩︎ Undo", callback_data: data });
+  if (data.length <= 64) row.push({ text: "↻ Undo", callback_data: data });
   const url = cfg_("WEB_APP_URL", "");
   if (url) row.push({ text: "✎ Edit details", url: url + "?screen=transactions" +
                       (ids.length === 1 ? "&tx=" + encodeURIComponent(ids[0]) : "") });
@@ -264,7 +264,7 @@ function tg_undo_(chat, replyTo) {
 
 /** Delete those rows and describe what went; shared by /undo and the Undo button. */
 function tg_deleteIds_(ids) {
-  const out = ["↩︎ *Removed*"];
+  const out = ["↻ *Removed*"];
   ids.forEach(function (id) {
     try {
       const t = api_deleteTransaction({ ID: id }).transaction;

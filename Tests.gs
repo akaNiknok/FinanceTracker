@@ -11,7 +11,7 @@ var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_intere
                   "test_isInvestment", "test_ledgerCoerce", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
-                  "test_telegramUndoData"];
+                  "test_telegramUndoData", "test_telegramUndoGlyph"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -265,6 +265,21 @@ function test_telegramUndoData() {
     if (tg_undoIds_(bad).length) throw new Error("tg_undoIds_ FAIL: accepted " + JSON.stringify(bad));
   });
   Logger.log("test_telegramUndoData OK");
+}
+
+/**
+ * The undo glyph stays text. "↩" (U+21A9) is Emoji=Yes, so Telegram renders it with its
+ * own emoji font and ignores the U+FE0E text-presentation selector — "↩︎ Undo" shipped
+ * as a yellow ↩️ twice. "↻" (U+21BB) isn't in the emoji set, so it can't be substituted.
+ * Error marks (❌ ⛔) are deliberately emoji and deliberately not covered here.
+ */
+function test_telegramUndoGlyph() {
+  [tg_logKeyboard_, tg_deleteIds_].forEach(function (f) {
+    if (f.toString().indexOf("↩") !== -1)
+      throw new Error("test_telegramUndoGlyph FAIL: ↩ (U+21A9) is Emoji=Yes — VS15 won't stop "
+                      + "Telegram emoji-fying it; use ↻");
+  });
+  Logger.log("test_telegramUndoGlyph OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */
