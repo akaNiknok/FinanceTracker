@@ -11,7 +11,8 @@
  * Once logged, the email is moved to the trash (recoverable, and the same thing the
  * owner did by hand), which is what keeps the inbox meaning "not yet logged".
  *
- * Run from a time-based trigger (hourly is plenty). Script Properties (all optional):
+ * Run from a time-based trigger (every 5 minutes; see gmail_ingest on overlap).
+ * Script Properties (all optional):
  *   GMAIL_QUERY   — overrides GMAIL_QUERY_ below (add a sender, widen the window).
  *   GMAIL_HINTS   — overrides GMAIL_HINTS_: free text appended to the parser prompt
  *                   for facts the email itself doesn't carry.
@@ -51,8 +52,18 @@ const GMAIL_HINTS_ = "Anthropic / Stripe receipts are charged to the Wise accoun
  * message is only *looked at* once — mail that parsed as "not a transaction" stays
  * in the inbox and must not be re-parsed hourly) and the deterministic
  * "gm-<messageId>-<i>" row ID, which both create paths treat as idempotent.
+ *
+ * On a 5-minute trigger a run can still be mid-Gemini when the next one fires, and
+ * neither guard covers that: the watermark is only written at the end and the mail is
+ * only trashed after it lands, so the second run re-finds the same message. The rows
+ * would survive (idempotent ID) but the owner would get a second Telegram receipt.
  */
 function gmail_ingest() {
+  // ponytail: USER lock, not su_lock_()'s script lock — this run holds it for minutes,
+  // and the script lock would both deadlock its own api_createTransaction calls and
+  // freeze the bot/UI meanwhile. tryLock(0) = skip this tick, the next one is 5 min away.
+  if (!LockService.getUserLock().tryLock(0)) return;
+
   const q = cfg_("GMAIL_QUERY", GMAIL_QUERY_);
   const chat = cfgTelegramUserId_();
   const since = Number(cfg_(GMAIL_LAST_TS_, 0)) || 0;
