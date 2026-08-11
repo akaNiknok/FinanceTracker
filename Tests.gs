@@ -8,8 +8,8 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_parseDate", "test_telegram",
-                  "test_telegramQuery"];
+                  "test_isInvestment", "test_ledgerCoerce", "test_mail", "test_parseDate",
+                  "test_telegram", "test_telegramQuery"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
@@ -168,6 +168,50 @@ function test_telegramQuery() {
   if (capped.indexOf("across 9 tx") === -1 || capped.indexOf("› _…7 more_") === -1)
     throw new Error("tg_querySummary_ FAIL (capped): " + capped);
   Logger.log("test_telegramQuery OK");
+}
+
+/** Mail.gs pure helpers — search string, parser input, receipt header, seen-list. */
+function test_mail() {
+  // A label with spaces must stay one term, or the search silently widens.
+  if (mail_query_("bank-alerts", 7) !== 'label:"bank-alerts" newer_than:7d')
+    throw new Error("mail_query_ FAIL: " + mail_query_("bank-alerts", 7));
+  if (mail_query_("Bank Alerts", 30).indexOf('label:"Bank Alerts"') !== 0)
+    throw new Error("mail_query_ FAIL (spaces): " + mail_query_("Bank Alerts", 30));
+
+  // From/Subject survive into the parser input — they carry the bank's name, which
+  // is how the model picks the Account.
+  const t = mail_text_("BPI <a@bpi.com.ph>", "Transaction alert", "  Php 250.00 debited\r\n\n\n\nlunch  ");
+  if (t.indexOf("From: BPI <a@bpi.com.ph>") !== 0 || t.indexOf("Subject: Transaction alert") === -1)
+    throw new Error("mail_text_ FAIL (headers): " + t);
+  if (t.indexOf("\r") !== -1 || t.indexOf("\n\n\n") !== -1 || t.indexOf("  Php") !== -1)
+    throw new Error("mail_text_ FAIL (not normalised): " + JSON.stringify(t));
+  if (mail_text_("a", "b", "x".repeat(MAIL_BODY_MAX_ + 500)).length > MAIL_BODY_MAX_ + 100)
+    throw new Error("mail_text_ FAIL: body not capped");
+  [null, undefined, ""].forEach(function (v) {
+    if (typeof mail_text_(v, v, v) !== "string") throw new Error("mail_text_ FAIL: empty input");
+  });
+
+  const senders = { 'BPI Alerts <a@b.ph>': "BPI Alerts", '"Maya, Inc." <x@maya.ph>': "Maya, Inc.",
+                    "a@b.ph": "a@b.ph", "<a@b.ph>": "a@b.ph", "": "" };
+  Object.keys(senders).forEach(function (from) {
+    if (mail_sender_(from) !== senders[from])
+      throw new Error("mail_sender_ FAIL: " + JSON.stringify(from) + " → " + JSON.stringify(mail_sender_(from)));
+  });
+  if (mail_header_('BPI Alerts <a@b.ph>') !== "📧 *BPI Alerts*")
+    throw new Error("mail_header_ FAIL: " + mail_header_('BPI Alerts <a@b.ph>'));
+
+  // Newest first, no duplicates (a re-marked id must not push the list over cap).
+  if (mail_addSeen_(["b", "c"], "a").join() !== "a,b,c")
+    throw new Error("mail_addSeen_ FAIL: not prepended");
+  if (mail_addSeen_(["a", "b"], "a").join() !== "a,b")
+    throw new Error("mail_addSeen_ FAIL: duplicate not collapsed");
+  if (mail_addSeen_(null, "a").join() !== "a") throw new Error("mail_addSeen_ FAIL: null seed");
+  const big = [];
+  for (var i = 0; i < MAIL_SEEN_MAX_ + 50; i++) big.push("id" + i);
+  const trimmed = mail_addSeen_(big, "new");
+  if (trimmed.length !== MAIL_SEEN_MAX_ || trimmed[0] !== "new")
+    throw new Error("mail_addSeen_ FAIL: cap not applied (" + trimmed.length + ")");
+  Logger.log("test_mail OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */

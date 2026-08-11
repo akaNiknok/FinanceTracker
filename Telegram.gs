@@ -157,23 +157,35 @@ function tg_handleUpdate_(update) {
     tg_send_(chat, "❌ *Failed to add transaction*\n› Nothing to log.", replyTo);
     return;
   }
-  tg_logItems_(chat, update.update_id, items, replyTo);
+  tg_logItems_(chat, "tg-" + update.update_id, items, replyTo);
 }
 
 // ── log (one or many transactions per message) ────────────────────────────────
+/** Create every parsed item and reply once. `idPrefix` scopes the row IDs. */
+function tg_logItems_(chat, idPrefix, items, replyTo) {
+  tg_send_(chat, tg_createItems_(idPrefix, items).receipts.join("\n\n"), replyTo);
+}
+
 /**
- * Create every parsed item, reply once, and remember the IDs for undo. A failing
- * item reports itself and the rest still land — a five-line message shouldn't be
- * lost because line three named an account that doesn't exist.
+ * Create every parsed item and remember the IDs for undo, handing back the
+ * receipt lines instead of sending them. A failing item reports itself and the
+ * rest still land — a five-line message shouldn't be lost because line three
+ * named an account that doesn't exist.
+ *
+ * Split out from tg_logItems_ so Mail.gs can log an emailed transaction through
+ * exactly this path: same receipt text, and TG_LAST_IDS left pointing at the rows
+ * the notification just announced, so /undo means the same thing on both channels.
+ * That makes undo "take back the last thing that was logged, whichever channel
+ * logged it" — deliberately one level deep, as it always was.
  *
  * ponytail: one service call per item. There is no bulk create, and a message
  * carries a handful of transactions, not hundreds.
  */
-function tg_logItems_(chat, updateId, items, replyTo) {
+function tg_createItems_(idPrefix, items) {
   const out = [], ids = [];
-  items.forEach(function (p, i) {
+  (items || []).forEach(function (p, i) {
     const args = {
-      ID:           "tg-" + updateId + "-" + i,        // idempotent under Telegram retries
+      ID:           idPrefix + "-" + i,                // idempotent under retries/re-ingest
       Date:         p.Date,
       Category:     p.Category,
       Description:  p.Description,
@@ -195,7 +207,7 @@ function tg_logItems_(chat, updateId, items, replyTo) {
   });
   // Only the rows that actually landed, so undo can't chase a failed item.
   if (ids.length) PropertiesService.getScriptProperties().setProperty(TG_LAST_IDS_, JSON.stringify(ids));
-  tg_send_(chat, out.join("\n\n"), replyTo);
+  return { receipts: out, ids: ids };
 }
 
 // ── undo (the last logged message) ────────────────────────────────────────────
@@ -278,12 +290,16 @@ function tg_php_(n) {
 }
 
 // ── Gemini parse ──────────────────────────────────────────────────────────────
-/** Message text → the structured transaction object. Throws on API/parse failure. */
-function tg_parse_(text, unixDate) {
+/**
+ * Message text → the structured transaction object. Throws on API/parse failure.
+ * `extraRules` appends caller-specific instructions to the prompt (Mail.gs passes
+ * the rules that stop a statement summary or an OTP becoming a transaction).
+ */
+function tg_parse_(text, unixDate, extraRules) {
   const key = cfgGeminiKey_();
   if (!key) throw new Error("GEMINI_API_KEY is not set.");
   const payload = JSON.stringify({
-    systemInstruction: { parts: [{ text: tg_prompt_(unixDate) }] },
+    systemInstruction: { parts: [{ text: tg_prompt_(unixDate, extraRules) }] },
     contents: [{ role: "user", parts: [{ text: text }] }],
     generationConfig: { temperature: 0, responseMimeType: "application/json",
                         responseSchema: TG_SCHEMA_ }
@@ -331,7 +347,7 @@ function tg_geminiText_(json) {
 }
 
 /** The parser system prompt, with the live category/account lists inlined. */
-function tg_prompt_(unixDate) {
+function tg_prompt_(unixDate, extraRules) {
   const tz = Session.getScriptTimeZone();
   const when = unixDate ? new Date(unixDate * 1000) : new Date();
   const today = Utilities.formatDate(when, tz, "yyyy-MM-dd");
@@ -369,7 +385,7 @@ function tg_prompt_(unixDate) {
     "7. If it is not a transfer, ToAccount and ToAmount must be null",
     '8. query.month is yyyy-MM; "this month" is ' + today.slice(0, 7) + ", and no period mentioned means null (all time)",
     "9. If the message is none of the three intents, set error to a short reason and leave the rest null"
-  ].join("\n");
+  ].concat(extraRules ? ["", extraRules] : []).join("\n");
 }
 
 // ── replies ───────────────────────────────────────────────────────────────────

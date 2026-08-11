@@ -49,6 +49,11 @@ const BASE_CURRENCY = "PHP";
 //   WEBHOOK_URL       — the Cloudflare Worker URL Telegram delivers to (worker/).
 //   TELEGRAM_SECRET_TOKEN — optional shared secret the Worker checks on each
 //                       delivery; must match the Worker's SECRET_TOKEN.
+//   MAIL_LABEL        — Gmail label whose messages Mail.gs ingests (default
+//                       "bank-alerts"); point a Gmail filter at it.
+//   MAIL_LOOKBACK_DAYS — how far back each ingest run searches (default 7).
+//   MAIL_MAX_PER_RUN  — messages parsed per run, keeps the job inside the 6-min
+//                       execution limit (default 10).
 function cfg_(key, fallback) {
   const v = PropertiesService.getScriptProperties().getProperty(key);
   return (v === null || v === undefined || v === "") ? fallback : v;
@@ -61,3 +66,6 @@ function cfgMonthlyIncomePhp_(){ return parseFloat(cfg_("MONTHLY_INCOME_PHP", "4
 function cfgTelegramToken_()  { return cfg_("TELEGRAM_BOT_TOKEN", ""); }
 function cfgTelegramUserId_() { return cfg_("TELEGRAM_USER_ID", ""); }
 function cfgGeminiKey_()      { return cfg_("GEMINI_API_KEY", ""); }
+function cfgMailLabel_()        { return cfg_("MAIL_LABEL", "bank-alerts"); }
+function cfgMailLookbackDays_() { return parseInt(cfg_("MAIL_LOOKBACK_DAYS", "7"), 10) || 7; }
+function cfgMailMaxPerRun_()    { return parseInt(cfg_("MAIL_MAX_PER_RUN", "10"), 10) || 10; }
