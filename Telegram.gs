@@ -174,14 +174,14 @@ function tg_handleUpdate_(update) {
  * `idPrefix` identifies the source that produced these rows and makes their IDs
  * idempotent under retries: "tg-<update_id>" for a chat message, "gm-<messageId>"
  * for a Gmail notification (Gmail.gs). Row IDs are "<idPrefix>-<i>".
- * `link` is an optional URL to the thing that caused the log (the email), shown as
- * a third button. Returns the IDs that landed — Gmail.gs only trashes the email
- * when every item made it.
+ * `mailId` is the Gmail message id when a notification caused the log, which adds the
+ * ⌕ Email button that quotes it back. Returns the IDs that landed — Gmail.gs only
+ * trashes the email when every item made it.
  *
  * ponytail: one service call per item. There is no bulk create, and a message
  * carries a handful of transactions, not hundreds.
  */
-function tg_logItems_(chat, idPrefix, items, replyTo, link) {
+function tg_logItems_(chat, idPrefix, items, replyTo, mailId) {
   const out = [], ids = [], idx = [];
   items.forEach(function (p, i) {
     const args = {
@@ -208,7 +208,7 @@ function tg_logItems_(chat, idPrefix, items, replyTo, link) {
   });
   // Only the rows that actually landed, so undo can't chase a failed item.
   if (ids.length) PropertiesService.getScriptProperties().setProperty(TG_LAST_IDS_, JSON.stringify(ids));
-  tg_send_(chat, out.join("\n\n"), replyTo, ids.length ? tg_logKeyboard_(idPrefix, idx, ids, link) : null);
+  tg_send_(chat, out.join("\n\n"), replyTo, ids.length ? tg_logKeyboard_(idPrefix, idx, ids, mailId) : null);
   return ids;
 }
 
@@ -233,7 +233,7 @@ function tg_undoIds_(data) {
   return m[2].split(",").map(function (i) { return prefix + "-" + i; });
 }
 
-function tg_logKeyboard_(idPrefix, indices, ids, link) {
+function tg_logKeyboard_(idPrefix, indices, ids, mailId) {
   const row = [];
   const data = tg_undoData_(idPrefix, indices);
   // Telegram caps callback_data at 64 bytes; past that, /undo still covers it.
@@ -243,21 +243,44 @@ function tg_logKeyboard_(idPrefix, indices, ids, link) {
                       (ids.length === 1 ? "&tx=" + encodeURIComponent(ids[0]) : "") });
   const rows = row.length ? [row] : [];
   // Its own row: three buttons abreast get squeezed to unreadable on a phone.
-  if (link) rows.push([{ text: "⌕ Email", url: link }]);
+  if (mailId) rows.push([{ text: "⌕ Email", callback_data: "e:" + mailId }]);
   return rows.length ? rows : null;
 }
 
 /**
- * An Undo tap. The receipt is rewritten with the removal summary, which also drops
- * the keyboard — so the button can't be pressed twice against deleted rows.
+ * A button tap — "u:…" Undo, or "e:<gmail id>" ⌕ Email.
+ *
+ * Undo rewrites the receipt with the removal summary, which also drops the keyboard,
+ * so it can't be pressed twice against deleted rows. Email replies with a quote of the
+ * mail and deliberately leaves the keyboard alone: checking the source is a read, and
+ * a second look must stay possible. The mail is fetched on demand rather than stashed
+ * anywhere — Gmail still serves a trashed message by id, and the receipt outliving the
+ * 30-day trash purge is what the catch is for.
  */
 function tg_callback_(cq) {
   const msg = cq.message || {};
-  const authorized = String(cq.from && cq.from.id) === String(cfgTelegramUserId_());
-  const ids = authorized ? tg_undoIds_(cq.data) : [];
-  if (ids.length) tg_edit_(msg.chat && msg.chat.id, msg.message_id, tg_deleteIds_(ids).join("\n"));
-  tg_api_("answerCallbackQuery", { callback_query_id: cq.id,
-    text: !authorized ? "Unauthorized." : (ids.length ? "Removed." : "Nothing to undo.") });
+  const chat = msg.chat && msg.chat.id;
+  if (String(cq.from && cq.from.id) !== String(cfgTelegramUserId_()))
+    return tg_answer_(cq, "Unauthorized.");
+
+  const mailId = /^e:([0-9a-zA-Z]{1,64})$/.exec(String(cq.data || ""));
+  if (mailId) {
+    try {
+      tg_send_(chat, gmail_quote_(GmailApp.getMessageById(mailId[1])), msg.message_id);
+    } catch (err) {
+      return tg_answer_(cq, "Email no longer available.");
+    }
+    return tg_answer_(cq, "");
+  }
+
+  const ids = tg_undoIds_(cq.data);
+  if (ids.length) tg_edit_(chat, msg.message_id, tg_deleteIds_(ids).join("\n"));
+  tg_answer_(cq, ids.length ? "Removed." : "Nothing to undo.");
+}
+
+/** Dismiss the button's spinner (an unanswered callback spins for ~30s). */
+function tg_answer_(cq, text) {
+  tg_api_("answerCallbackQuery", { callback_query_id: cq.id, text: text });
 }
 
 // ── undo (the last logged message) ────────────────────────────────────────────

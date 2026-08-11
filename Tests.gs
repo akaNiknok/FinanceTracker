@@ -7,7 +7,7 @@
  */
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
-var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_gmailLink", "test_gmailText", "test_interestNet",
+var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_gmailQuote", "test_gmailText", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
@@ -347,33 +347,31 @@ function test_gmailText() {
 }
 
 /**
- * gmail_link_ — the ⌕ Email button. With a Worker it must be the /mail bounce (the
- * only route to the Gmail iOS app); without one it falls back to the web link, which
- * has to open a message the job has already trashed — hence `in:anywhere` (All Mail
- * excludes the trash) and the Message-ID encoded, angle brackets stripped.
+ * gmail_quote_ — what the ⌕ Email button posts back. It exists to be *read* on a
+ * phone, so the two things that matter are that the amount/merchant line survives and
+ * that a long footer can't push the quote past Telegram's 4096-char message limit.
  */
-function test_gmailLink() {
-  const msg = { getId:     function () { return "19fef435b876aa00"; },
-                getHeader: function () { return "<CA+x1y2z@mail.gmail.com>"; } };
-
-  // Worker present: exactly one slash before /mail, whatever the property looks like.
-  ["https://w.example.dev", "https://w.example.dev/"].forEach(function (base) {
-    const url = gmail_link_(msg, base);
-    if (url.indexOf("https://w.example.dev/mail?id=19fef435b876aa00&mid=") !== 0)
-      throw new Error("gmail_link_ FAIL (worker): " + url);
-    if (url.indexOf("%3CCA") !== -1 || /[<>]/.test(url))
-      throw new Error("gmail_link_ FAIL: angle brackets reached the URL → " + url);
+function test_gmailQuote() {
+  const msg = {
+    getFrom:      function () { return "alerts@maribank.com.ph"; },
+    getSubject:   function () { return "Successful Debit Card Transaction"; },
+    getDate:      function () { return new Date(2026, 7, 11); },
+    getPlainBody: function () { return "Hi Austin,\n\n\n\n\nTransaction Amount: PHP 369.00\n" +
+                                       "Merchant: GRAB *TRIP\n"; }
+  };
+  const q = gmail_quote_(msg);
+  ["Successful Debit Card Transaction", "alerts@maribank.com.ph",
+   "PHP 369.00", "GRAB *TRIP"].forEach(function (needle) {
+    if (q.indexOf(needle) === -1) throw new Error("gmail_quote_ FAIL: missing " + needle);
   });
+  if (/\n{3,}/.test(q)) throw new Error("gmail_quote_ FAIL: blank-line runs not collapsed");
 
-  const web = gmail_link_(msg, "");
-  if (web.indexOf("#search/") === -1 || web.indexOf("in%3Aanywhere") === -1)
-    throw new Error("gmail_link_ FAIL: not an in:anywhere search → " + web);
-  if (/[<>]/.test(web) || web.indexOf("rfc822msgid%3ACA%2Bx1y2z%40mail.gmail.com") === -1)
-    throw new Error("gmail_link_ FAIL: Message-ID not stripped/encoded → " + web);
-  // No header (some senders omit it) and no Worker → no button rather than a broken one.
-  if (gmail_link_({ getHeader: function () { return null; } }, "") !== "")
-    throw new Error("gmail_link_ FAIL: missing Message-ID should yield no link");
-  Logger.log("test_gmailLink OK");
+  const long = Object.assign({}, msg, { getPlainBody: function () { return new Array(9000).join("x"); } });
+  const big = gmail_quote_(long);
+  if (big.length > GMAIL_QUOTE_BODY_ + 400)
+    throw new Error("gmail_quote_ FAIL: body not truncated (" + big.length + ")");
+  if (big.length > 4096) throw new Error("gmail_quote_ FAIL: over Telegram's message limit");
+  Logger.log("test_gmailQuote OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */
