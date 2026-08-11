@@ -68,7 +68,8 @@ function gmail_ingest() {
       try {
         const items = gmail_items_(msg);
         if (!items.length) return;
-        const ids = tg_logItems_(chat, "gm-" + msg.getId(), items, null, gmail_link_(msg));
+        const ids = tg_logItems_(chat, "gm-" + msg.getId(), items, null,
+                                 gmail_link_(msg, cfg_("WEBHOOK_URL", "")));
         if (ids.length === items.length) msg.moveToTrash();
       } catch (err) {
         console.error("gmail_ingest " + msg.getId() + ": " + (err && err.stack ? err.stack : err));
@@ -114,14 +115,22 @@ function gmail_text_(msg, hints) {
  * A URL that opens this email — the receipt's ⌕ Email button, for checking what a
  * row was logged from.
  *
- * Searching `rfc822msgid` rather than the obvious "#all/<id>" permalink, because by
- * the time anyone taps the button the mail has been trashed, and Gmail's All Mail
- * excludes the trash — `in:anywhere` is what makes the link survive its own job.
- * ponytail: /u/0 is the first signed-in account. Right on a one-account phone,
+ * Prefers the Worker's /mail bounce (`base`, the same Worker Telegram delivers to),
+ * which is the only way to reach the **Gmail iOS app**: a Telegram button URL must be
+ * http(s), and mail.google.com is not a Gmail universal link — confirmed on the
+ * owner's phone, Safari just loads the web page. Without a Worker URL configured it
+ * degrades to that same web link.
+ *
+ * The web form searches `rfc822msgid` rather than the obvious "#all/<id>" permalink,
+ * because by the time anyone taps the button the mail has been trashed, and Gmail's
+ * All Mail excludes the trash — `in:anywhere` is what makes the link survive its own
+ * job. ponytail: /u/0 is the first signed-in account. Right on a one-account phone,
  * which is where these get tapped; add an account index only if it's ever wrong.
  */
-function gmail_link_(msg) {
+function gmail_link_(msg, base) {
   const mid = String(msg.getHeader("Message-ID") || "").replace(/[<>]/g, "");
+  if (base) return String(base).replace(/\/+$/, "") + "/mail?id=" + encodeURIComponent(msg.getId()) +
+                  (mid ? "&mid=" + encodeURIComponent(mid) : "");
   if (!mid) return "";
   return "https://mail.google.com/mail/u/0/#search/" +
          encodeURIComponent("rfc822msgid:" + mid + " in:anywhere");
