@@ -5,7 +5,7 @@
  * There is deliberately no per-sender parser: the email text goes through the same
  * Gemini parse the bot uses (tg_parse_, live Categories/Accounts inlined) and the
  * same tg_logItems_, so the receipt in Telegram is identical — ↻ Undo and ✎ Edit
- * details, plus a ⌕ Email button back to the mail it came from. A new sender needs
+ * details, plus a ⌕ Email button that quotes the mail it came from. A new sender needs
  * no code, only a wider GMAIL_QUERY.
  *
  * Once logged, the email is moved to the trash (recoverable, and the same thing the
@@ -20,6 +20,7 @@
 
 const GMAIL_LAST_TS_   = "GMAIL_LAST_TS";
 const GMAIL_MAX_BODY_  = 3000;   // notification mail says everything up top; footers are noise
+const GMAIL_QUOTE_BODY_ = 1200;  // ⌕ Email quotes less than the parser reads — it's for eyes
 const GMAIL_MAX_THREADS_ = 20;
 
 // Senders confirmed from the real mailbox (2026-08-11):
@@ -68,8 +69,7 @@ function gmail_ingest() {
       try {
         const items = gmail_items_(msg);
         if (!items.length) return;
-        const ids = tg_logItems_(chat, "gm-" + msg.getId(), items, null,
-                                 gmail_link_(msg, cfg_("WEBHOOK_URL", "")));
+        const ids = tg_logItems_(chat, "gm-" + msg.getId(), items, null, msg.getId());
         if (ids.length === items.length) msg.moveToTrash();
       } catch (err) {
         console.error("gmail_ingest " + msg.getId() + ": " + (err && err.stack ? err.stack : err));
@@ -112,28 +112,26 @@ function gmail_text_(msg, hints) {
 }
 
 /**
- * A URL that opens this email — the receipt's ⌕ Email button, for checking what a
- * row was logged from.
+ * The email itself, as the ⌕ Email button posts it back into the chat — the answer to
+ * "did Gemini read this right?" without leaving Telegram.
  *
- * Prefers the Worker's /mail bounce (`base`, the same Worker Telegram delivers to),
- * which is the only way to reach the **Gmail iOS app**: a Telegram button URL must be
- * http(s), and mail.google.com is not a Gmail universal link — confirmed on the
- * owner's phone, Safari just loads the web page. Without a Worker URL configured it
- * degrades to that same web link.
+ * Linking out to Gmail was tried twice and abandoned (2026-08-11). A Telegram button
+ * URL must be http(s), so the app can only be reached by bouncing off the Worker, and
+ * the app-scheme it would bounce to (`googlegmail:///cv=<id>`) wants Gmail's opaque web
+ * "view token" (FMfcg…), which cannot be derived from the API id GmailApp returns —
+ * it threw "Unable to understand the link". The plain web link is no better: Safari
+ * just loads mail.google.com and sits there. Since the bot is already holding the
+ * mail, quoting it is both simpler and more useful than any link would have been.
  *
- * The web form searches `rfc822msgid` rather than the obvious "#all/<id>" permalink,
- * because by the time anyone taps the button the mail has been trashed, and Gmail's
- * All Mail excludes the trash — `in:anywhere` is what makes the link survive its own
- * job. ponytail: /u/0 is the first signed-in account. Right on a one-account phone,
- * which is where these get tapped; add an account index only if it's ever wrong.
+ * Short body slice, not GMAIL_MAX_BODY_: what's being checked is the merchant/amount
+ * line, which notification mail always puts up top, and a 4096-char Telegram message
+ * is a wall. Blank-line runs collapse — plaintext-from-HTML bodies are mostly gaps.
  */
-function gmail_link_(msg, base) {
-  const mid = String(msg.getHeader("Message-ID") || "").replace(/[<>]/g, "");
-  if (base) return String(base).replace(/\/+$/, "") + "/mail?id=" + encodeURIComponent(msg.getId()) +
-                  (mid ? "&mid=" + encodeURIComponent(mid) : "");
-  if (!mid) return "";
-  return "https://mail.google.com/mail/u/0/#search/" +
-         encodeURIComponent("rfc822msgid:" + mid + " in:anywhere");
+function gmail_quote_(msg) {
+  const body = String(msg.getPlainBody() || "").replace(/\n{3,}/g, "\n\n").trim();
+  return ["✉ " + msg.getSubject(),
+          String(msg.getFrom()) + " · " + msg.getDate(),
+          "", body.slice(0, GMAIL_QUOTE_BODY_)].join("\n");
 }
 
 // ── setup helper (run from the Apps Script editor) ────────────────────────────
