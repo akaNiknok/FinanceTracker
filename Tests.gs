@@ -347,18 +347,31 @@ function test_gmailText() {
 }
 
 /**
- * gmail_link_ — the ⌕ Email button. It has to open a message the job has already
- * trashed, so the query must carry `in:anywhere` (All Mail excludes the trash) and
- * the Message-ID must be encoded, angle brackets stripped.
+ * gmail_link_ — the ⌕ Email button. With a Worker it must be the /mail bounce (the
+ * only route to the Gmail iOS app); without one it falls back to the web link, which
+ * has to open a message the job has already trashed — hence `in:anywhere` (All Mail
+ * excludes the trash) and the Message-ID encoded, angle brackets stripped.
  */
 function test_gmailLink() {
-  const url = gmail_link_({ getHeader: function () { return "<CA+x1y2z@mail.gmail.com>"; } });
-  if (url.indexOf("#search/") === -1 || url.indexOf("in%3Aanywhere") === -1)
-    throw new Error("gmail_link_ FAIL: not an in:anywhere search → " + url);
-  if (/[<>]/.test(url) || url.indexOf("rfc822msgid%3ACA%2Bx1y2z%40mail.gmail.com") === -1)
-    throw new Error("gmail_link_ FAIL: Message-ID not stripped/encoded → " + url);
-  // No header (some senders omit it) → no button rather than a broken one.
-  if (gmail_link_({ getHeader: function () { return null; } }) !== "")
+  const msg = { getId:     function () { return "19fef435b876aa00"; },
+                getHeader: function () { return "<CA+x1y2z@mail.gmail.com>"; } };
+
+  // Worker present: exactly one slash before /mail, whatever the property looks like.
+  ["https://w.example.dev", "https://w.example.dev/"].forEach(function (base) {
+    const url = gmail_link_(msg, base);
+    if (url.indexOf("https://w.example.dev/mail?id=19fef435b876aa00&mid=") !== 0)
+      throw new Error("gmail_link_ FAIL (worker): " + url);
+    if (url.indexOf("%3CCA") !== -1 || /[<>]/.test(url))
+      throw new Error("gmail_link_ FAIL: angle brackets reached the URL → " + url);
+  });
+
+  const web = gmail_link_(msg, "");
+  if (web.indexOf("#search/") === -1 || web.indexOf("in%3Aanywhere") === -1)
+    throw new Error("gmail_link_ FAIL: not an in:anywhere search → " + web);
+  if (/[<>]/.test(web) || web.indexOf("rfc822msgid%3ACA%2Bx1y2z%40mail.gmail.com") === -1)
+    throw new Error("gmail_link_ FAIL: Message-ID not stripped/encoded → " + web);
+  // No header (some senders omit it) and no Worker → no button rather than a broken one.
+  if (gmail_link_({ getHeader: function () { return null; } }, "") !== "")
     throw new Error("gmail_link_ FAIL: missing Message-ID should yield no link");
   Logger.log("test_gmailLink OK");
 }
