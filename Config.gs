@@ -60,6 +60,9 @@ const LEDGER_TX_CATEGORY = "Income: Salary"; // the only category the Tax screen
 //   WEBHOOK_URL       — the Cloudflare Worker URL Telegram delivers to (worker/).
 //   TELEGRAM_SECRET_TOKEN — optional shared secret the Worker checks on each
 //                       delivery; must match the Worker's SECRET_TOKEN.
+//   GMAIL_QUERY       — Gmail search selecting transaction notification mail
+//                       (Gmail.gs `gmail_ingest`); required by that job only.
+//   GMAIL_LAST_TS     — watermark written by gmail_ingest; not hand-set.
 function cfg_(key, fallback) {
   const v = PropertiesService.getScriptProperties().getProperty(key);
   return (v === null || v === undefined || v === "") ? fallback : v;
