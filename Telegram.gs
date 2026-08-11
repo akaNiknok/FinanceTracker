@@ -162,7 +162,7 @@ function tg_handleUpdate_(update) {
     tg_send_(chat, "❌ *Failed to add transaction*\n› Nothing to log.", replyTo);
     return;
   }
-  tg_logItems_(chat, update.update_id, items, replyTo);
+  tg_logItems_(chat, "tg-" + update.update_id, items, replyTo);
 }
 
 // ── log (one or many transactions per message) ────────────────────────────────
@@ -171,14 +171,21 @@ function tg_handleUpdate_(update) {
  * item reports itself and the rest still land — a five-line message shouldn't be
  * lost because line three named an account that doesn't exist.
  *
+ * `idPrefix` identifies the source that produced these rows and makes their IDs
+ * idempotent under retries: "tg-<update_id>" for a chat message, "gm-<messageId>"
+ * for a Gmail notification (Gmail.gs). Row IDs are "<idPrefix>-<i>".
+ * `link` is an optional URL to the thing that caused the log (the email), shown as
+ * a third button. Returns the IDs that landed — Gmail.gs only trashes the email
+ * when every item made it.
+ *
  * ponytail: one service call per item. There is no bulk create, and a message
  * carries a handful of transactions, not hundreds.
  */
-function tg_logItems_(chat, updateId, items, replyTo) {
+function tg_logItems_(chat, idPrefix, items, replyTo, link) {
   const out = [], ids = [], idx = [];
   items.forEach(function (p, i) {
     const args = {
-      ID:           "tg-" + updateId + "-" + i,        // idempotent under Telegram retries
+      ID:           idPrefix + "-" + i,                // idempotent under retries
       Date:         p.Date,
       Category:     p.Category,
       Description:  p.Description,
@@ -201,7 +208,8 @@ function tg_logItems_(chat, updateId, items, replyTo) {
   });
   // Only the rows that actually landed, so undo can't chase a failed item.
   if (ids.length) PropertiesService.getScriptProperties().setProperty(TG_LAST_IDS_, JSON.stringify(ids));
-  tg_send_(chat, out.join("\n\n"), replyTo, ids.length ? tg_logKeyboard_(updateId, idx, ids) : null);
+  tg_send_(chat, out.join("\n\n"), replyTo, ids.length ? tg_logKeyboard_(idPrefix, idx, ids, link) : null);
+  return ids;
 }
 
 // ── the Undo / Edit details buttons under a receipt ───────────────────────────
@@ -214,24 +222,29 @@ function tg_logItems_(chat, updateId, items, replyTo) {
  * needs no callback handling at all. With several rows in one message there is no
  * single row to open, so it just lands on the Transactions screen.
  */
-function tg_undoData_(updateId, indices) { return "u:" + updateId + ":" + indices.join(","); }
+function tg_undoData_(idPrefix, indices) { return "u:" + idPrefix + ":" + indices.join(","); }
 
 /** Reverse of tg_undoData_ → transaction IDs; [] if the payload isn't ours. */
 function tg_undoIds_(data) {
-  const m = /^u:(\d+):(\d+(?:,\d+)*)$/.exec(String(data || ""));
+  const m = /^u:([A-Za-z0-9-]+):(\d+(?:,\d+)*)$/.exec(String(data || ""));
   if (!m) return [];
-  return m[2].split(",").map(function (i) { return "tg-" + m[1] + "-" + i; });
+  // Receipts sent before the prefix carried a source ("u:90210:0") mean Telegram.
+  const prefix = /^\d+$/.test(m[1]) ? "tg-" + m[1] : m[1];
+  return m[2].split(",").map(function (i) { return prefix + "-" + i; });
 }
 
-function tg_logKeyboard_(updateId, indices, ids) {
+function tg_logKeyboard_(idPrefix, indices, ids, link) {
   const row = [];
-  const data = tg_undoData_(updateId, indices);
+  const data = tg_undoData_(idPrefix, indices);
   // Telegram caps callback_data at 64 bytes; past that, /undo still covers it.
   if (data.length <= 64) row.push({ text: "↻ Undo", callback_data: data });
   const url = cfg_("WEB_APP_URL", "");
   if (url) row.push({ text: "✎ Edit details", url: url + "?screen=transactions" +
                       (ids.length === 1 ? "&tx=" + encodeURIComponent(ids[0]) : "") });
-  return row.length ? [row] : null;
+  const rows = row.length ? [row] : [];
+  // Its own row: three buttons abreast get squeezed to unreadable on a phone.
+  if (link) rows.push([{ text: "⌕ Email", url: link }]);
+  return rows.length ? rows : null;
 }
 
 /**

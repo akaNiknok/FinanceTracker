@@ -7,7 +7,7 @@
  */
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
-var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_interestNet",
+var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_gmailLink", "test_gmailText", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
@@ -281,10 +281,18 @@ function test_telegramBalance() {
 
 /** Undo button payload — round-trips to the same IDs tg_logItems_ wrote, and only ours. */
 function test_telegramUndoData() {
-  const ids = tg_undoIds_(tg_undoData_(90210, [0, 2]));
+  const ids = tg_undoIds_(tg_undoData_("tg-90210", [0, 2]));
   if (ids.join("|") !== "tg-90210-0|tg-90210-2")
     throw new Error("tg_undoIds_ FAIL: " + JSON.stringify(ids));
-  ["", null, "u:90210:", "u:abc:0", "undo", "u:90210:0;DROP"].forEach(function (bad) {
+  // A Gmail-sourced receipt (Gmail.gs) carries its own prefix and must round-trip
+  // to the row IDs tg_logItems_ wrote, inside Telegram's 64-byte callback_data cap.
+  const gm = tg_undoData_("gm-198f2a3b4c5d6e7f", [0]);
+  if (tg_undoIds_(gm).join("|") !== "gm-198f2a3b4c5d6e7f-0" || gm.length > 64)
+    throw new Error("tg_undoIds_ FAIL (gmail): " + gm + " → " + JSON.stringify(tg_undoIds_(gm)));
+  // Receipts sent before the prefix named a source are digits-only and mean Telegram.
+  if (tg_undoIds_("u:90210:1").join("|") !== "tg-90210-1")
+    throw new Error("tg_undoIds_ FAIL: legacy payload no longer resolves");
+  ["", null, "u:90210:", "u::0", "undo", "u:90210:0;DROP"].forEach(function (bad) {
     if (tg_undoIds_(bad).length) throw new Error("tg_undoIds_ FAIL: accepted " + JSON.stringify(bad));
   });
   Logger.log("test_telegramUndoData OK");
@@ -297,12 +305,62 @@ function test_telegramUndoData() {
  * Error marks (❌ ⛔) are deliberately emoji and deliberately not covered here.
  */
 function test_telegramUndoGlyph() {
-  [tg_logKeyboard_, tg_deleteIds_].forEach(function (f) {
-    if (f.toString().indexOf("↩") !== -1)
-      throw new Error("test_telegramUndoGlyph FAIL: ↩ (U+21A9) is Emoji=Yes — VS15 won't stop "
-                      + "Telegram emoji-fying it; use ↻");
+  // Emoji=Yes glyphs that keep suggesting themselves for these buttons: ↩ undo,
+  // ✉/📧 mail, ✏ edit. Their text-looking cousins (↻ ⌕ ✎) are outside the emoji set.
+  ["↩", "✉", "📧", "✏"].forEach(function (bad) {
+    [tg_logKeyboard_, tg_deleteIds_].forEach(function (f) {
+      if (f.toString().indexOf(bad) !== -1)
+        throw new Error("test_telegramUndoGlyph FAIL: " + bad + " is Emoji=Yes — VS15 won't stop "
+                        + "Telegram emoji-fying it; use ↻ / ⌕ / ✎");
+    });
   });
   Logger.log("test_telegramUndoGlyph OK");
+}
+
+/**
+ * gmail_text_ — what Gmail.gs actually hands the parser. The two lines that must
+ * survive an edit: the "only log money that moved" guard (nothing else stops a
+ * marketing email becoming a transaction) and the hints (an Anthropic receipt
+ * names a card, never an account, so only the hint puts it on Wise). Body is a
+ * real receipt from the mailbox, 2026-08-10.
+ */
+function test_gmailText() {
+  const msg = {
+    getFrom:      function () { return "invoice+statements@mail.anthropic.com"; },
+    getSubject:   function () { return "Your receipt from Anthropic, PBC #2882-8893-8665"; },
+    getDate:      function () { return new Date(2026, 7, 11); },
+    getPlainBody: function () { return "Receipt from Anthropic, PBC $22.40 Paid August 10, 2026 " +
+                                       "Payment method - 8681 Claude Pro Qty 1 $20.00 VAT $2.40 Total $22.40"; }
+  };
+  const text = gmail_text_(msg, "Anthropic / Stripe receipts are charged to the Wise account.");
+  ["does not report money", "tax included", "charged to the Wise account",
+   "From: invoice+statements@mail.anthropic.com", "$22.40"].forEach(function (needle) {
+    if (text.indexOf(needle) === -1) throw new Error("gmail_text_ FAIL: missing " + needle);
+  });
+
+  // A long footer must not push the amount out of the prompt — and no hints is fine.
+  const long = Object.assign({}, msg, { getPlainBody: function () { return new Array(9000).join("x"); } });
+  const body = gmail_text_(long, "");
+  if (body.length > GMAIL_MAX_BODY_ + 600) throw new Error("gmail_text_ FAIL: body not truncated (" + body.length + ")");
+  if (body.indexOf("undefined") !== -1) throw new Error("gmail_text_ FAIL: empty hints leaked 'undefined'");
+  Logger.log("test_gmailText OK");
+}
+
+/**
+ * gmail_link_ — the ⌕ Email button. It has to open a message the job has already
+ * trashed, so the query must carry `in:anywhere` (All Mail excludes the trash) and
+ * the Message-ID must be encoded, angle brackets stripped.
+ */
+function test_gmailLink() {
+  const url = gmail_link_({ getHeader: function () { return "<CA+x1y2z@mail.gmail.com>"; } });
+  if (url.indexOf("#search/") === -1 || url.indexOf("in%3Aanywhere") === -1)
+    throw new Error("gmail_link_ FAIL: not an in:anywhere search → " + url);
+  if (/[<>]/.test(url) || url.indexOf("rfc822msgid%3ACA%2Bx1y2z%40mail.gmail.com") === -1)
+    throw new Error("gmail_link_ FAIL: Message-ID not stripped/encoded → " + url);
+  // No header (some senders omit it) → no button rather than a broken one.
+  if (gmail_link_({ getHeader: function () { return null; } }) !== "")
+    throw new Error("gmail_link_ FAIL: missing Message-ID should yield no link");
+  Logger.log("test_gmailLink OK");
 }
 
 /** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */
