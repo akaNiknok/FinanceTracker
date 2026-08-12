@@ -906,7 +906,10 @@ function renderTax(){
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
     head.appendChild(addBtn);
     w.appendChild(head);
-    w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only)'));
+    w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only) · '+
+      // The BSP reference rate is hand-typed per payslip, so link its source here.
+      // target=_blank is required: the app runs in GAS's sandboxed iframe.
+      '<a class="tx-link" target="_blank" rel="noopener" href="https://www.bsp.gov.ph/statistics/external/day99_data.aspx">BSP daily PHP/USD rate ›</a>'));
 
     if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); }
     else {
@@ -982,12 +985,13 @@ function ledgerCols(cols){
   return cols.slice().sort(function(a,b){ return rank(a)-rank(b) || cols.indexOf(a)-cols.indexOf(b); });
 }
 function isFiledCol(c){ return /^filed/i.test(c); }
-/* The current BIR quarter and the 11 before it, newest first. `keep` is the cell's
- * existing value: an older quarter (or a legacy TRUE) is prepended rather than
- * silently dropped from the list. */
+/* The current BIR quarter back to 2026-Q1 (the ledger starts there — nothing was
+ * filed before), newest first. `keep` is the cell's existing value: an out-of-range
+ * quarter (or a legacy TRUE) is prepended rather than silently dropped. */
+var LEDGER_FIRST_YEAR=2026;
 function quarterOptions(keep){
   var d=new Date(), y=d.getFullYear(), q=Math.floor(d.getMonth()/3)+1, out=[];
-  for(var i=0;i<12;i++){ out.push(y+'-Q'+q); if(--q===0){ q=4; y--; } }
+  while(y>=LEDGER_FIRST_YEAR){ out.push(y+'-Q'+q); if(--q===0){ q=4; y--; } }
   if(keep && out.indexOf(keep)<0) out.unshift(keep);
   return out;
 }
