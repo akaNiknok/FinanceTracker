@@ -888,7 +888,7 @@ function renderTax(){
   if(!S.cache['tax']) loading();
   return cachedCall('tax', function(){return gs('api_getLedger');}, function(res){
     var rows=(res.rows||[]).slice();
-    var cols=res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]);
+    var cols=ledgerCols(res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]));
     var derived={}; (res.derived||[]).forEach(function(h){derived[h]=true;});
     // Newest payslip first. Dates arrive as yyyy-MM-dd, so a plain string compare
     // orders them; a row whose linked tx is gone has no date and floats to the top,
@@ -925,6 +925,9 @@ function renderTax(){
           // one stays editable so a legacy row can still be linked by hand.
           if(c===res.txIdCol && val!=null && val!==''){ td.appendChild(txLinkEl(String(val))); }
           else if(derived[c]){ td.className='dim'; td.textContent=ledgerText(c,val); }
+          else if(isFiledCol(c)){
+            td.appendChild(quarterSelect(val, function(v){ ledgerSaveCell(r.__row, c, v); }));
+          }
           else {
             td.className='ed-cell'; td.title='Tap to edit'; td.textContent=ledgerText(c,val);
             td.onclick=function(){ ledgerCellEdit(td, r.__row, c, val); };
@@ -969,6 +972,34 @@ function unlinkedSalaryCard(list, txIdCol){
   return card;
 }
 
+/* Reading order for the Tax table — the sheet's own column order is the owner's
+ * business, so this only reorders the display. Anything not listed (a hand-added
+ * Ledger column) keeps its sheet position, after these. */
+var LEDGER_COL_ORDER=['Date Received','Reporting Period','Filed?','Wise Amount',
+                      'BSP Reference Rate','Total Income','8% Tax','Transaction ID'];
+function ledgerCols(cols){
+  var rank=function(c){ var i=LEDGER_COL_ORDER.indexOf(c); return i<0?LEDGER_COL_ORDER.length:i; };
+  return cols.slice().sort(function(a,b){ return rank(a)-rank(b) || cols.indexOf(a)-cols.indexOf(b); });
+}
+function isFiledCol(c){ return /^filed/i.test(c); }
+/* The current BIR quarter and the 11 before it, newest first. `keep` is the cell's
+ * existing value: an older quarter (or a legacy TRUE) is prepended rather than
+ * silently dropped from the list. */
+function quarterOptions(keep){
+  var d=new Date(), y=d.getFullYear(), q=Math.floor(d.getMonth()/3)+1, out=[];
+  for(var i=0;i<12;i++){ out.push(y+'-Q'+q); if(--q===0){ q=4; y--; } }
+  if(keep && out.indexOf(keep)<0) out.unshift(keep);
+  return out;
+}
+/* Filed? picker — a dozen fixed options, so a native <select>, not the fuzzy combobox. */
+function quarterSelect(val, onPick){
+  var cur=(val==null?'':String(val)), s=el('select','q-select');
+  var blank=el('option',null,'—'); blank.value=''; s.appendChild(blank);
+  quarterOptions(cur).forEach(function(q){ var o=el('option',null,esc(q)); o.value=q; s.appendChild(o); });
+  s.value=cur;
+  if(onPick) s.onchange=function(){ onPick(s.value); };
+  return s;
+}
 /* Date-ish column → native date picker in the add-row modal. su_dateStr_ already
  * hands dates back as yyyy-MM-dd, the same value <input type="date"> produces, and
  * Sheets parses that ISO string straight into a real date on setValue. */
@@ -1018,7 +1049,8 @@ function openLedgerAdd(cols, derived){
   var inputs={}, body=el('div');
   cols.forEach(function(c){
     if(derived[c]) return;                 // formula columns fill themselves
-    var inp=inputEl(isDateCol(c)?'date':'text',''); inputs[c]=inp;
+    var inp=isFiledCol(c)?quarterSelect(''):inputEl(isDateCol(c)?'date':'text','');
+    inputs[c]=inp;                         // a <select> reads through .value like an input
     body.appendChild(fieldEl(c, inp));
   });
   var save=el('button','btn primary','Add row');

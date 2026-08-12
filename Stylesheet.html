@@ -278,6 +278,9 @@ table.tbl tr:hover td{background:var(--surface-2)}
 table.tbl td.ed-cell{cursor:pointer}
 table.tbl td.ed-cell:hover{background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--accent)}
 table.tbl td a.tx-link{color:var(--accent);text-decoration:none;border-bottom:1px dotted currentColor}
+table.tbl td .q-select{background:var(--surface-2);color:var(--text);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:3px 6px;font:inherit;cursor:pointer}
+table.tbl td .q-select:focus{border-color:var(--accent);outline:none}
 /* Inline editor fills the cell; td padding drops to 0 so the row height/width
  * doesn't jump when the input (which carries the same padding) takes over. */
 table.tbl td.editing{padding:0}
