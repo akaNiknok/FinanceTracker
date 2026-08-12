@@ -203,10 +203,7 @@ function boot(){
       var p=loc.parameter||{};
       if(p.screen && p.screen!==S.screen) go(p.screen,true);
       // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
-      if(p.tx) gs('api_listTransactions',{id:p.tx,limit:1}).then(function(r){
-        var t=(r.transactions||[])[0];
-        if(t) openTxModal(t); else toast('That transaction no longer exists.','err');
-      }).catch(function(e){ toast(e.message||e,'err'); });
+      if(p.tx) openTxById(p.tx);
     });
   }catch(e){}
   // Scroll-wheel over a focused number input silently changes the value — block it.
@@ -890,9 +887,17 @@ function renderInvestments(){
 function renderTax(){
   if(!S.cache['tax']) loading();
   return cachedCall('tax', function(){return gs('api_getLedger');}, function(res){
-    var rows=res.rows||[];
+    var rows=(res.rows||[]).slice();
     var cols=res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]);
     var derived={}; (res.derived||[]).forEach(function(h){derived[h]=true;});
+    // Newest payslip first. Dates arrive as yyyy-MM-dd, so a plain string compare
+    // orders them; a row whose linked tx is gone has no date and floats to the top,
+    // which is where a broken link wants to be.
+    var dateCol=cols.filter(isDateCol)[0];
+    if(dateCol) rows.sort(function(a,b){
+      var x=String(a[dateCol]==null?'':a[dateCol]), y=String(b[dateCol]==null?'':b[dateCol]);
+      return x<y?1:(x>y?-1:0);
+    });
 
     var w=el('div','screen');
     var head=el('div','tax-head');
@@ -902,38 +907,38 @@ function renderTax(){
     head.appendChild(addBtn);
     w.appendChild(head);
     w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only)'));
-    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedSalaryCard(res.unlinked,res.txIdCol));
 
-    if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); paint(w); return; }
-    var card=el('div','card'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
-    var thead=el('thead'), htr=el('tr');
-    cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(derived[c]?' <span class="faint">ƒ</span>':''))); });
-    htr.appendChild(el('th')); // delete column
-    thead.appendChild(htr); t.appendChild(thead);
+    if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); }
+    else {
+      var card=el('div','card'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
+      var thead=el('thead'), htr=el('tr');
+      cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(derived[c]?' <span class="faint">ƒ</span>':''))); });
+      htr.appendChild(el('th')); // delete column
+      thead.appendChild(htr); t.appendChild(thead);
 
-    var tb=el('tbody');
-    rows.forEach(function(r){
-      var tr=el('tr');
-      cols.forEach(function(c){
-        var td=el('td'), val=r[c];
-        if(derived[c]){ td.className='dim'; td.textContent=(val==null?'':String(val)); }
-        else if(isFiledCol(c)){
-          td.className='ck-cell';
-          var cb=el('input','tx-check'); cb.type='checkbox'; cb.checked=ledgerTruthy(val);
-          cb.onchange=function(){ ledgerSaveCell(r.__row, c, cb.checked, cb); };
-          td.appendChild(cb);
-        } else {
-          td.className='ed-cell'; td.title='Tap to edit'; td.textContent=(val==null?'':String(val));
-          td.onclick=function(){ ledgerCellEdit(td, r.__row, c, val); };
-        }
-        tr.appendChild(td);
+      var tb=el('tbody');
+      rows.forEach(function(r){
+        var tr=el('tr');
+        cols.forEach(function(c){
+          var td=el('td'), val=r[c];
+          // The link column opens the transaction instead of editing the ID; an empty
+          // one stays editable so a legacy row can still be linked by hand.
+          if(c===res.txIdCol && val!=null && val!==''){ td.appendChild(txLinkEl(String(val))); }
+          else if(derived[c]){ td.className='dim'; td.textContent=ledgerText(c,val); }
+          else {
+            td.className='ed-cell'; td.title='Tap to edit'; td.textContent=ledgerText(c,val);
+            td.onclick=function(){ ledgerCellEdit(td, r.__row, c, val); };
+          }
+          tr.appendChild(td);
+        });
+        var dtd=el('td'), del=el('button','icon-btn','✕'); del.title='Delete row';
+        del.onclick=function(){ ledgerDeleteRow(r.__row); };
+        dtd.appendChild(del); tr.appendChild(dtd);
+        tb.appendChild(tr);
       });
-      var dtd=el('td'), del=el('button','icon-btn','✕'); del.title='Delete row';
-      del.onclick=function(){ ledgerDeleteRow(r.__row); };
-      dtd.appendChild(del); tr.appendChild(dtd);
-      tb.appendChild(tr);
-    });
-    t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
+      t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
+    }
+    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedSalaryCard(res.unlinked,res.txIdCol));
     paint(w);
   }).catch(showErr);
 }
@@ -964,15 +969,22 @@ function unlinkedSalaryCard(list, txIdCol){
   return card;
 }
 
-function isFiledCol(c){ return /^filed/i.test(c); }
 /* Date-ish column → native date picker in the add-row modal. su_dateStr_ already
  * hands dates back as yyyy-MM-dd, the same value <input type="date"> produces, and
  * Sheets parses that ISO string straight into a real date on setValue. */
 function isDateCol(c){ return /date/i.test(c); }
-function ledgerTruthy(v){
-  if(v===true) return true;
-  if(v===false||v==null||v==='') return false;
-  return /^(true|yes|y|1|x|✓|filed|done)$/i.test(String(v).trim());
+/* Ledger amounts read as money (2dp); the BSP reference rate keeps its precision.
+ * Display only — the inline editor still gets the raw cell value. */
+function ledgerText(col,val){
+  if(typeof val==='number' && !/rate/i.test(col))
+    return val.toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+  return val==null?'':String(val);
+}
+/* A Transaction ID that opens that transaction's edit modal. */
+function txLinkEl(id){
+  var a=el('a','tx-link',esc(id)); a.href='#'; a.title='Open transaction';
+  a.onclick=function(e){ e.preventDefault(); openTxById(id); };
+  return a;
 }
 /* Save a single cell (checkbox toggle / inline edit) then re-render. */
 function ledgerSaveCell(row, header, value, ctl){
@@ -1006,22 +1018,14 @@ function openLedgerAdd(cols, derived){
   var inputs={}, body=el('div');
   cols.forEach(function(c){
     if(derived[c]) return;                 // formula columns fill themselves
-    if(isFiledCol(c)){
-      var cb=el('input','tx-check'); cb.type='checkbox'; inputs[c]=cb;
-      var row=el('label','ck-row'); row.appendChild(cb); row.appendChild(el('span',null,esc(c)));
-      body.appendChild(row);
-    } else {
-      var inp=inputEl(isDateCol(c)?'date':'text',''); inputs[c]=inp;
-      body.appendChild(fieldEl(c, inp));
-    }
+    var inp=inputEl(isDateCol(c)?'date':'text',''); inputs[c]=inp;
+    body.appendChild(fieldEl(c, inp));
   });
   var save=el('button','btn primary','Add row');
   save.onclick=function(){
     var obj={}, any=false;
     Object.keys(inputs).forEach(function(c){
-      var inp=inputs[c];
-      if(inp.type==='checkbox'){ if(inp.checked){ obj[c]=true; any=true; } }
-      else { var v=inp.value; if(v!==''){ obj[c]=v; any=true; } }
+      var v=inputs[c].value; if(v!==''){ obj[c]=v; any=true; }
     });
     if(!any){ toast('Fill at least one field','err'); return; }
     save.disabled=true; save.textContent='Adding…';
@@ -1584,6 +1588,15 @@ function typeToggleEl(mode,onSwitch){
   var w=el('div','seg-toggle', seg('tx','Transaction')+seg('xfer','Transfer'));
   w.children[mode==='tx'?1:0].onclick=onSwitch;   // only the inactive half does anything
   return w;
+}
+
+/* Fetch one transaction by ID and open its modal — the ?tx= deep link and the
+ * Tax screen's Transaction ID links both land here. */
+function openTxById(id){
+  return gs('api_listTransactions',{id:id,limit:1}).then(function(r){
+    var t=(r.transactions||[])[0];
+    if(t) openTxModal(t); else toast('That transaction no longer exists.','err');
+  }).catch(function(e){ toast(e.message||e,'err'); });
 }
 
 /* —— add / edit a normal transaction —— */
