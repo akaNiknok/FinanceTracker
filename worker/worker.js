@@ -7,12 +7,8 @@
  * setting for that on either side, so this sits between them: Telegram gets an
  * immediate 200, and the update is forwarded to GAS, which holds all the logic.
  *
- * A GET /mail route lived here briefly (2026-08-11) to open a receipt's ⌕ Email button
- * in the Gmail iOS app. Both forms failed on the owner's phone — the unofficial
- * `googlegmail:///cv=<id>` scheme wants Gmail's opaque web "view token" (FMfcg…), which
- * cannot be derived from the API id, and a plain mail.google.com link is not a Gmail
- * universal link so Safari just loads the web page. The button now quotes the mail into
- * the chat instead (Gmail.gs gmail_quote_), and this Worker is a pure Telegram proxy.
+ * Don't add a /mail route to open the receipt's ⌕ Email button in Gmail — it was tried
+ * and it cannot work; CLAUDE.md's worker/ row has the why.
  *
  * Secrets (wrangler secret put ...):
  *   GAS_URL       — the full endpoint, incl. ?action=telegram and &token= if
@@ -21,7 +17,6 @@
  *   SECRET_TOKEN  — optional; must equal the secret_token registered by
  *                   tg_setWebhook. Set both or neither.
  */
-
 export default {
   async fetch(request, env, ctx) {
     if (request.method !== "POST") return new Response("ok");   // health check / stray GET

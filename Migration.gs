@@ -436,9 +436,9 @@ function setupTxPeriod() {
 // **BSP rate**, NOT the app's ExchangeRate — BIR wants the central bank's rate on the
 // date of receipt, which the app has no feed for, so it stays hand-typed per payslip.
 //
-// Header names below are the owner's EXISTING Ledger columns; only `Transaction ID`
-// and `8% Tax` are new. Nothing here is guessed at runtime — rename a column in the
-// sheet and you must rename it here too, or the migration adds a duplicate.
+// Header names below are the owner's EXISTING Ledger columns; only `Transaction ID`,
+// `8% Tax` and `Reporting Period` are new. Nothing here is guessed at runtime — rename
+// a column in the sheet and you must rename it here too, or the migration adds a duplicate.
 //
 // Per-row formulas, not an ARRAYFORMULA: Ledger rows are appended and deleted one at
 // a time (api_deleteLedgerRow does a real deleteRow), which would break a spill anchor.
@@ -450,10 +450,12 @@ const MIG_LEDGER_GROSS = "Wise Amount";         // gross in the payout currency 
 const MIG_LEDGER_BSP   = "BSP Reference Rate";  // typed per row; blank ⇒ 1 (a PHP payslip)
 const MIG_LEDGER_PHP   = "Total Income";        // = Wise Amount × BSP Reference Rate
 const MIG_LEDGER_TAX   = "8% Tax";              // new column
+const MIG_LEDGER_MONTH = "Reporting Period";    // new column = the tx's derived Month
 const MIG_LEDGER_RATE  = 0.08;
 const MIG_LEDGER_GONE  = "⚠ transaction deleted"; // shown in Date Received if the linked tx is gone
+const MIG_LEDGER_MONEY = "#,##0.00";            // ledger amounts are money; the BSP rate is not
 const MIG_LEDGER_INPUTS  = [LEDGER_TXID_HEADER, MIG_LEDGER_BSP, "Filed?"];
-const MIG_LEDGER_DERIVED = [MIG_LEDGER_DATE, MIG_LEDGER_GROSS, MIG_LEDGER_PHP, MIG_LEDGER_TAX];
+const MIG_LEDGER_DERIVED = [MIG_LEDGER_DATE, MIG_LEDGER_MONTH, MIG_LEDGER_GROSS, MIG_LEDGER_PHP, MIG_LEDGER_TAX];
 
 function setupLedgerSchema() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MIG_LEDGER_SHEET);
@@ -500,7 +502,7 @@ function setupLedgerSchema() {
   // 3. Stamp the derived formulas, but ONLY on linked rows — an unmatched legacy row
   //    keeps its typed figures rather than being blanked out.
   const txH = mig_headerMap_(mig_getTxSheet_());
-  ["ID", "Date", "Amount"].forEach(function (c) {
+  ["ID", "Date", "Amount", "Month"].forEach(function (c) {
     if (!txH[c]) throw new Error("Transactions is missing the '" + c + "' column — run setupMigration() first.");
   });
   const T = mig_colLetter_(tidCol);
@@ -514,6 +516,9 @@ function setupLedgerSchema() {
   // this ledger has never had.
   tmpl[MIG_LEDGER_DATE]  = mig_ledgerLookup_(txH, "Date", T, '"' + MIG_LEDGER_GONE + '"');
   tmpl[MIG_LEDGER_GROSS] = mig_ledgerLookup_(txH, "Amount", T, '""');
+  // The tx's derived Month, not its raw Period: Period is blank unless the payslip was
+  // booked forward, and what BIR reports against is the effective month either way.
+  tmpl[MIG_LEDGER_MONTH] = mig_ledgerLookup_(txH, "Month", T, '""');
   // Blank BSP rate passes through as 1, which is what a PHP payslip wants.
   tmpl[MIG_LEDGER_PHP]   = guard(gL + '{r}*IF(LEN(' + bL + '{r}), ' + bL + '{r}, 1)');
   tmpl[MIG_LEDGER_TAX]   = guard(pL + '{r}*' + MIG_LEDGER_RATE);
@@ -529,7 +534,12 @@ function setupLedgerSchema() {
     });
     stamped++;
   }
-  if (n) sheet.getRange(2, h[MIG_LEDGER_DATE], n, 1).setNumberFormat("yyyy-mm-dd");
+  if (n) {
+    sheet.getRange(2, h[MIG_LEDGER_DATE], n, 1).setNumberFormat("yyyy-mm-dd");
+    [MIG_LEDGER_GROSS, MIG_LEDGER_PHP, MIG_LEDGER_TAX].forEach(function (name) {
+      sheet.getRange(2, h[name], n, 1).setNumberFormat(MIG_LEDGER_MONEY);
+    });
+  }
   Logger.log("Stamped derivation formulas on %s linked row(s).", stamped);
   Logger.log("Ledger headers after: %s", JSON.stringify(Object.keys(mig_headerMap_(sheet))));
   Logger.log("== setupLedgerSchema done. New rows come from the Tax screen's 'Unlinked salary' list. ==");
