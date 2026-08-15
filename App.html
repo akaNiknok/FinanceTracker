@@ -24,26 +24,71 @@ function gs(fn, arg){
  * cachedCall(key, loader, onData): paint instantly from cache, then check the
  * tiny api_getDataVersion; only re-run `loader` (the big payload) when the
  * version moved. onData may fire twice: once from cache, once after a refetch.
- * Cold keys fetch data + version in parallel (no extra latency vs. today).
- * `loader` is a thunk returning a Promise (so callers can Promise.all). */
+ * `loader` is a thunk returning a Promise (so callers can Promise.all).
+ *
+ * Round trips are the whole cost here — every google.script.run is a fresh GAS
+ * execution — so two things keep them to a minimum: a cold key takes the version
+ * straight out of its own payload (read handlers stamp `version`; the separate
+ * api_getDataVersion is only a fallback for composite payloads), and a version
+ * checked within VER_TTL is trusted, which kills the duplicate pings from a
+ * re-render or a quick tab flip back and forth. */
+var VER_TTL = 3000;
+function verKnown(){ return S._verAt && (Date.now() - S._verAt) < VER_TTL; }
+/* Post-write invalidation: drop every payload AND the "version just checked"
+ * stamp, since the write bumped the version server-side. */
+function dropCache(){ S.cache={}; S._verAt=0; saveCache(); }
+function putCache(key, data, version){
+  S.cache[key] = { data:data, version:version };
+  S.dataVersion = version; S._verAt = Date.now();
+  saveCache();
+}
 function cachedCall(key, loader, onData){
   var cached = S.cache[key];
-  if (!cached){
-    return Promise.all([loader(), gs('api_getDataVersion')]).then(function(r){
-      S.cache[key] = { data:r[0], version:r[1].version };
-      S.dataVersion = r[1].version;
-      onData(r[0]);
+  function fill(v){                       // fetch the payload and cache it at version v
+    return loader().then(function(data){
+      var ver = (data && data.version != null) ? data.version : v;
+      if (ver == null) return gs('api_getDataVersion').then(function(r){ putCache(key, data, r.version); onData(data); });
+      putCache(key, data, ver); onData(data);
     });
   }
-  onData(cached.data); // instant paint from cache
+  if (!cached) return fill(verKnown() ? S.dataVersion : null);
+  onData(cached.data);                    // instant paint from cache
+  if (verKnown()) return S.dataVersion === cached.version ? Promise.resolve() : fill(S.dataVersion);
   return gs('api_getDataVersion').then(function(v){
-    S.dataVersion = v.version;
+    S.dataVersion = v.version; S._verAt = Date.now();
     if (v.version === cached.version) return;          // unchanged → no big fetch
-    return loader().then(function(data){
-      S.cache[key] = { data:data, version:v.version };
-      onData(data);                                    // repaint with fresh data
-    });
+    return fill(v.version);                            // repaint with fresh data
   }).catch(function(){ /* keep showing stale on a revalidation hiccup */ });
+}
+
+/* ── cache persistence ───────────────────────────────────────────────────────
+ * The version gate makes the cache safe to reuse across a reload, so keep it in
+ * localStorage: a reload (or reopening the home-screen shortcut) paints from disk
+ * and spends one tiny version call instead of going cold on every screen.
+ * Best-effort — the GAS sandbox origin can rotate and wipe storage. */
+// `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
+// deploy can't leave the old session's blob rendering against new code.
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 1;
+function saveCache(){
+  clearTimeout(saveCache._t);
+  saveCache._t = setTimeout(function(){
+    try{
+      // ponytail: keep the last 12 keys — that's the entire eviction policy. Object
+      // key order is insertion order, and S.cache is wiped on every write anyway.
+      var keys = Object.keys(S.cache).slice(-12), c = {};
+      keys.forEach(function(k){ c[k] = S.cache[k]; });
+      localStorage.setItem(LS_CACHE, JSON.stringify({ s:LS_SCHEMA, boot:S.boot, cache:c }));
+    }catch(e){ try{ localStorage.removeItem(LS_CACHE); }catch(e2){} }  // quota/full → start clean
+  }, 400);
+}
+function loadCache(){
+  try{
+    var o = JSON.parse(localStorage.getItem(LS_CACHE) || 'null');
+    if(!o || o.s !== LS_SCHEMA) return false;
+    if(o.cache) S.cache = o.cache;
+    if(o.boot){ S.boot = o.boot; S.dataVersion = o.boot.version; }  // _verAt stays 0 → still revalidates
+    return !!o.boot;
+  }catch(e){ return false; }
 }
 
 /* Shared transaction-page fetch (Transactions + Review). st = {filters,offset,limit}. */
@@ -62,7 +107,8 @@ var S = {
   month:null,           // selected period "yyyy-MMM"
   screen:'dashboard',
   dataVersion:null,     // last server data version we hold cache against
-  cache:{},             // key → { data, version } (stale-while-revalidate)
+  _verAt:0,             // when we last confirmed dataVersion with the server (ms)
+  cache:{},             // key → { data, version } (stale-while-revalidate, persisted)
   tx:{ rows:[], total:0, offset:0, limit:50, filters:{},
        pendingAdds:[], pendingDeletes:{} },   // optimistic rows: in-flight creates / deletes
   review:{ sel:{}, filters:{}, rows:[], total:0, offset:0, limit:50 }
@@ -162,10 +208,31 @@ window.addEventListener('DOMContentLoaded', boot);
 // getBootstrap (categories/accounts for modals & filters) loads in the BACKGROUND
 // so the first screen can paint without waiting on it / on the live FX fetch.
 var _bootPromise=null;
+function applyBoot(b){
+  S.boot=b;
+  if(b.version!=null){ S.dataVersion=b.version; S._verAt=Date.now(); }
+  // getBootstrap already carries the full api_getAccounts payload, so seed that
+  // screen's cache key from it — the Accounts screen then opens with zero fetches.
+  if(b.accounts && b.version!=null) S.cache['accounts']={data:{status:'success',accounts:b.accounts},version:b.version};
+  saveCache();
+  return b;
+}
 function ensureBoot(){
-  if(S.boot) return Promise.resolve(S.boot);
-  if(!_bootPromise) _bootPromise=gs('api_getBootstrap').then(function(b){S.boot=b;if(b.version!=null)S.dataVersion=b.version;return b;});
+  if(S.boot) return Promise.resolve(S.boot);   // incl. a boot restored from storage
+  if(!_bootPromise) _bootPromise=gs('api_getBootstrap').then(applyBoot);
   return _bootPromise;
+}
+/* A boot restored from localStorage is stale by definition (and FX drift doesn't
+ * bump the data version), so refetch in the background and repaint only if
+ * something actually moved. */
+function revalidateBoot(){
+  var old=S.boot;
+  return gs('api_getBootstrap').then(function(b){
+    var moved = b.version!==old.version || b.fxUsdPhp!==old.fxUsdPhp;
+    applyBoot(b);
+    if(moved) render();
+    return b;
+  });
 }
 /** Run cb once reference data is available (used by modals/filters that need it). */
 function withBoot(cb){
@@ -175,6 +242,7 @@ function withBoot(cb){
 }
 
 function boot(){
+  var warm = loadCache();   // before the first render: paint from the last session
   S.month = monthKey(new Date());
   document.querySelectorAll('.nav-item[data-screen]').forEach(function(b){
     b.addEventListener('click', function(){ go(b.dataset.screen); });
@@ -201,7 +269,8 @@ function boot(){
     });
     google.script.url.getLocation(function(loc){    // deep link: ?screen=budgets
       var p=loc.parameter||{};
-      if(p.screen && p.screen!==S.screen) go(p.screen,true);
+      var s=p.screen||lastScreen();
+      if(s && s!==S.screen) go(s,true);
       // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
       if(p.tx) openTxById(p.tx);
     });
@@ -213,19 +282,28 @@ function boot(){
 
   // Paint the first screen right away (it fetches its own data); hydrate the
   // reference data in parallel, then re-render so warm FX / counts are reflected.
-  render();
-  ensureBoot().then(function(){
+  // Restore synchronously from storage so a reload doesn't flash the Dashboard
+  // (and fetch it) before getLocation's async callback lands on the real screen.
+  var last=lastScreen();
+  if(last) go(last,true); else render();
+  (warm ? revalidateBoot() : ensureBoot().then(function(){
     if(S.screen==='dashboard'||S.screen==='budgets') render();
-  }).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
+  })).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
 }
 
 function refresh(){
   var btn=$('#refreshBtn'); btn.classList.add('spin');
-  S.cache={}; S.boot=null; _bootPromise=null;
+  S.cache={}; S.boot=null; _bootPromise=null; S._verAt=0; saveCache();
   ensureBoot().then(function(){ return render(); }).finally(function(){ btn.classList.remove('spin'); });
 }
 
 var SECONDARY_SCREENS={review:1,investments:1,exchange:1,tax:1};
+/* Last screen, so a browser reload comes back where you were. The parent URL
+ * (?screen=, pushed below) is the primary channel; localStorage covers reloads
+ * that drop it — an iOS home-screen shortcut reopens its start_url, not the
+ * current one. Both are best-effort: the GAS sandbox origin can rotate and wipe
+ * storage, and history.push is a no-op in some embeds — hence the try/catch. */
+function lastScreen(){ try{ return localStorage.getItem('ft.screen')||null; }catch(e){ return null; } }
 function openSheet(){ $('#sheetRoot').hidden=false; }
 function closeSheet(){ $('#sheetRoot').hidden=true; }
 
@@ -235,6 +313,7 @@ function go(screen, fromHistory){
   $('#navMore').classList.toggle('active', !!SECONDARY_SCREENS[screen]);
   document.querySelectorAll('.sheet-item').forEach(function(b){b.classList.toggle('active', b.dataset.screen===screen);});
   closeSheet();
+  try{ localStorage.setItem('ft.screen',screen); }catch(e){}
   if(!fromHistory){ try{ google.script.history.push(null,{screen:screen}); }catch(e){} }
   render();
 }
@@ -246,8 +325,38 @@ function render(){
            exchange:renderExchange,tax:renderTax};
   return (fns[S.screen]||renderDashboard)();
 }
-function loading(){ $('#main').innerHTML='<div class="boot-loader"><div class="spinner"></div></div>'; }
 function paint(node){ var m=$('#main'); m.innerHTML=''; m.appendChild(node); }
+
+/* ── skeletons ───────────────────────────────────────────────────────────────
+ * A placeholder shaped like the screen that's coming, instead of a spinner: the
+ * layout doesn't jump when data lands, and the wait reads as progress. Built out
+ * of the REAL .card/.stat/.grid/.litem boxes with shimmer bars inside, so the
+ * shapes track the actual screens for free. */
+function skBar(h,w){ return '<div class="skeleton" style="height:'+h+'px;width:'+w+'"></div>'; }
+function skRows(n){
+  var o='';
+  for(var i=0;i<(n||5);i++) o+='<div class="litem">'+
+    '<div class="skeleton" style="height:34px;width:34px;border-radius:10px;flex:none"></div>'+
+    '<div class="grow">'+skBar(12,(50+(i%3)*14)+'%')+skBar(10,'30%')+'</div>'+skBar(14,'72px')+'</div>';
+  return o;
+}
+function skCard(inner){ return '<div class="card">'+inner+'</div>'; }
+function skTiles(n){
+  var o=''; for(var i=0;i<n;i++) o+='<div class="stat">'+skBar(11,'46%')+skBar(24,'70%')+'</div>';
+  return '<div class="grid grid-'+n+'">'+o+'</div>';
+}
+var SKELS={
+  dashboard:function(){ return '<div class="stat hero">'+skBar(11,'30%')+skBar(34,'58%')+skBar(10,'100%')+'</div>'+
+    skTiles(3)+skCard(skBar(11,'34%')+skBar(150,'100%'))+skCard(skBar(11,'26%')+skRows(4)); },
+  accounts: function(){ return skTiles(2)+skCard(skBar(11,'26%')+skRows(4))+skCard(skBar(11,'26%')+skRows(3)); },
+  budgets:  function(){ return skCard(skBar(11,'34%')+skBar(28,'50%')+skBar(10,'100%'))+skCard(skBar(11,'26%')+skRows(5)); },
+  list:     function(){ return '<div class="filters">'+skBar(34,'170px')+skBar(34,'130px')+skBar(34,'130px')+'</div>'+skCard(skRows(7)); },
+  table:    function(){ return skCard(skBar(11,'30%')+skRows(6)); }
+};
+function loading(kind){
+  var f=SKELS[kind]||SKELS.table;
+  $('#main').innerHTML='<div class="screen">'+skBar(21,'34%')+'<div style="height:16px"></div>'+f()+'</div>';
+}
 
 /* ════════════════════════════════════════════════════════════════════════
  *  CHART HELPERS — inline SVG, no library. Specs: thin marks with a rounded
@@ -412,7 +521,7 @@ function periodPace(period,monthStr){
  * ════════════════════════════════════════════════════════════════════════ */
 function renderDashboard(){
   var key='dashboard|'+S.month;
-  if(!S.cache[key]) loading();
+  if(!S.cache[key]) loading('dashboard');
   return cachedCall(key, function(){return gs('api_getDashboard',{month:S.month});}, function(d){
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Dashboard'));
@@ -528,7 +637,7 @@ function tile(label,val,sub){
  *  TRANSACTIONS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTransactions(){
-  if(!S.boot){ loading(); ensureBoot().then(renderTransactions).catch(showErr); return; }
+  if(!S.boot){ loading('list'); ensureBoot().then(renderTransactions).catch(showErr); return; }
   var w=el('div','screen');
   w.appendChild(el('div','screen-title','Transactions'));
 
@@ -561,7 +670,7 @@ function renderTransactions(){
   }
 
   var listCard=el('div','card'); listCard.id='txListCard';
-  listCard.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  listCard.innerHTML=skRows(7);
   w.appendChild(listCard);
   paint(w);
 
@@ -575,7 +684,7 @@ function renderTransactions(){
 function loadTx(w, silent){
   var st={filters:S.tx.filters, offset:S.tx.offset, limit:S.tx.limit};
   var key='tx|'+JSON.stringify(S.tx.filters||{})+'|'+S.tx.offset+'|'+S.tx.limit;
-  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skRows(7);
   return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
     S.tx.total=res.total; S.tx.rows=res.transactions;
     renderTxList();
@@ -691,7 +800,7 @@ function fmtDate(d){
  *  ACCOUNTS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderAccounts(){
-  if(!S.cache['accounts']) loading();
+  if(!S.cache['accounts']) loading('accounts');
   return cachedCall('accounts', function(){return gs('api_getAccounts');}, function(res){
     var accs=res.accounts||[];
     var w=el('div','screen');
@@ -762,10 +871,10 @@ function accountRow(a){
  * ════════════════════════════════════════════════════════════════════════ */
 function renderBudgets(){
   var key='budgets|'+S.month;
-  if(!S.cache[key]) loading();
+  if(!S.cache[key]) loading('budgets');
   return cachedCall(key,
     function(){ return Promise.all([gs('api_getBudgets',{month:S.month}), gs('api_getRecurring')])
-                  .then(function(arr){ return {bg:arr[0], rec:arr[1]}; }); },
+                  .then(function(arr){ return {bg:arr[0], rec:arr[1], version:arr[0].version}; }); },
     function(payload){
     var bg=payload.bg, rec=payload.rec;
     var w=el('div','screen');
@@ -823,7 +932,7 @@ function renderBudgets(){
  *  INVESTMENTS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderInvestments(){
-  if(!S.cache['investments']) loading();
+  if(!S.cache['investments']) loading('accounts');
   return cachedCall('investments', function(){return gs('api_getInvestments');}, function(inv){
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Investments'));
@@ -885,7 +994,7 @@ function renderInvestments(){
  *  TAX / BIR (Ledger)
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTax(){
-  if(!S.cache['tax']) loading();
+  if(!S.cache['tax']) loading('table');
   return cachedCall('tax', function(){return gs('api_getLedger');}, function(res){
     var rows=(res.rows||[]).slice();
     var cols=ledgerCols(res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]));
@@ -906,7 +1015,10 @@ function renderTax(){
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
     head.appendChild(addBtn);
     w.appendChild(head);
-    w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only)'));
+    w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only) · '+
+      // The BSP reference rate is hand-typed per payslip, so link its source here.
+      // target=_blank is required: the app runs in GAS's sandboxed iframe.
+      '<a class="tx-link" target="_blank" rel="noopener" href="https://www.bsp.gov.ph/statistics/external/day99_data.aspx">BSP daily PHP/USD rate ›</a>'));
 
     if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); }
     else {
@@ -916,29 +1028,8 @@ function renderTax(){
       htr.appendChild(el('th')); // delete column
       thead.appendChild(htr); t.appendChild(thead);
 
-      var tb=el('tbody');
-      rows.forEach(function(r){
-        var tr=el('tr');
-        cols.forEach(function(c){
-          var td=el('td'), val=r[c];
-          // The link column opens the transaction instead of editing the ID; an empty
-          // one stays editable so a legacy row can still be linked by hand.
-          if(c===res.txIdCol && val!=null && val!==''){ td.appendChild(txLinkEl(String(val))); }
-          else if(derived[c]){ td.className='dim'; td.textContent=ledgerText(c,val); }
-          else if(isFiledCol(c)){
-            td.appendChild(quarterSelect(val, function(v){ ledgerSaveCell(r.__row, c, v); }));
-          }
-          else {
-            td.className='ed-cell'; td.title='Tap to edit'; td.textContent=ledgerText(c,val);
-            td.onclick=function(){ ledgerCellEdit(td, r.__row, c, val); };
-          }
-          tr.appendChild(td);
-        });
-        var dtd=el('td'), del=el('button','icon-btn','✕'); del.title='Delete row';
-        del.onclick=function(){ ledgerDeleteRow(r.__row); };
-        dtd.appendChild(del); tr.appendChild(dtd);
-        tb.appendChild(tr);
-      });
+      var tb=el('tbody'), ctx={cols:cols, derived:derived, txIdCol:res.txIdCol};
+      rows.forEach(function(r){ tb.appendChild(ledgerRowTr(r, ctx)); });
       t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
     }
     if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedSalaryCard(res.unlinked,res.txIdCol));
@@ -963,7 +1054,7 @@ function unlinkedSalaryCard(list, txIdCol){
       add.disabled=true; add.textContent='Adding…';
       var obj={}; obj[txIdCol]=t.ID;
       gs('api_appendLedgerRow',obj).then(function(){
-        toast('Added to ledger','ok'); S.cache={}; renderTax();
+        toast('Added to ledger','ok'); dropCache(); renderTax();
       }).catch(function(e){ add.disabled=false; add.textContent='+ Add'; toast(e.message||e,'err'); });
     };
     r.appendChild(add); l.appendChild(r);
@@ -982,12 +1073,13 @@ function ledgerCols(cols){
   return cols.slice().sort(function(a,b){ return rank(a)-rank(b) || cols.indexOf(a)-cols.indexOf(b); });
 }
 function isFiledCol(c){ return /^filed/i.test(c); }
-/* The current BIR quarter and the 11 before it, newest first. `keep` is the cell's
- * existing value: an older quarter (or a legacy TRUE) is prepended rather than
- * silently dropped from the list. */
+/* The current BIR quarter back to 2026-Q1 (the ledger starts there — nothing was
+ * filed before), newest first. `keep` is the cell's existing value: an out-of-range
+ * quarter (or a legacy TRUE) is prepended rather than silently dropped. */
+var LEDGER_FIRST_YEAR=2026;
 function quarterOptions(keep){
   var d=new Date(), y=d.getFullYear(), q=Math.floor(d.getMonth()/3)+1, out=[];
-  for(var i=0;i<12;i++){ out.push(y+'-Q'+q); if(--q===0){ q=4; y--; } }
+  while(y>=LEDGER_FIRST_YEAR){ out.push(y+'-Q'+q); if(--q===0){ q=4; y--; } }
   if(keep && out.indexOf(keep)<0) out.unshift(keep);
   return out;
 }
@@ -1017,17 +1109,49 @@ function txLinkEl(id){
   a.onclick=function(e){ e.preventDefault(); openTxById(id); };
   return a;
 }
-/* Save a single cell (checkbox toggle / inline edit) then re-render. */
-function ledgerSaveCell(row, header, value, ctl){
-  if(ctl) ctl.disabled=true;
-  return gs('api_updateLedgerCell',{row:row, header:header, value:value}).then(function(){
-    toast('Saved','ok'); S.cache={}; renderTax();
-  }).catch(function(e){ toast(e.message||e,'err'); renderTax(); });
+/* One ledger <tr>. Split out of renderTax so a cell edit repaints just this row —
+ * editing several cells in a row used to reload the whole screen each time.
+ * ponytail: the row is rebuilt, not diffed, and rows aren't re-sorted after an
+ * edit (only an empty Transaction ID can move a row; re-open the screen for that). */
+function ledgerRowTr(r, ctx){
+  var tr=el('tr');
+  ctx.cols.forEach(function(c){
+    var td=el('td'), val=r[c];
+    // The link column opens the transaction instead of editing the ID; an empty
+    // one stays editable so a legacy row can still be linked by hand.
+    if(c===ctx.txIdCol && val!=null && val!==''){ td.appendChild(txLinkEl(String(val))); }
+    else if(ctx.derived[c]){ td.className='dim'; td.textContent=ledgerText(c,val); }
+    else if(isFiledCol(c)){
+      td.appendChild(quarterSelect(val, function(v){ ledgerSaveCell(tr, r, ctx, c, v); }));
+    }
+    else {
+      td.className='ed-cell'; td.title='Tap to edit'; td.textContent=ledgerText(c,val);
+      td.onclick=function(){ ledgerCellEdit(td, tr, r, ctx, c); };
+    }
+    tr.appendChild(td);
+  });
+  var dtd=el('td'), del=el('button','icon-btn','✕'); del.title='Delete row';
+  del.onclick=function(){ ledgerDeleteRow(r.__row); };
+  dtd.appendChild(del); tr.appendChild(dtd);
+  return tr;
+}
+function ledgerReplaceRow(tr, r, ctx){ tr.parentNode.replaceChild(ledgerRowTr(r,ctx), tr); }
+
+/* Save a single cell, then swap in the row the write handler hands back (its
+ * derived cells have already recalculated). Mutating `r` in place keeps the
+ * cached rows array in step, so no cache wipe and no screen reload. */
+function ledgerSaveCell(tr, r, ctx, header, value){
+  return gs('api_updateLedgerCell',{row:r.__row, header:header, value:value}).then(function(res){
+    var fresh=res.values;
+    if(fresh) Object.keys(fresh).forEach(function(k){ r[k]=fresh[k]; });
+    toast('Saved','ok'); ledgerReplaceRow(tr, r, ctx);
+  }).catch(function(e){ toast(e.message||e,'err'); ledgerReplaceRow(tr, r, ctx); });
 }
 
 /* Inline cell editor: swap the <td> for a text input that fills the cell (the
  * .editing class drops the td padding so the row doesn't jump on edit). */
-function ledgerCellEdit(td, row, header, curVal){
+function ledgerCellEdit(td, tr, r, ctx, header){
+  var curVal=r[header];
   var input=el('input','ledger-edit-input'); input.type='text';
   if(curVal!=null) input.value=String(curVal);
   td.classList.add('editing'); td.textContent=''; td.appendChild(input); input.focus(); input.select();
@@ -1035,13 +1159,13 @@ function ledgerCellEdit(td, row, header, curVal){
   function commit(){
     if(done) return; done=true;
     var v=input.value;
-    if(v===String(curVal==null?'':curVal)){ renderTax(); return; }   // no-op → restore
-    ledgerSaveCell(row, header, v);
+    if(v===String(curVal==null?'':curVal)){ ledgerReplaceRow(tr,r,ctx); return; }   // no-op → restore
+    ledgerSaveCell(tr, r, ctx, header, v);
   }
   input.onblur=commit;
   input.onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); commit(); }
-    else if(e.key==='Escape'){ done=true; renderTax(); }
+    else if(e.key==='Escape'){ done=true; ledgerReplaceRow(tr,r,ctx); }
   };
 }
 
@@ -1062,7 +1186,7 @@ function openLedgerAdd(cols, derived){
     if(!any){ toast('Fill at least one field','err'); return; }
     save.disabled=true; save.textContent='Adding…';
     gs('api_appendLedgerRow',obj).then(function(){
-      closeModal(); toast('Row added','ok'); S.cache={}; renderTax();
+      closeModal(); toast('Row added','ok'); dropCache(); renderTax();
     }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
   };
   openModal(modalShell('Add ledger row', body, [save]));
@@ -1073,7 +1197,7 @@ function ledgerDeleteRow(row){
   yes.onclick=function(){
     yes.disabled=true; yes.textContent='Deleting…';
     gs('api_deleteLedgerRow',{row:row}).then(function(){
-      closeModal(); toast('Row deleted','ok'); S.cache={}; renderTax();
+      closeModal(); toast('Row deleted','ok'); dropCache(); renderTax();
     }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
@@ -1093,7 +1217,7 @@ function ledgerDeleteRow(row){
  *  Defaults reproduce a sample Wise quote ($3.68 out, ₱154.83 in; tunable).
  * ════════════════════════════════════════════════════════════════════════ */
 function renderExchange(){
-  if(!S.boot){ loading(); ensureBoot().then(renderExchange).catch(showErr); return; }
+  if(!S.boot){ loading('table'); ensureBoot().then(renderExchange).catch(showErr); return; }
   var w=el('div','screen');
   w.appendChild(el('div','screen-title','Swap · Fair USD↔PHP'));
   w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with the other person'));
@@ -1159,7 +1283,7 @@ function exCalc(){
 function reviewTxKey(){ return 'revtx|'+JSON.stringify(S.review.filters||{})+'|'+S.review.offset+'|'+S.review.limit; }
 
 function renderReview(){
-  if(!S.boot){ loading(); ensureBoot().then(renderReview).catch(showErr); return; }
+  if(!S.boot){ loading('list'); ensureBoot().then(renderReview).catch(showErr); return; }
   if(S.review.filters.month===undefined) S.review.filters.month=S.month;
 
   var w=el('div','screen');
@@ -1189,9 +1313,9 @@ function renderReview(){
 
   var split=el('div','review-split');
   var left=el('div','rev-accts card'); left.id='revAccts';
-  left.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  left.innerHTML=skRows(6);
   var right=el('div','rev-tx card'); right.id='revTxCard';
-  right.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  right.innerHTML=skRows(7);
   split.appendChild(left); split.appendChild(right);
   w.appendChild(split);
   paint(w);
@@ -1236,7 +1360,7 @@ function reviewAcctRow(a){
 function loadReviewTx(){
   var st={filters:S.review.filters, offset:S.review.offset, limit:S.review.limit};
   var key=reviewTxKey();
-  var card=$('#revTxCard'); if(card && !S.cache[key]) card.innerHTML='<div class="boot-loader"><div class="spinner"></div></div>';
+  var card=$('#revTxCard'); if(card && !S.cache[key]) card.innerHTML=skRows(7);
   return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
     S.review.total=res.total; S.review.rows=res.transactions;
     var c=$('#revTxCard'); if(!c) return; c.innerHTML='';
@@ -1397,7 +1521,7 @@ function updateBulkBar(){
 }
 
 function afterReviewMutation(){
-  S.cache={};                    // version bumped server-side → drop stale payloads
+  dropCache();                   // version bumped server-side → drop stale payloads
   loadReviewAccts(); loadReviewTx();
 }
 
@@ -1866,7 +1990,7 @@ function openAccountModal(a){
     if(Object.keys(payload).length===1){toast('No changes','err');return;}
     save.disabled=true; save.textContent='Saving…';
     gs('api_updateAccount',payload).then(function(){
-      closeModal(); toast('Account updated','ok'); S.cache={}; renderAccounts();
+      closeModal(); toast('Account updated','ok'); dropCache(); renderAccounts();
     }).catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
   };
   openModal(modalShell(a.name, body, [save]));
@@ -1883,7 +2007,7 @@ function isoDate(d){
 function afterMutation(){
   // Each screen re-fetches its own fresh balances/budgets; account & category
   // names are unchanged by a tx write, so no need to re-hydrate getBootstrap.
-  S.cache={};
+  dropCache();
   // On the transactions screen do a *silent* reload: the optimistic row already
   // on screen stays put until the fresh server page lands, then swaps in place
   // (no spinner flash). Other screens fully re-render.

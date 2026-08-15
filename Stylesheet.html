@@ -277,7 +277,9 @@ table.tbl td{padding:9px 10px;border-bottom:1px solid var(--border);white-space:
 table.tbl tr:hover td{background:var(--surface-2)}
 table.tbl td.ed-cell{cursor:pointer}
 table.tbl td.ed-cell:hover{background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--accent)}
-table.tbl td a.tx-link{color:var(--accent);text-decoration:none;border-bottom:1px dotted currentColor}
+/* Not scoped to the table: the Tax subtitle's BSP link uses it too, and an
+ * unstyled <a> there renders as a default blue/underlined UA link. */
+a.tx-link{color:var(--accent);text-decoration:none;border-bottom:1px dotted currentColor}
 table.tbl td .q-select{background:var(--surface-2);color:var(--text);border:1px solid var(--border);
   border-radius:var(--radius-sm);padding:3px 6px;font:inherit;cursor:pointer}
 table.tbl td .q-select:focus{border-color:var(--accent);outline:none}
@@ -290,12 +292,15 @@ table.tbl td.editing{padding:0}
 .tax-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 
 /* ── Loaders / empty ─────────────────────────────────────────────────────── */
-.boot-loader{display:grid;place-items:center;gap:14px;padding:80px 0;color:var(--text-dim)}
-.spinner{width:34px;height:34px;border:3px solid var(--border-2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 .empty{text-align:center;color:var(--text-faint);padding:34px 14px;font-size:14px}
 .empty .empty-ico{display:block;font-size:26px;margin-bottom:8px;opacity:.7}
+/* Loading placeholders: shimmer bars laid out inside the REAL .card/.stat/.litem
+   boxes (see skeletonHTML in App.html), so the layout doesn't jump when data lands. */
 .skeleton{background:linear-gradient(90deg,var(--surface-2),var(--surface-3),var(--surface-2));background-size:200% 100%;
   animation:shimmer 1.2s infinite;border-radius:8px;height:14px}
+.skeleton+.skeleton{margin-top:8px}
+.filters .skeleton{margin-top:0}
+@media (prefers-reduced-motion:reduce){.skeleton{animation:none}}
 
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}

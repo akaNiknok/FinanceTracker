@@ -56,7 +56,18 @@ function api_updateLedgerCell(args) {
   su_invalidateMemo_(SHEET_LEDGER);
   SpreadsheetApp.flush();
   cache_bumpVersion_();
-  return { status: "success", row: row, header: args.header };
+  return { status: "success", row: row, header: args.header, values: ledger_row_(sheet, row) };
+}
+
+/** One ledger row as {header: value} (+__row), same shape api_getLedger returns.
+ *  Handed back by updateLedgerCell so the UI repaints just that row — the derived
+ *  columns (Total Income, 8% Tax) have recalculated by the flush above. */
+function ledger_row_(sheet, row) {
+  const h = su_headerMap_(sheet);
+  const vals = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const out = { __row: row };
+  Object.keys(h).forEach(function (k) { out[k] = su_dateStr_(vals[h[k] - 1]); });
+  return out;
 }
 
 /** Append a ledger row, writing only supplied, non-derived columns. */

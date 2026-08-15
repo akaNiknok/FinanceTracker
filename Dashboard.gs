@@ -61,6 +61,7 @@ function api_getDashboard(args) {
 
   return {
     status: "success",
+    version: cache_getVersion_(),   // lets the SPA cache this without a second round trip
     month: month,
     netWorth: Math.round(netWorth * 100) / 100,
     assets: Math.round(assets * 100) / 100,
@@ -91,6 +92,7 @@ function api_getInvestments() {
   positions.forEach(function (p) { p.weightPct = total ? Math.round((p.valuePhp || 0) / total * 1000) / 10 : 0; });
   return {
     status: "success",
+    version: cache_getVersion_(),
     totalValuePhp: Math.round(total * 100) / 100,
     positions: positions,
     // Strategy targets are documented in the advisor project, surfaced here for the UI.

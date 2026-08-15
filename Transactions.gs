@@ -157,7 +157,7 @@ function api_listTransactions(args) {
   const offset = Math.max(0, parseInt(args.offset, 10) || 0);
   const limit  = Math.max(1, parseInt(args.limit, 10) || 100);
   const page = filtered.slice(offset, offset + limit).map(tx_clean_);
-  return { status: "success", total: total, offset: offset, limit: limit, transactions: page };
+  return { status: "success", version: cache_getVersion_(), total: total, offset: offset, limit: limit, transactions: page };
 }
 
 // ── update (input columns only, by ID) ────────────────────────────────────────

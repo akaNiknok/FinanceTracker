@@ -36,7 +36,7 @@ function api_getLedger() {
         .map(tx_clean_)
     : [];   // pre-migration workbook: no link column, nothing to offer
   return {
-    status: "success", rows: rows, cols: cols,
+    status: "success", version: cache_getVersion_(), rows: rows, cols: cols,
     derived: ledger_derivedHeaders_(sheet, headerMap),
     txIdCol: LEDGER_TXID_HEADER, unlinked: unlinked
   };

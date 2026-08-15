@@ -510,7 +510,10 @@ function tg_prompt_(unixDate) {
     "7. If it is not a transfer, ToAccount and ToAmount must be null",
     '8. query.month is yyyy-MM; "this month" is ' + today.slice(0, 7) + ", and no period mentioned means null (all time)",
     '9. Past spending/earning is "query"; money sitting in an account today is "balance"',
-    "10. If the message is none of the four intents, set error to a short reason and leave the rest null"
+    "10. If the message is none of the four intents, set error to a short reason and leave the rest null",
+    '11. Description: use normal capitalization even if the source shouts ("SM SUPERMARKET" -> "SM Supermarket");',
+    "    keep all-caps only for names that are genuinely all-caps (acronyms, brands like BPI, SM, GCash)",
+    "12. Leave reference/confirmation/transaction numbers out of the Description"
   ].join("\n");
 }
 
