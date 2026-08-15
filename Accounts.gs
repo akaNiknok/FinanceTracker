@@ -48,7 +48,7 @@ function api_getAccounts() {
       color: a.Color || null   // optional hex for color-coding (blank before setupAccountColor)
     };
   });
-  return { status: "success", accounts: out };
+  return { status: "success", version: cache_getVersion_(), accounts: out };
 }
 
 /**

@@ -42,6 +42,7 @@ function api_getBudgets(args) {
 
   return {
     status: "success",
+    version: cache_getVersion_(),
     month: Utilities.formatDate(ref, tz, "yyyy-MMM"),
     incomePhp: incomePhp,
     fxUsdPhp: fx,
