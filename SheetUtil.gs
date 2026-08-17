@@ -121,12 +121,14 @@ function su_a1_(row, col) {
   return s + row;
 }
 
-// ── Serialization safety for google.script.run ───────────────────────────────
-// The HtmlService UI calls api_* DIRECTLY via google.script.run, whose return
-// values may NOT contain Date objects — a single nested Date makes the ENTIRE
-// response arrive as null on the client. Sheet reads hand back Date cells, so any
-// payload built from su_readObjects_ must pass its values through this first.
-// (The JSON `?action=` path doesn't need it — JSON.stringify handles Dates.)
+// ── Serialization safety ─────────────────────────────────────────────────────
+// Sheet reads hand back Date cells, and every response now leaves as JSON. Still
+// required, for a different reason than pre-v1.6.0 (when a nested Date nulled the
+// whole google.script.run payload): JSON.stringify would emit a Date as UTC
+// ISO-8601, and Manila is UTC+8, so a midnight date cell would serialize as the
+// PREVIOUS day. This pins it to yyyy-MM-dd in the script timezone — which is also
+// the exact shape the UI and tx_parseDate_ expect. Any payload built from
+// su_readObjects_ must pass its values through here first.
 function su_dateStr_(v) {
   return (v instanceof Date)
     ? Utilities.formatDate(v, Session.getScriptTimeZone(), "yyyy-MM-dd")

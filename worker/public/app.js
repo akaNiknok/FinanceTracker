@@ -1,23 +1,50 @@
-<script>
 /* ============================================================================
- * App.html — the FinanceTracker SPA.
- * Vanilla JS. Talks to the service layer via google.script.run (so no fetch URL
- * / token — calls run as the deploying owner). Eight screens: Dashboard ·
- * Transactions · Budgets · Accounts · Review · Investments · Exchange · Tax.
+ * app.js — the FinanceTracker SPA.
+ * Vanilla JS, served as a static asset by the Cloudflare Worker, which also
+ * proxies /api to the Apps Script service layer (same origin: no CORS). Eight
+ * screens: Dashboard · Transactions · Budgets · Accounts · Review · Investments
+ * · Exchange · Tax.
  * ========================================================================== */
 
-/* ── server bridge: google.script.run → Promise ──────────────────────────── */
-function gs(fn, arg){
-  return new Promise(function(resolve, reject){
-    google.script.run
-      .withSuccessHandler(function(r){
-        if (r == null) reject(new Error('Empty response from server (a Date may have leaked into the payload).'));
-        else if (r.status === 'error') reject(new Error(r.message || 'Server error'));
-        else resolve(r);
-      })
-      .withFailureHandler(function(e){ reject(e); })
-      [fn](arg);
+/* ── server bridge: /api → Promise ───────────────────────────────────────────
+ * fn is the GAS handler name ('api_getDashboard'); the Worker takes the action
+ * without the prefix. Reads go over GET so they stay cacheable — the `get`/`list`
+ * name prefix IS the rule, matching Router.gs ROUTES_READ_, so there's no second
+ * list to keep in sync. Writes POST the args as JSON. The Worker adds the GAS
+ * token; nothing secret reaches this file. */
+function gs(fn, arg, _retried){
+  var action = fn.replace(/^api_/, '');
+  var url = '/api?action=' + encodeURIComponent(action), init;
+  if (/^(get|list)/.test(action)){
+    Object.keys(arg || {}).forEach(function(k){
+      if (arg[k] != null && arg[k] !== '') url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(arg[k]);
+    });
+    init = { method:'GET' };
+  } else {
+    var body = arg ? JSON.parse(JSON.stringify(arg)) : {};
+    body.action = action;
+    init = { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) };
+  }
+  return fetch(url, init).then(function(res){
+    // The passphrase cookie expired (or was never set). Ask once, then retry —
+    // a clean 401 is why /api answers JSON instead of redirecting to a login page.
+    if (res.status === 401 && !_retried) return unlock().then(function(){ return gs(fn, arg, true); });
+    return res.json().then(function(r){
+      if (r == null) throw new Error('Empty response from server (a Date may have leaked into the payload).');
+      if (r.status === 'error') throw new Error(r.message || 'Server error');
+      return r;
+    }, function(){ throw new Error('Server returned '+res.status+' (not JSON)'); });
   });
+}
+
+/* ponytail: window.prompt is the whole login UI. The cookie lasts a year, so this
+ * shows up about never; swap in a proper modal if that stops being true. */
+function unlock(){
+  var pass = prompt('Passphrase');
+  if (pass == null) return Promise.reject(new Error('Locked'));
+  return fetch('/login', { method:'POST', headers:{'Content-Type':'application/json'},
+                           body:JSON.stringify({ pass:pass }) })
+    .then(function(r){ if (!r.ok) throw new Error('Wrong passphrase'); });
 }
 
 /* ── stale-while-revalidate cache, gated by the server data version ──────────
@@ -26,8 +53,8 @@ function gs(fn, arg){
  * version moved. onData may fire twice: once from cache, once after a refetch.
  * `loader` is a thunk returning a Promise (so callers can Promise.all).
  *
- * Round trips are the whole cost here — every google.script.run is a fresh GAS
- * execution — so two things keep them to a minimum: a cold key takes the version
+ * Round trips are the whole cost here — every /api call is a fresh GAS execution
+ * behind the Worker — so two things keep them to a minimum: a cold key takes the version
  * straight out of its own payload (read handlers stamp `version`; the separate
  * api_getDataVersion is only a fallback for composite payloads), and a version
  * checked within VER_TTL is trusted, which kills the duplicate pings from a
@@ -64,8 +91,10 @@ function cachedCall(key, loader, onData){
 /* ── cache persistence ───────────────────────────────────────────────────────
  * The version gate makes the cache safe to reuse across a reload, so keep it in
  * localStorage: a reload (or reopening the home-screen shortcut) paints from disk
- * and spends one tiny version call instead of going cold on every screen.
- * Best-effort — the GAS sandbox origin can rotate and wipe storage. */
+ * and spends one tiny version call instead of going cold on every screen. Since
+ * v1.6.0 this actually survives: the app has a stable origin of its own, where the
+ * old GAS sandbox origin could rotate and wipe it. Still best-effort (Safari
+ * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
 var LS_CACHE = 'ft.cache', LS_SCHEMA = 1;
@@ -260,21 +289,13 @@ function boot(){
   mp.value=S.month;
   mp.addEventListener('change', function(){ S.month=mp.value; S.cache={}; render(); });
 
-  // Browser back/forward moves between screens. history.pushState is blocked in
-  // the GAS sandbox iframe; google.script.history is the sanctioned equivalent.
-  try{
-    google.script.history.setChangeHandler(function(ev){
-      var s=(ev.location.parameter||{}).screen||'dashboard';
-      if(s!==S.screen) go(s,true);
-    });
-    google.script.url.getLocation(function(loc){    // deep link: ?screen=budgets
-      var p=loc.parameter||{};
-      var s=p.screen||lastScreen();
-      if(s && s!==S.screen) go(s,true);
-      // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
-      if(p.tx) openTxById(p.tx);
-    });
-  }catch(e){}
+  // Browser back/forward moves between screens. Plain History API now that the app
+  // is served from its own origin instead of the GAS sandbox iframe (which blocked
+  // pushState and needed google.script.history).
+  window.addEventListener('popstate', function(){
+    var s=new URLSearchParams(location.search).get('screen')||'dashboard';
+    if(s!==S.screen) go(s,true);
+  });
   // Scroll-wheel over a focused number input silently changes the value — block it.
   document.addEventListener('wheel',function(e){
     if(e.target.type==='number' && document.activeElement===e.target) e.preventDefault();
@@ -282,10 +303,13 @@ function boot(){
 
   // Paint the first screen right away (it fetches its own data); hydrate the
   // reference data in parallel, then re-render so warm FX / counts are reflected.
-  // Restore synchronously from storage so a reload doesn't flash the Dashboard
-  // (and fetch it) before getLocation's async callback lands on the real screen.
-  var last=lastScreen();
-  if(last) go(last,true); else render();
+  // One synchronous decision, so a reload never flashes the Dashboard first:
+  // ?screen= (a bookmarked or Telegram-sent link) wins over the stored last screen.
+  var p=new URLSearchParams(location.search);
+  var first=p.get('screen')||lastScreen();
+  if(first) go(first,true); else render();
+  // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
+  if(p.get('tx')) openTxById(p.get('tx'));
   (warm ? revalidateBoot() : ensureBoot().then(function(){
     if(S.screen==='dashboard'||S.screen==='budgets') render();
   })).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
@@ -301,8 +325,8 @@ var SECONDARY_SCREENS={review:1,investments:1,exchange:1,tax:1};
 /* Last screen, so a browser reload comes back where you were. The parent URL
  * (?screen=, pushed below) is the primary channel; localStorage covers reloads
  * that drop it — an iOS home-screen shortcut reopens its start_url, not the
- * current one. Both are best-effort: the GAS sandbox origin can rotate and wipe
- * storage, and history.push is a no-op in some embeds — hence the try/catch. */
+ * current one. Best-effort: Safari can evict storage under pressure or in private
+ * browsing, hence the try/catch. */
 function lastScreen(){ try{ return localStorage.getItem('ft.screen')||null; }catch(e){ return null; } }
 function openSheet(){ $('#sheetRoot').hidden=false; }
 function closeSheet(){ $('#sheetRoot').hidden=true; }
@@ -314,7 +338,7 @@ function go(screen, fromHistory){
   document.querySelectorAll('.sheet-item').forEach(function(b){b.classList.toggle('active', b.dataset.screen===screen);});
   closeSheet();
   try{ localStorage.setItem('ft.screen',screen); }catch(e){}
-  if(!fromHistory){ try{ google.script.history.push(null,{screen:screen}); }catch(e){} }
+  if(!fromHistory) history.pushState(null,'','?screen='+encodeURIComponent(screen));
   render();
 }
 
@@ -1017,7 +1041,7 @@ function renderTax(){
     w.appendChild(head);
     w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only) · '+
       // The BSP reference rate is hand-typed per payslip, so link its source here.
-      // target=_blank is required: the app runs in GAS's sandboxed iframe.
+      // target=_blank keeps the SPA's state when you go check the rate.
       '<a class="tx-link" target="_blank" rel="noopener" href="https://www.bsp.gov.ph/statistics/external/day99_data.aspx">BSP daily PHP/USD rate ›</a>'));
 
     if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); }
@@ -2035,4 +2059,3 @@ function showErr(e){
   $('#main').innerHTML='<div class="empty">'+esc(e&&e.message?e.message:e)+
     '<br><button class="btn" style="margin-top:12px" onclick="render()">Retry</button></div>';
 }
-</script>

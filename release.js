@@ -1,6 +1,7 @@
 // release.js — run `npm run release` on main only.
-// Pushes code to GAS, redeploys the SAME deploymentId (URL stable for n8n),
-// tags vX.Y.Z from package.json, pushes, and creates a GitHub Release.
+// Pushes code to GAS, redeploys the SAME deploymentId (URL stable for the bot),
+// deploys the Worker (which serves the SPA), tags vX.Y.Z from package.json,
+// pushes, and creates a GitHub Release.
 const { execSync } = require('child_process');
 const fs = require('fs');
 const run = (cmd) => execSync(cmd, { stdio: 'inherit' });
@@ -23,6 +24,10 @@ const notes = `## What's Changed\n${log}\n\n**Full Changelog**: https://github.c
 
 run('npx clasp push -f');
 run(`npx clasp deploy --deploymentId ${depId} --description "${tag}"`);
+// The frontend ships here too since v1.6.0 — worker/public IS the app. Before the
+// tag, so a failed Worker deploy aborts the release instead of leaving a tag whose
+// GAS and Worker halves disagree.
+execSync('npx wrangler deploy', { cwd: 'worker', stdio: 'inherit' });
 run(`git tag ${tag}`);
 run('git push origin main --tags');
 execSync(`gh release create ${tag} --title ${tag} --notes-file -`, { stdio: ['pipe', 'inherit', 'inherit'], input: notes });

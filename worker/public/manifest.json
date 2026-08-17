@@ -1,0 +1,11 @@
+{
+  "name": "FinanceTracker",
+  "short_name": "Finance",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0f14",
+  "theme_color": "#0d0f14",
+  "icons": [
+    { "src": "/icon-180.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

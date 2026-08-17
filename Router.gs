@@ -1,16 +1,18 @@
 /**
  * Router.gs — the single doGet/doPost entry points for the web app.
  *
- * Only two things reach this file from outside:
- *   • a plain browser GET on the deployment URL → the Web App UI (WebApp.gs)
- *   • POST ?action=telegram → the bot (Telegram.gs), via the Cloudflare Worker
- * The SPA does NOT come through here — it calls the api_* functions directly via
- * google.script.run. The read-side `?action=` API and the n8n-era legacy paths
- * (bare-body POST, ?sync, ?sheet= dumps) were removed once n8n was retired;
+ * GAS is API-only since v1.6.0: the SPA moved to the Cloudflare Worker, so there
+ * is no HtmlService page here any more and nothing calls google.script.run.
+ * Everything arrives as `?action=` through the Worker, which holds the token:
+ *   • GET  ?action=<read>     → the SPA's screen payloads (ROUTES_READ_)
+ *   • POST ?action=<write>    → mutations (ROUTES_WRITE_)
+ *   • POST ?action=telegram   → the bot (Telegram.gs)
+ * The n8n-era legacy paths (bare-body POST, ?sync, ?sheet= dumps) stay deleted;
  * `git show v1.3.2:Router.gs` has them if an external caller ever needs one back.
  *
  * Handlers return a plain object; the router wraps it in a JSON response.
- * Mutations pass through auth_requireWrite_ (ENFORCE_TOKEN=true in production).
+ * Every request passes auth_requireWrite_ (ENFORCE_TOKEN=true in production) —
+ * one gate for reads and writes alike; the name is historical.
  */
 
 // action → handler, each taking the merged query-param/body args object.
@@ -22,15 +24,39 @@ const ROUTES_WRITE_ = {
   updateAccount:          api_updateAccount,
   bulkUpdateTransactions: api_bulkUpdateTransactions,
   bulkDeleteTransactions: api_bulkDeleteTransactions,
+  updateLedgerCell:       api_updateLedgerCell,
+  appendLedgerRow:        api_appendLedgerRow,
+  deleteLedgerRow:        api_deleteLedgerRow,
   telegram:               tg_webhook_
+};
+
+// GET-only, side-effect-free. Names must stay `get*`/`list*` — the SPA's gs()
+// picks GET vs POST off that prefix rather than keeping a second list in sync.
+const ROUTES_READ_ = {
+  getBootstrap:     api_getBootstrap,
+  getDashboard:     api_getDashboard,
+  getAccounts:      api_getAccounts,
+  getBudgets:       api_getBudgets,
+  getInvestments:   api_getInvestments,
+  getRecurring:     api_getRecurring,
+  getLedger:        api_getLedger,
+  getCategories:    api_getCategories,
+  getDataVersion:   api_getDataVersion,
+  listTransactions: api_listTransactions
 };
 
 function doGet(e) {
   try {
     const action = e && e.parameter ? e.parameter.action : null;
+    if (!action) return jsonResponse({ service: "FinanceTracker API", ui: "served by the Cloudflare Worker" });
+    const handler = ROUTES_READ_[action];
     // Never mutate over GET — link previewers/scanners prefetch URLs.
-    if (action) return jsonError_("Action '" + action + "' requires POST.");
-    return ui_serveApp_();
+    if (!handler) {
+      if (ROUTES_WRITE_[action]) return jsonError_("Action '" + action + "' requires POST.");
+      return jsonError_("Unknown read action: " + action, { knownActions: Object.keys(ROUTES_READ_) });
+    }
+    auth_requireWrite_(e, null);
+    return jsonResponse(handler(rt_args_(e, null)));
   } catch (err) {
     return jsonError_(err && err.message ? err.message : err);
   }

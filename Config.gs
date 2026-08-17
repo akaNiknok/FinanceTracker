@@ -57,7 +57,10 @@ const LEDGER_TX_CATEGORY = "Income: Salary"; // the only category the Tax screen
 //   TELEGRAM_USER_ID  — the only Telegram user id the bot answers.
 //   GEMINI_API_KEY    — Google AI Studio key used to parse bot messages.
 //   WEB_APP_URL       — the /exec deployment URL; used only by tg_gasEndpoint.
+//                       API-only since v1.6.0 — never link a user here.
 //   WEBHOOK_URL       — the Cloudflare Worker URL Telegram delivers to (worker/).
+//                       Must end in /tg; tg_appUrl_ strips that to get the SPA's
+//                       address for the receipt's "Edit details" button.
 //   TELEGRAM_SECRET_TOKEN — optional shared secret the Worker checks on each
 //                       delivery; must match the Worker's SECRET_TOKEN.
 //   GMAIL_QUERY       — Gmail search selecting transaction notification mail
