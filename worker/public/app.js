@@ -14,15 +14,21 @@
  * token; nothing secret reaches this file. */
 function gs(fn, arg, _retried){
   var action = fn.replace(/^api_/, '');
-  var url = '/api?action=' + encodeURIComponent(action), init;
-  if (/^(get|list)/.test(action)){
+  var read = /^(get|list)/.test(action);
+  var url = '/api?action=' + encodeURIComponent(action), init, body = null;
+  if (read){
     Object.keys(arg || {}).forEach(function(k){
       if (arg[k] != null && arg[k] !== '') url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(arg[k]);
     });
     init = { method:'GET' };
   } else {
-    var body = arg ? JSON.parse(JSON.stringify(arg)) : {};
+    body = arg ? JSON.parse(JSON.stringify(arg)) : {};
     body.action = action;
+    // A client-supplied ID is what makes an offline replay safe: if the request did
+    // reach GAS before the connection died, the retry hits the idempotency check and
+    // returns {status:'duplicate'} instead of posting a second row. Stamped here,
+    // before the first attempt, so the attempt and the replay carry the same one.
+    if (QUEUEABLE[action] && !body.ID) body.ID = 'ui-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     init = { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) };
   }
   return fetch(url, init).then(function(res){
@@ -31,20 +37,98 @@ function gs(fn, arg, _retried){
     if (res.status === 401 && !_retried) return unlock().then(function(){ return gs(fn, arg, true); });
     return res.json().then(function(r){
       if (r == null) throw new Error('Empty response from server (a Date may have leaked into the payload).');
-      if (r.status === 'error') throw new Error(r.message || 'Server error');
+      if (r.status === 'error'){
+        // GAS looked at the payload and refused it. `_server` marks that as final: it's
+        // the ONLY thing flushQueue is allowed to discard a queued write for.
+        var se = new Error(r.message || 'Server error'); se._server = true; throw se;
+      }
       return r;
     }, function(){ throw new Error('Server returned '+res.status+' (not JSON)'); });
+  }, function(){
+    // fetch only rejects on a genuine network failure — a 4xx/5xx resolves — so this
+    // branch IS "offline", without trusting navigator.onLine (true on a captive portal).
+    if (body && QUEUEABLE[action] && !flushQueue._busy) return enqueue(fn, body);
+    var err = new Error(read ? 'Offline — no cached copy of this yet'
+                             : 'Offline — reconnect to save this');
+    err._offline = true;
+    throw err;
   });
 }
 
+/* ── offline ─────────────────────────────────────────────────────────────────
+ * Reads already survive a dead connection: cachedCall paints from the persisted
+ * S.cache and swallows the failed revalidation. sw.js caches the shell so the app
+ * opens at all. What's left is writes, and only these two get queued — both are
+ * idempotent on a client-supplied ID, so replaying one that actually landed can't
+ * double-post. Edits, deletes, account and Ledger writes are NOT queued: they're
+ * desk work rather than something you do in a queue at a till, and
+ * appendLedgerRow isn't idempotent at any price. They fail with a clear message. */
+var LS_QUEUE = 'ft.queue';
+var QUEUEABLE = { createTransaction:1, createTransfer:1 };
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});
+
+function queue(){ try{ return JSON.parse(localStorage.getItem(LS_QUEUE)||'[]'); }catch(e){ return []; } }
+function queueSet(q){ try{ localStorage.setItem(LS_QUEUE, JSON.stringify(q)); }catch(e){} }
+function queueDrop(id){ queueSet(queue().filter(function(x){ return x.arg.ID !== id; })); }
+function enqueue(fn, body){
+  var q = queue(); q.push({ fn:fn, arg:body }); queueSet(q);
+  toast('Saved offline — '+q.length+' waiting to sync','ok');
+  return { status:'queued' };
+}
+/* Pending rows are derived from the queue, so an offline entry is still on screen
+ * after a relaunch. Called on boot and after a flush — NOT on enqueue, where the
+ * call site's own optimistic row is already painted and equivalent. */
+function rebuildPending(){
+  S.tx.pendingAdds = queue().map(function(item){ return optimisticTx(item.arg); });
+  if(S.screen==='transactions') renderTxList();
+}
+/* Replay oldest-first, serially (writes take a script lock anyway, and order is the
+ * order they were entered). `_busy` is also what stops gs() re-queueing a call that
+ * fails mid-flush — without it, flushing on a still-dead connection would duplicate
+ * every entry it touched. */
+function flushQueue(){
+  if(flushQueue._busy || !queue().length) return Promise.resolve();
+  flushQueue._busy = true;
+  var sent = 0;
+  return queue().reduce(function(p, item){
+    return p.then(function(){
+      return gs(item.fn, item.arg).then(function(){ sent++; queueDrop(item.arg.ID); }, function(e){
+        // Discard ONLY when GAS itself rejected the payload (a category renamed while
+        // offline, say) — that would otherwise retry forever and wedge the queue behind
+        // one bad row. Everything else keeps the entry and stops the run: still offline,
+        // an expired passphrase cookie, a cancelled or mistyped prompt, a 5xx. Dropping
+        // money because the cookie lapsed would be the worst bug in here.
+        if(!(e && e._server)) throw e;
+        queueDrop(item.arg.ID);
+        toast('Dropped an offline entry: '+(e.message||e),'err');
+      });
+    });
+  }, Promise.resolve()).catch(function(){}).then(function(){
+    flushQueue._busy = false;
+    rebuildPending();
+    if(sent){ toast('Synced '+sent+(sent>1?' entries':' entry'),'ok'); afterMutation(); }
+  });
+}
+window.addEventListener('online', flushQueue);
+
 /* ponytail: window.prompt is the whole login UI. The cookie lasts a year, so this
- * shows up about never; swap in a proper modal if that stops being true. */
+ * shows up about never; swap in a proper modal if that stops being true.
+ * Shared between concurrent callers: boot fires several /api calls at once, so a
+ * lapsed cookie produces several 401s together — without this you get a stack of
+ * identical passphrase dialogs, one per in-flight request. */
+var _unlocking = null;
 function unlock(){
-  var pass = prompt('Passphrase');
-  if (pass == null) return Promise.reject(new Error('Locked'));
-  return fetch('/login', { method:'POST', headers:{'Content-Type':'application/json'},
-                           body:JSON.stringify({ pass:pass }) })
-    .then(function(r){ if (!r.ok) throw new Error('Wrong passphrase'); });
+  if (_unlocking) return _unlocking;
+  _unlocking = Promise.resolve().then(function(){
+    var pass = prompt('Passphrase');
+    if (pass == null) throw new Error('Locked');
+    return fetch('/login', { method:'POST', headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify({ pass:pass }) })
+      .then(function(r){ if (!r.ok) throw new Error('Wrong passphrase'); });
+  });
+  var clear = function(){ _unlocking = null; };
+  _unlocking.then(clear, clear);
+  return _unlocking;
 }
 
 /* ── stale-while-revalidate cache, gated by the server data version ──────────
@@ -305,6 +389,10 @@ function boot(){
   // reference data in parallel, then re-render so warm FX / counts are reflected.
   // One synchronous decision, so a reload never flashes the Dashboard first:
   // ?screen= (a bookmarked or Telegram-sent link) wins over the stored last screen.
+  // Before the first paint, so anything written while offline is already in the row
+  // list the render is about to build (S.screen is still the default here, so this
+  // can't re-enter renderTxList early).
+  rebuildPending();
   var p=new URLSearchParams(location.search);
   var first=p.get('screen')||lastScreen();
   if(first) go(first,true); else render();
@@ -313,11 +401,19 @@ function boot(){
   (warm ? revalidateBoot() : ensureBoot().then(function(){
     if(S.screen==='dashboard'||S.screen==='budgets') render();
   })).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
+  // Launching IS a reconnect signal: the 'online' event doesn't fire for an app that
+  // was closed while offline and reopened with a connection.
+  flushQueue();
 }
 
 function refresh(){
   var btn=$('#refreshBtn'); btn.classList.add('spin');
   S.cache={}; S.boot=null; _bootPromise=null; S._verAt=0; saveCache();
+  // Also drop the cached shell and retry the queue, which makes Refresh the single
+  // answer to both "I deployed and still see the old UI" (new files land next launch,
+  // see sw.js) and "this is still waiting to sync".
+  if(window.caches) caches.keys().then(function(ks){ ks.forEach(function(n){ caches.delete(n); }); });
+  flushQueue();
   ensureBoot().then(function(){ return render(); }).finally(function(){ btn.classList.remove('spin'); });
 }
 
@@ -1845,7 +1941,9 @@ function openTxModal(t){
     prefSet('lastAcct',payload.Account); closeModal(); toast('Added','ok');
     var tmp=pushPendingAdd(payload);
     gs('api_createTransaction', payload)
-      .then(function(){ dropPendingAdd(tmp); afterMutation(); })
+      // Queued offline: the row stays exactly as it is (it's now backed by the queue,
+      // and afterMutation would drop the cache we're about to need to render from).
+      .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
       .catch(function(e){ dropPendingAdd(tmp); if(S.screen==='transactions') renderTxList(); toast('Add failed — reopening: '+(e.message||e),'err'); openTxModal(payload); });
   };
   var foot=[save];
@@ -1917,7 +2015,7 @@ function openTransferModal(t){
     closeModal(); toast('Transfer added','ok');
     var tmp=pushPendingAdd(payload);
     gs('api_createTransfer', payload)
-      .then(function(){ dropPendingAdd(tmp); afterMutation(); })
+      .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
       .catch(function(e){ dropPendingAdd(tmp); if(S.screen==='transactions') renderTxList(); toast('Transfer failed — reopening: '+(e.message||e),'err'); openTransferModal(payload); });
   };
   var foot=[save];

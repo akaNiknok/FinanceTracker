@@ -7,7 +7,8 @@
  */
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
-var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_gmailQuote", "test_gmailText", "test_interestNet",
+var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_createIdempotencyGuard",
+                  "test_gmailQuote", "test_gmailText", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod", "test_routeMethodPrefixes",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
@@ -337,6 +338,28 @@ function test_routeMethodPrefixes() {
                       + "' reads as a get…/list… name, so the SPA will GET it and doGet will refuse it");
   });
   Logger.log("test_routeMethodPrefixes OK");
+}
+
+/**
+ * The SPA's offline write queue replays creates, and a replay may be of a write that
+ * ALREADY landed — the connection can die after GAS committed the row but before the
+ * response gets back. The only thing making that safe is the supplied-ID
+ * short-circuit in both create paths. Remove it and the queue silently starts
+ * double-posting money, on the one code path nobody watches. Source-text check, like
+ * test_telegramUndoGlyph — exercising the behaviour itself needs a sheet.
+ */
+function test_createIdempotencyGuard() {
+  [["api_createTransaction", api_createTransaction], ["api_createTransfer", api_createTransfer]]
+    .forEach(function (pair) {
+      const src = pair[1].toString();
+      if (src.indexOf("args.ID") === -1 || src.indexOf("su_findRowById_") === -1)
+        throw new Error("test_createIdempotencyGuard FAIL: " + pair[0] + " lost its supplied-ID "
+                        + "duplicate check — the SPA's offline queue would double-post on replay");
+    });
+  if (TX_INPUT_COLS.indexOf("ID") === -1)
+    throw new Error("test_createIdempotencyGuard FAIL: ID is no longer an input column, so a "
+                    + "client-supplied ID cannot be written and replays cannot be deduped");
+  Logger.log("test_createIdempotencyGuard OK");
 }
 
 /**
