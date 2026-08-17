@@ -1,4 +1,3 @@
-<style>
 /* ── Design tokens ───────────────────────────────────────────────────────────
  * Quiet dark fintech theme. Data is the only loud thing on the page: marks use
  * --chart-* (validated: ΔE 80+ adjacent, ≥3:1 on --surface), text stays in the
@@ -375,4 +374,3 @@ table.tbl td.editing{padding:0}
   .card{padding:15px}
   .hbar{grid-template-columns:minmax(70px,96px) minmax(0,1fr) auto;gap:8px}
 }
-</style>

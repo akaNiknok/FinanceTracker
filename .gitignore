@@ -21,3 +21,6 @@ n8n-data/
 
 # Wrangler local state/cache
 worker/.wrangler/
+
+# Local `wrangler dev` secrets (APP_PASS, GAS_URL incl. the API token)
+worker/.dev.vars

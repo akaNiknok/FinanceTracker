@@ -10,8 +10,13 @@
  *     in the Worker's GAS_URL secret. Rollback = flip the property, no redeploy.
  *
  * The manifest stays ANYONE_ANONYMOUS permanently: a Telegram webhook cannot do
- * OAuth, so `access: MYSELF` would kill the bot. The UI is unaffected either way
- * — google.script.run never reaches the Router, so it never hits this guard.
+ * OAuth, so `access: MYSELF` would kill the bot.
+ *
+ * Since v1.6.0 the SPA is served by the Cloudflare Worker and comes through the
+ * Router like any other caller, so this guard now covers the UI too — reads
+ * included. The Worker supplies the token out of its GAS_URL secret; the browser
+ * never sees it. Flipping ENFORCE_TOKEN=false as a rollback therefore opens reads
+ * to anyone with the /exec URL, which is the same posture as before v1.3.3.
  */
 
 /** True if the active Google user is the owner (only meaningful on restricted deploys). */

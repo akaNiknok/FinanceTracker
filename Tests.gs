@@ -9,7 +9,7 @@
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_gmailQuote", "test_gmailText", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
-                  "test_mirrorToAmount", "test_parseDate", "test_parsePeriod",
+                  "test_mirrorToAmount", "test_parseDate", "test_parsePeriod", "test_routeMethodPrefixes",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
                   "test_telegramUndoData", "test_telegramUndoGlyph"];
 
@@ -315,6 +315,28 @@ function test_telegramUndoGlyph() {
     });
   });
   Logger.log("test_telegramUndoGlyph OK");
+}
+
+/**
+ * The SPA's gs() (worker/public/app.js) chooses GET vs POST from the handler-name
+ * prefix instead of shipping a second copy of the route table. That stays correct
+ * only while every read action is named `get…`/`list…` and no write action is — so
+ * assert the split here, where the tables live. Break it and the symptom is remote:
+ * a write silently goes out as a GET and doGet answers "requires POST".
+ */
+function test_routeMethodPrefixes() {
+  const READY = /^(get|list)/;
+  Object.keys(ROUTES_READ_).forEach(function (a) {
+    if (!READY.test(a))
+      throw new Error("test_routeMethodPrefixes FAIL: read action '" + a
+                      + "' must be named get…/list… or the SPA will POST it");
+  });
+  Object.keys(ROUTES_WRITE_).forEach(function (a) {
+    if (READY.test(a))
+      throw new Error("test_routeMethodPrefixes FAIL: write action '" + a
+                      + "' reads as a get…/list… name, so the SPA will GET it and doGet will refuse it");
+  });
+  Logger.log("test_routeMethodPrefixes OK");
 }
 
 /**

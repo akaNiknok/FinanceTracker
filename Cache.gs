@@ -37,7 +37,7 @@ function cache_bumpVersion_() {
   return next;
 }
 
-/** Public (google.script.run): the version gate. Intentionally tiny. */
+/** Public (GET ?action=getDataVersion): the version gate. Intentionally tiny. */
 function api_getDataVersion() {
   return { status: "success", version: cache_getVersion_() };
 }

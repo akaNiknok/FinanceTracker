@@ -20,7 +20,8 @@
  *     supplied ID) then guarantees no second row if one slips through anyway.
  *
  * Script Properties required: TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, GEMINI_API_KEY
- * (+ WEB_APP_URL, used by tg_gasEndpoint and by the receipt's "Edit details" link).
+ * (+ WEB_APP_URL for tg_gasEndpoint, and WEBHOOK_URL — the Worker's /tg endpoint —
+ * which tg_appUrl_ turns into the receipt's "Edit details" link).
  */
 
 const TG_API_    = "https://api.telegram.org/bot";
@@ -238,7 +239,7 @@ function tg_logKeyboard_(idPrefix, indices, ids, mailId) {
   const data = tg_undoData_(idPrefix, indices);
   // Telegram caps callback_data at 64 bytes; past that, /undo still covers it.
   if (data.length <= 64) row.push({ text: "↻ Undo", callback_data: data });
-  const url = cfg_("WEB_APP_URL", "");
+  const url = tg_appUrl_();
   if (url) row.push({ text: "✎ Edit details", url: url + "?screen=transactions" +
                       (ids.length === 1 ? "&tx=" + encodeURIComponent(ids[0]) : "") });
   const rows = row.length ? [row] : [];
@@ -582,6 +583,17 @@ function tg_setWebhook() {
     { method: "post", contentType: "application/json", muteHttpExceptions: true,
       payload: JSON.stringify(payload) });
   Logger.log(res.getContentText());
+}
+
+/**
+ * Where the SPA lives, for the receipt's "Edit details" button — the Cloudflare
+ * Worker root, i.e. WEBHOOK_URL minus its /tg suffix. Derived rather than given a
+ * fourth Script Property. NOT WEB_APP_URL: that is the GAS /exec endpoint, which
+ * since v1.6.0 answers JSON instead of the UI, so a button pointing there is a
+ * dead end.
+ */
+function tg_appUrl_() {
+  return cfg_("WEBHOOK_URL", "").replace(/\/tg\/?$/, "");
 }
 
 /** Print the URL to store as the Worker's GAS_URL secret (token included if set). */
