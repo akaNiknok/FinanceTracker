@@ -111,23 +111,58 @@ function flushQueue(){
 }
 window.addEventListener('online', flushQueue);
 
-/* ponytail: window.prompt is the whole login UI. The cookie lasts a year, so this
- * shows up about never; swap in a proper modal if that stops being true.
+/* ── login ───────────────────────────────────────────────────────────────────
+ * A real <form> with a real password field, NOT window.prompt. prompt() was the
+ * single cause of all three complaints about this dialog: it shows the passphrase
+ * in clear text, no password manager will ever fill it, and on iOS its field
+ * autocapitalises and autocorrects — which is why the passphrase used to take
+ * several attempts to land. The form is what makes iOS offer AutoFill (the key
+ * above the keyboard) and offer to save into Apple Passwords on submit; the
+ * username field is there so the saved entry has a name to match on.
+ * A wrong passphrase now re-asks in place instead of rejecting every in-flight
+ * call, so one typo no longer costs you the whole boot.
  * Shared between concurrent callers: boot fires several /api calls at once, so a
  * lapsed cookie produces several 401s together — without this you get a stack of
- * identical passphrase dialogs, one per in-flight request. */
+ * identical dialogs, one per in-flight request. */
 var _unlocking = null;
 function unlock(){
   if (_unlocking) return _unlocking;
-  _unlocking = Promise.resolve().then(function(){
-    var pass = prompt('Passphrase');
-    if (pass == null) throw new Error('Locked');
-    return fetch('/login', { method:'POST', headers:{'Content-Type':'application/json'},
-                             body:JSON.stringify({ pass:pass }) })
-      .then(function(r){ if (!r.ok) throw new Error('Wrong passphrase'); });
+  _unlocking = new Promise(function(resolve, reject){
+    var f = el('form');
+    f.innerHTML =
+      '<div class="modal-h"><h3>Unlock</h3></div>' +
+      '<div class="modal-b">' +
+        '<div class="field"><label for="loginUser">App</label>' +
+          '<input id="loginUser" name="username" autocomplete="username" value="FinanceTracker" readonly></div>' +
+        '<div class="field"><label for="loginPass">Passphrase</label>' +
+          '<input id="loginPass" name="password" type="password" autocomplete="current-password" ' +
+                 'autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" required>' +
+          '<p class="hint" id="loginErr" style="color:var(--neg)" hidden></p></div>' +
+      '</div>' +
+      '<div class="modal-f"><button type="button" class="btn" id="loginCancel">Cancel</button>' +
+        '<button type="submit" class="btn primary">Unlock</button></div>';
+    openModal(f);
+    closeModal.onClose = function(){ reject(new Error('Locked')); };   // backdrop / Escape / ✕
+    $('#loginCancel', f).onclick = closeModal;
+    setTimeout(function(){ $('#loginPass', f).focus(); }, 0);
+    f.onsubmit = function(e){
+      e.preventDefault();
+      var pass = $('#loginPass', f).value, btn = $('.btn.primary', f), err = $('#loginErr', f);
+      btn.disabled = true; err.hidden = true;
+      fetch('/login', { method:'POST', headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({ pass:pass }) })
+        .then(function(r){
+          btn.disabled = false;
+          if (!r.ok){ err.textContent = 'Wrong passphrase'; err.hidden = false; $('#loginPass', f).select(); return; }
+          closeModal.onClose = null; closeModal();
+          resolve();
+        }, function(){
+          btn.disabled = false;
+          err.textContent = 'No connection'; err.hidden = false;
+        });
+    };
   });
-  var clear = function(){ _unlocking = null; };
-  _unlocking.then(clear, clear);
+  _unlocking.then(function(){ _unlocking = null; }, function(){ _unlocking = null; });
   return _unlocking;
 }
 
@@ -1708,6 +1743,7 @@ function fitModal(){
 }
 function openModal(node){
   var root=$('#modalRoot'); var card=$('#modalCard');
+  closeModal.onClose=null;
   card.innerHTML=''; card.appendChild(node); root.hidden=false;
   if(window.visualViewport){ visualViewport.addEventListener('resize',fitModal); visualViewport.addEventListener('scroll',fitModal); fitModal(); }
   $('.modal-backdrop',root).onclick=closeModal;
@@ -1727,6 +1763,10 @@ document.addEventListener('keydown',function(e){
 function closeModal(){
   var root=$('#modalRoot'); root.hidden=true; root.style.top=''; root.style.height='';
   if(window.visualViewport){ visualViewport.removeEventListener('resize',fitModal); visualViewport.removeEventListener('scroll',fitModal); }
+  // Dismiss hook — the login form needs to know it was cancelled by the backdrop or
+  // Escape, not just by its own button, or unlock()'s promise never settles and every
+  // later 401 awaits a dead one.
+  var f=closeModal.onClose; closeModal.onClose=null; if(f) f();
 }
 
 function modalShell(title,bodyNode,footerNodes){
