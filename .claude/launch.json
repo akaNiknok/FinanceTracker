@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "worker",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev", "--port", "8788", "--local", "--show-interactive-dev-session=false"],
+      "cwd": "worker",
+      "port": 8788
+    }
+  ]
+}

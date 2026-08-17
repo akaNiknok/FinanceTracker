@@ -1,10 +1,11 @@
 {
   "name": "financetracker-gas",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Google Apps Script backend for a personal finance tracker built on Google Sheets",
   "private": true,
   "scripts": {
     "test": "node test.js",
+    "icons": "node icons.js",
     "login": "clasp login",
     "push": "clasp push",
     "watch": "clasp push --watch",

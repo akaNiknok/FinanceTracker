@@ -12,6 +12,7 @@
 #  node_modules and .claude/worktrees copies, duplicating every .gs → flat-namespace clash.)
 release.js
 test.js
+icons.js
 node_modules/**
 .claude/**
 worker/**
