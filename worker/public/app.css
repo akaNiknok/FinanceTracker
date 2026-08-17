@@ -18,7 +18,10 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.5}
+/* App-shell scrolling: the document never scrolls, only .main does — otherwise iOS
+ * rubber-band overscroll drags the sticky topbar/nav off the viewport edges. */
+html,body{margin:0;padding:0;overflow:hidden;overscroll-behavior:none;
+  background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.5}
 button{font-family:inherit;cursor:pointer}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:8px}
@@ -26,12 +29,18 @@ button{font-family:inherit;cursor:pointer}
 ::selection{background:rgba(91,140,255,.35)}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 
-#app{min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 1fr auto;grid-template-areas:"topbar" "main" "nav"}
+/* Not height:100% — on iOS standalone that stops short of the screen bottom. --app-h is
+ * set by the shell-height script in index.html (which explains why dvh isn't enough);
+ * everywhere else it equals the dvh fallback. */
+#app{height:100vh;height:var(--app-h,100dvh);display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 1fr auto;grid-template-areas:"topbar" "main" "nav"}
 
 /* ── Top bar ─────────────────────────────────────────────────────────────── */
+/* iOS standalone is black-translucent + viewport-fit=cover, so the page starts at y=0
+ * behind the status bar — the top inset is what keeps the bar's controls tappable. */
 .topbar{grid-area:topbar;display:flex;align-items:center;justify-content:space-between;
-  padding:12px 16px;background:rgba(13,15,20,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20}
+  padding:calc(12px + env(safe-area-inset-top)) 16px 12px;background:rgba(13,15,20,.86);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);z-index:20}
 .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.2px}
 .brand-dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--pos));box-shadow:0 0 10px rgba(91,140,255,.55)}
 .brand-name{font-size:15.5px}
@@ -47,7 +56,7 @@ button{font-family:inherit;cursor:pointer}
 /* ── Nav (bottom on mobile, sidebar on desktop) ──────────────────────────── */
 .nav{grid-area:nav;display:flex;justify-content:space-around;background:rgba(13,15,20,.92);
   backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  border-top:1px solid var(--border);position:sticky;bottom:0;z-index:20;padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
+  border-top:1px solid var(--border);z-index:20;padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
 .nav-item{background:none;border:none;color:var(--text-faint);display:flex;flex-direction:column;align-items:center;gap:3px;
   padding:7px 6px;border-radius:12px;font-size:10.5px;font-weight:600;transition:color .15s,background .15s;flex:1;min-width:0;min-height:48px}
 .nav-item .nav-ico{font-size:18px;line-height:1}
@@ -75,7 +84,10 @@ button{font-family:inherit;cursor:pointer}
 @keyframes sheetUp{from{transform:translateY(30px);opacity:.4}to{transform:none;opacity:1}}
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
-.main{grid-area:main;padding:16px;max-width:1080px;width:100%;margin:0 auto;min-width:0}
+/* The app's only scroller. Content stays capped at 1080px via padding rather than
+ * max-width+auto margins, so the scrollbar sits at the viewport edge, not mid-page. */
+.main{grid-area:main;padding:16px max(16px,(100% - 1080px)/2);width:100%;min-width:0;min-height:0;
+  overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .screen{animation:fade .25s ease}
 .screen-title{font-size:21px;font-weight:750;letter-spacing:-.2px;margin:2px 0 4px}
 .screen-sub{color:var(--text-dim);font-size:13px;margin:0 0 16px}
@@ -335,7 +347,7 @@ table.tbl td.editing{padding:0}
 .inline-edit .combo-input{padding:3px 7px;font-size:12.5px;background:var(--surface-3);border:1px solid var(--accent);border-radius:6px}
 
 /* ── Bulk-action bar ─────────────────────────────────────────────────────── */
-.bulk-bar{position:sticky;top:62px;z-index:25;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+.bulk-bar{position:sticky;top:0;z-index:25;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
   background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);
   padding:9px 12px;margin-bottom:12px;box-shadow:var(--shadow)}
 .bulk-bar[hidden]{display:none}
@@ -344,11 +356,13 @@ table.tbl td.editing{padding:0}
 /* ── Responsive: tablet & up → sidebar layout ────────────────────────────── */
 @media(min-width:860px){
   .review-split{grid-template-columns:300px minmax(0,1fr);align-items:start}
-  .rev-accts{position:sticky;top:78px;max-height:calc(100vh - 100px)}
+  .rev-accts{position:sticky;top:0;max-height:calc(100vh - 160px)}
   #app{grid-template-columns:var(--nav-w) minmax(0,1fr);grid-template-rows:auto 1fr;
     grid-template-areas:"nav topbar" "nav main"}
+  /* Sidebar spans both grid rows, so it starts behind the status bar too. */
   .nav{flex-direction:column;justify-content:flex-start;gap:4px;border-top:none;border-right:1px solid var(--border);
-    padding:16px 12px;position:sticky;top:0;height:100vh;background:var(--bg)}
+    padding:calc(16px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+    height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;background:var(--bg)}
   .nav::before{content:"";display:block;height:8px}
   .nav-item{flex-direction:row;justify-content:flex-start;gap:12px;font-size:14px;padding:11px 14px;width:100%;min-height:42px;flex:none}
   .nav-item .nav-ico{font-size:18px;width:22px;text-align:center}
@@ -357,7 +371,7 @@ table.tbl td.editing{padding:0}
   .nav-item.nav-more{display:none}       /* …so no More button */
   .fab{bottom:24px;right:24px}           /* no bottom-nav to clear on desktop */
   .toast-root{bottom:28px}
-  .main{padding:24px 28px}
+  .main{padding:24px max(28px,(100% - 1080px)/2)}
   .screen-title{font-size:23px}
 }
 @media(max-width:520px){
