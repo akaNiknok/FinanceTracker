@@ -6,9 +6,40 @@
     <title>FinanceTracker</title>
     <!-- Add to Home Screen on iOS: standalone chrome-less window, dark status bar.
          icon-180/512.png are generated from the SVG in icons.js at the repo root by
-         `npm run icons` — don't hand-edit them. -->
+         `npm run icons` — don't hand-edit them.
+         `black-translucent` paints the page from y=0 under the status bar but still reports
+         innerHeight as screen MINUS the top inset (797 vs 844 on a 390x844 phone), so a
+         full-height shell ends 47px above the physical bottom and leaks a strip of body
+         background under the nav. No CSS length sees that 47px — 100vh, 100dvh and
+         visualViewport all report the short value — so --app-h below corrects it in JS.
+         Switching to an opaque `black` bar would also fix it, but iOS reads these metas at
+         Add-to-Home-Screen time: changing one does nothing to an already-installed app. -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <!-- Runs before first paint so the shell is never laid out at the wrong height. -->
+    <script>
+    (function(){
+      var probe=document.createElement('div');
+      probe.style.cssText='position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top)';
+      // ponytail: screen.height is the only value that knows the real height. The equality
+      // is the guard, not a device sniff — it holds *only* in the short-window mismatch, so
+      // a fixed iOS, a Safari tab, iPad, landscape and every other platform fall through to
+      // innerHeight untouched. Delete the whole thing if Apple ever aligns the two.
+      function fitShell(){
+        document.documentElement.appendChild(probe);
+        var top=parseFloat(getComputedStyle(probe).paddingTop)||0;
+        probe.remove();
+        var h=(screen.height===window.innerHeight+top)?screen.height:window.innerHeight;
+        document.documentElement.style.setProperty('--app-h',h+'px');
+      }
+      fitShell();
+      // Re-run once the body exists: the probe measures env() from inside <head>, where it
+      // is the only element in the tree — cheap insurance against that reading 0.
+      addEventListener('DOMContentLoaded',fitShell);
+      addEventListener('resize',fitShell);
+      addEventListener('orientationchange',fitShell);
+    })();
+    </script>
     <meta name="apple-mobile-web-app-title" content="Finance">
     <meta name="theme-color" content="#0d0f14">
     <link rel="icon" href="/icon-180.png" sizes="180x180" type="image/png">
