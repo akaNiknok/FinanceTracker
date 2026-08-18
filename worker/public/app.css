@@ -335,6 +335,8 @@ table.tbl td.editing{padding:0}
 .ed:hover{color:var(--text);border-bottom-color:var(--accent)}
 .t1-edit{cursor:text}
 .t1-edit:hover{color:var(--accent-2)}
+/* no description: a quiet affordance, not a "(no description)" placeholder */
+.t1-edit:empty::before{content:"+ note";color:var(--text-faint);font-weight:500}
 .amt-edit{cursor:text}
 .amt-edit:hover{opacity:.8}
 .ic-edit{cursor:pointer}

@@ -960,13 +960,16 @@ function txRow(t,clickable,hideDate,pending){  // hideDate: the list already gro
   var sign=type==='Expense'?'-':(type==='Income'?'+':'');
   var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
   var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
-  var sub=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+' · '+esc(t.Category||'');
+  // Description is optional: with none, the Category headlines the row and drops out
+  // of the sub line rather than printing twice under a "(no description)" placeholder.
+  var noDesc=!t.Description;
+  var sub=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+(noDesc?'':' · '+esc(t.Category||''));
   var date=fmtDate(t.Date);
   var r=el('div','litem'+(clickable?' click':'')+(pending?' pending':''));
   // a pending row swaps its type glyph for a spinner so it clearly reads as "loading"
   var ic=pending?'<div class="ic"><span class="mini-spin"></span></div>':'<div class="ic '+icCls+'">'+icCh+'</div>';
   r.innerHTML=ic+
-    '<div class="grow"><div class="t1">'+esc(t.Description||t.Category||'(no description)')+'</div>'+
+    '<div class="grow"><div class="t1">'+esc(noDesc?(t.Category||''):t.Description)+'</div>'+
     '<div class="t2">'+sub+(hideDate?'':' · '+esc(date))+'</div></div>'+
     '<div class="amt '+amtCls+'">'+sign+mainAmt+
     (isForeign?'<span class="amt-sub">'+money(amtPhp)+'</span>':'')+'</div>';
@@ -1641,7 +1644,8 @@ function reviewTxRow(t,pending){
 
   var grow=el('div','grow');
   // description — inline editable
-  var t1=el('div','t1 t1-edit', esc(t.Description||'(no description)'));
+  // empty = no description; the ".t1-edit:empty" CSS supplies the "+ note" affordance
+  var t1=el('div','t1 t1-edit', esc(t.Description||''));
   t1.title='Edit description';
   t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(v){ commitInline(t,'Description',v); }); };
   grow.appendChild(t1);
