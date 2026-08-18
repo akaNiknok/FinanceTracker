@@ -1529,10 +1529,10 @@ function reviewAcctRow(a){
   return r;
 }
 
-function loadReviewTx(){
+function loadReviewTx(silent){
   var st={filters:S.review.filters, offset:S.review.offset, limit:S.review.limit};
   var key=reviewTxKey();
-  var card=$('#revTxCard'); if(card && !S.cache[key]) card.innerHTML=skRows(7);
+  var card=$('#revTxCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skRows(7);
   return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
     S.review.total=res.total; S.review.rows=res.transactions;
     var c=$('#revTxCard'); if(!c) return; c.innerHTML='';
@@ -1694,7 +1694,7 @@ function updateBulkBar(){
 
 function afterReviewMutation(){
   dropCache();                   // version bumped server-side → drop stale payloads
-  loadReviewAccts(); loadReviewTx();
+  loadReviewAccts(); loadReviewTx(true);   // silent: no skeleton flash over a live list
 }
 
 function bulkApply(patch){
@@ -1945,7 +1945,9 @@ function openTxModal(t){
   var accs=acctOptions();
   // default account for any new tx = last one used (if it still exists); a draft carried
   // in from the transfer form may have no account yet, so this backfills that too.
-  var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===prefGet('lastAcct');})?prefGet('lastAcct'):'');
+  // Review's account rail is an explicit pick — it beats the last-used default.
+  var wantAcc=(S.screen==='review'&&S.review.filters.account)||prefGet('lastAcct');
+  var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===wantAcc;})?wantAcc:'');
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
   var fPeriod=periodEl(t);
@@ -2191,6 +2193,9 @@ function afterMutation(){
   // on screen stays put until the fresh server page lands, then swaps in place
   // (no spinner flash). Other screens fully re-render.
   if(S.screen==='transactions'){ loadTx(null,true); }
+  // Review is a two-pane screen with filters/selection in the DOM — a full render()
+  // would rebuild it and flash skeletons on every add. Reload the panes in place.
+  else if(S.screen==='review'){ loadReviewAccts(); loadReviewTx(true); }
   else render();
 }
 
