@@ -80,7 +80,7 @@ function enqueue(fn, body){
  * call site's own optimistic row is already painted and equivalent. */
 function rebuildPending(){
   S.tx.pendingAdds = queue().map(function(item){ return optimisticTx(item.arg); });
-  if(S.screen==='transactions') renderTxList();
+  repaintTxList();
 }
 /* Replay oldest-first, serially (writes take a script lock anyway, and order is the
  * order they were entered). `_busy` is also what stops gs() re-queueing a call that
@@ -189,16 +189,20 @@ function putCache(key, data, version){
   saveCache();
 }
 function cachedCall(key, loader, onData){
-  var cached = S.cache[key];
+  var cached = S.cache[key], gen = screenGen;
+  // Cache the payload regardless, but only PAINT it if the screen that asked for it
+  // is still on screen — otherwise a slow fetch lands after you've navigated away and
+  // yanks you back to the screen you left.
+  function emit(d){ if (gen === screenGen) onData(d); }
   function fill(v){                       // fetch the payload and cache it at version v
     return loader().then(function(data){
       var ver = (data && data.version != null) ? data.version : v;
-      if (ver == null) return gs('api_getDataVersion').then(function(r){ putCache(key, data, r.version); onData(data); });
-      putCache(key, data, ver); onData(data);
+      if (ver == null) return gs('api_getDataVersion').then(function(r){ putCache(key, data, r.version); emit(data); });
+      putCache(key, data, ver); emit(data);
     });
   }
   if (!cached) return fill(verKnown() ? S.dataVersion : null);
-  onData(cached.data);                    // instant paint from cache
+  emit(cached.data);                      // instant paint from cache
   if (verKnown()) return S.dataVersion === cached.version ? Promise.resolve() : fill(S.dataVersion);
   return gs('api_getDataVersion').then(function(v){
     S.dataVersion = v.version; S._verAt = Date.now();
@@ -258,7 +262,7 @@ var S = {
   _verAt:0,             // when we last confirmed dataVersion with the server (ms)
   cache:{},             // key → { data, version } (stale-while-revalidate, persisted)
   tx:{ rows:[], total:0, offset:0, limit:50, filters:{},
-       pendingAdds:[], pendingDeletes:{} },   // optimistic rows: in-flight creates / deletes
+       pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },  // optimistic rows: in-flight creates / edits / deletes
   review:{ sel:{}, filters:{}, rows:[], total:0, offset:0, limit:50 }
 };
 
@@ -473,8 +477,21 @@ function go(screen, fromHistory){
   render();
 }
 
+/* Bumped on every screen render; every async paint captures it and bails if it
+ * moved (see cachedCall / needBoot). */
+var screenGen=0;
+/* Screens that can't paint without the bootstrap payload: show a skeleton, then
+ * re-enter once it lands — unless the user has moved on. */
+function needBoot(kind, fn){
+  if(S.boot) return false;
+  loading(kind); var gen=screenGen;
+  ensureBoot().then(function(){ if(gen===screenGen) fn(); }).catch(showErr);
+  return true;
+}
+
 /* ── render dispatcher ───────────────────────────────────────────────────── */
 function render(){
+  screenGen++;
   var fns={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
            review:renderReview,budgets:renderBudgets,investments:renderInvestments,
            exchange:renderExchange,tax:renderTax};
@@ -792,7 +809,7 @@ function tile(label,val,sub){
  *  TRANSACTIONS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTransactions(){
-  if(!S.boot){ loading('list'); ensureBoot().then(renderTransactions).catch(showErr); return; }
+  if(needBoot('list', renderTransactions)) return;
   var w=el('div','screen');
   w.appendChild(el('div','screen-title','Transactions'));
 
@@ -867,11 +884,34 @@ function dayHeadEl(g){
     (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
 }
 
+/* Optimistic state is shared by BOTH transaction lists: the FAB, the row modal and
+ * the Telegram deep link all work from either screen, so a write started on Review
+ * must show as "loading" there too. One store, one repaint entry point. */
+function repaintTxList(){
+  if(S.screen==='transactions') renderTxList();
+  else if(S.screen==='review') renderReviewList();
+}
+function isPendingRow(t){ return !!(t._pending || (t.ID && (S.tx.pendingDeletes[t.ID] || S.tx.pendingEdits[t.ID]))); }
+// Show an in-flight edit's NEW values while it's still in the air. Amount is patched as
+// a magnitude, so keep the row's sign and its FX ratio (money() renders the signed PHP
+// figure); a category change can flip Type, which drives the +/− and the icon.
+function withPendingEdit(t){
+  var p=t.ID&&S.tx.pendingEdits[t.ID]; if(!p) return t;
+  var o=Object.assign({},t,p);
+  if(p.Amount!=null){
+    var old=Number(t.Amount)||0, php=Number(t['Amount (PHP)']), rate=old?Math.abs(php/old):1;
+    o.Amount=(old<0?-1:1)*Math.abs(p.Amount);
+    o['Amount (PHP)']=(php<0?-1:1)*Math.abs(p.Amount)*rate;
+  }
+  var cat=p.Category&&S.boot&&(S.boot.categories||{})[p.Category];
+  if(cat&&cat.Type) o.Type=cat.Type;
+  return o;
+}
+
 // Repaint the transactions list from S.tx.rows plus optimistic state (pending
 // creates shown at top, pending deletes shown in-place) — no server round-trip.
 function renderTxList(){
   var c=$('#txListCard'); if(!c) return;
-  var dels=S.tx.pendingDeletes||{};
   // pending creates only make sense on the first page (they'd be the newest rows)
   var adds=(S.tx.offset<=0)?(S.tx.pendingAdds||[]):[];
   var serverRows=S.tx.rows||[];
@@ -886,8 +926,8 @@ function renderTxList(){
   groupByDay(allRows).forEach(function(g){
     l.appendChild(dayHeadEl(g));
     g.rows.forEach(function(t){
-      var pending = !!(t._pending || (t.ID && dels[t.ID]));
-      l.appendChild(txRow(t,!pending,true,pending));
+      var pending = isPendingRow(t);
+      l.appendChild(txRow(withPendingEdit(t),!pending,true,pending));
     });
   });
   if(!allRows.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
@@ -920,13 +960,16 @@ function txRow(t,clickable,hideDate,pending){  // hideDate: the list already gro
   var sign=type==='Expense'?'-':(type==='Income'?'+':'');
   var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
   var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
-  var sub=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+' · '+esc(t.Category||'');
+  // Description is optional: with none, the Category headlines the row and drops out
+  // of the sub line rather than printing twice under a "(no description)" placeholder.
+  var noDesc=!t.Description;
+  var sub=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+(noDesc?'':' · '+esc(t.Category||''));
   var date=fmtDate(t.Date);
   var r=el('div','litem'+(clickable?' click':'')+(pending?' pending':''));
   // a pending row swaps its type glyph for a spinner so it clearly reads as "loading"
   var ic=pending?'<div class="ic"><span class="mini-spin"></span></div>':'<div class="ic '+icCls+'">'+icCh+'</div>';
   r.innerHTML=ic+
-    '<div class="grow"><div class="t1">'+esc(t.Description||t.Category||'(no description)')+'</div>'+
+    '<div class="grow"><div class="t1">'+esc(noDesc?(t.Category||''):t.Description)+'</div>'+
     '<div class="t2">'+sub+(hideDate?'':' · '+esc(date))+'</div></div>'+
     '<div class="amt '+amtCls+'">'+sign+mainAmt+
     (isForeign?'<span class="amt-sub">'+money(amtPhp)+'</span>':'')+'</div>';
@@ -1372,7 +1415,7 @@ function ledgerDeleteRow(row){
  *  Defaults reproduce a sample Wise quote ($3.68 out, ₱154.83 in; tunable).
  * ════════════════════════════════════════════════════════════════════════ */
 function renderExchange(){
-  if(!S.boot){ loading('table'); ensureBoot().then(renderExchange).catch(showErr); return; }
+  if(needBoot('table', renderExchange)) return;
   var w=el('div','screen');
   w.appendChild(el('div','screen-title','Swap · Fair USD↔PHP'));
   w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with the other person'));
@@ -1438,7 +1481,7 @@ function exCalc(){
 function reviewTxKey(){ return 'revtx|'+JSON.stringify(S.review.filters||{})+'|'+S.review.offset+'|'+S.review.limit; }
 
 function renderReview(){
-  if(!S.boot){ loading('list'); ensureBoot().then(renderReview).catch(showErr); return; }
+  if(needBoot('list', renderReview)) return;
   if(S.review.filters.month===undefined) S.review.filters.month=S.month;
 
   var w=el('div','screen');
@@ -1512,49 +1555,72 @@ function reviewAcctRow(a){
   return r;
 }
 
-function loadReviewTx(){
+function loadReviewTx(silent){
   var st={filters:S.review.filters, offset:S.review.offset, limit:S.review.limit};
   var key=reviewTxKey();
-  var card=$('#revTxCard'); if(card && !S.cache[key]) card.innerHTML=skRows(7);
+  var card=$('#revTxCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skRows(7);
   return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
     S.review.total=res.total; S.review.rows=res.transactions;
-    var c=$('#revTxCard'); if(!c) return; c.innerHTML='';
-    var head=el('div','row-between'); head.style.marginBottom='6px';
-    var lbl=el('label','sel-all');
-    var selAll=el('input'); selAll.type='checkbox';
-    selAll.checked=res.transactions.length>0 && res.transactions.every(function(t){return S.review.sel[t.ID];});
-    selAll.onclick=function(){
-      res.transactions.forEach(function(t){ if(selAll.checked)S.review.sel[t.ID]=true; else delete S.review.sel[t.ID]; });
-      loadReviewTx();
-    };
-    lbl.appendChild(selAll);
-    lbl.appendChild(document.createTextNode(' '+res.total+' transaction'+(res.total===1?'':'s')));
-    head.appendChild(lbl); c.appendChild(head);
-
-    var l=el('div','list');
-    groupByDay(res.transactions).forEach(function(g){
-      l.appendChild(dayHeadEl(g));
-      g.rows.forEach(function(t){ l.appendChild(reviewTxRow(t)); });
-    });
-    if(!res.transactions.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
-    c.appendChild(l);
-
-    if(res.total>S.review.limit){
-      var pg=el('div','row-between'); pg.style.marginTop='12px';
-      var prev=el('button','btn sm','← Prev'); prev.disabled=S.review.offset<=0;
-      prev.onclick=function(){S.review.offset=Math.max(0,S.review.offset-S.review.limit);loadReviewTx();};
-      var next=el('button','btn sm','Next →'); next.disabled=S.review.offset+S.review.limit>=res.total;
-      next.onclick=function(){S.review.offset+=S.review.limit;loadReviewTx();};
-      var info=el('div','dim','Showing '+(res.offset+1)+'–'+Math.min(res.offset+S.review.limit,res.total));
-      info.style.fontSize='12px';
-      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
-      c.appendChild(pg);
-    }
-    updateBulkBar();
+    renderReviewList();
   }).catch(showErr);
 }
 
-function reviewTxRow(t){
+// A pending create only belongs on this list if the rail/filters would have returned
+// it — otherwise adding to one account would flash a row under another. Mirrors the
+// server-side filter in api_listTransactions.
+function matchesReviewFilters(t){
+  var f=S.review.filters||{}, d=parseDate(t.Date);
+  if(f.account && t.Account!==f.account && t.ToAccount!==f.account) return false;
+  if(f.category && t.Category!==f.category) return false;
+  if(f.month && (t.Period||(d?monthKey(d):''))!==f.month) return false;
+  if(f.search && ((t.Description||'')+' '+(t.Category||'')).toLowerCase()
+                   .indexOf(f.search.toLowerCase())<0) return false;
+  return true;
+}
+
+// Repaint the Review list from S.review.rows plus the same optimistic state the
+// Transactions screen uses — no server round-trip, so selection and filter DOM stay put.
+function renderReviewList(){
+  var c=$('#revTxCard'); if(!c) return;
+  var rows=S.review.rows||[];
+  var adds=(S.review.offset<=0)?(S.tx.pendingAdds||[]).filter(matchesReviewFilters):[];
+  var total=(S.review.total||0)+adds.length;
+  c.innerHTML='';
+  var head=el('div','row-between'); head.style.marginBottom='6px';
+  var lbl=el('label','sel-all');
+  var selAll=el('input'); selAll.type='checkbox';
+  selAll.checked=rows.length>0 && rows.every(function(t){return S.review.sel[t.ID];});
+  selAll.onclick=function(){
+    rows.forEach(function(t){ if(selAll.checked)S.review.sel[t.ID]=true; else delete S.review.sel[t.ID]; });
+    renderReviewList();
+  };
+  lbl.appendChild(selAll);
+  lbl.appendChild(document.createTextNode(' '+total+' transaction'+(total===1?'':'s')));
+  head.appendChild(lbl); c.appendChild(head);
+
+  var l=el('div','list');
+  groupByDay(adds.concat(rows)).forEach(function(g){
+    l.appendChild(dayHeadEl(g));
+    g.rows.forEach(function(t){ l.appendChild(reviewTxRow(withPendingEdit(t), isPendingRow(t))); });
+  });
+  if(!adds.length && !rows.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
+  c.appendChild(l);
+
+  if(S.review.total>S.review.limit){
+    var pg=el('div','row-between'); pg.style.marginTop='12px';
+    var prev=el('button','btn sm','← Prev'); prev.disabled=S.review.offset<=0;
+    prev.onclick=function(){S.review.offset=Math.max(0,S.review.offset-S.review.limit);loadReviewTx();};
+    var next=el('button','btn sm','Next →'); next.disabled=S.review.offset+S.review.limit>=S.review.total;
+    next.onclick=function(){S.review.offset+=S.review.limit;loadReviewTx();};
+    var info=el('div','dim','Showing '+(S.review.offset+1)+'–'+Math.min(S.review.offset+S.review.limit,S.review.total));
+    info.style.fontSize='12px';
+    pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
+    c.appendChild(pg);
+  }
+  updateBulkBar();
+}
+
+function reviewTxRow(t,pending){
   var type=String(t.Type||'');
   var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
   var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
@@ -1565,18 +1631,21 @@ function reviewTxRow(t){
   var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
   var fromC=acctColor(t.Account);
 
-  var r=el('div','litem rev'+(S.review.sel[t.ID]?' sel':''));
+  var r=el('div','litem rev'+(S.review.sel[t.ID]?' sel':'')+(pending?' pending':''));
+  // in-flight write: nothing on the row is editable until the server has agreed
+  if(pending) r.style.pointerEvents='none';
   var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.review.sel[t.ID];
   chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID, chk.checked); r.classList.toggle('sel', chk.checked); };
   r.appendChild(chk);
   // icon = open the full modal (date / FX / transfer / delete)
-  var ic=el('div','ic ic-edit '+icCls, icCh);
+  var ic=pending?el('div','ic','<span class="mini-spin"></span>'):el('div','ic ic-edit '+icCls, icCh);
   ic.title='Open details'; ic.onclick=function(e){ e.stopPropagation(); openTxModal(t); };
   r.appendChild(ic);
 
   var grow=el('div','grow');
   // description — inline editable
-  var t1=el('div','t1 t1-edit', esc(t.Description||'(no description)'));
+  // empty = no description; the ".t1-edit:empty" CSS supplies the "+ note" affordance
+  var t1=el('div','t1 t1-edit', esc(t.Description||''));
   t1.title='Edit description';
   t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(v){ commitInline(t,'Description',v); }); };
   grow.appendChild(t1);
@@ -1618,7 +1687,7 @@ function inlineInput(host, type, value, onPick){
   function commit(){ if(done) return; done=true; onPick(inp.value); }
   inp.onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); commit(); }
-    else if(e.key==='Escape'){ done=true; loadReviewTx(); }
+    else if(e.key==='Escape'){ done=true; renderReviewList(); }
   };
   inp.onblur=function(){ commit(); };
   host.appendChild(inp); inp.focus(); inp.select();
@@ -1642,17 +1711,22 @@ function commitInline(t, field, val){
   var patch={ID:t.ID};
   if(field==='Amount'){
     var n=parseFloat(val);
-    if(isNaN(n)){ toast('Enter a valid amount','err'); loadReviewTx(); return; }
-    if(n===Math.abs(Number(t.Amount))){ loadReviewTx(); return; }  // no-op
+    if(isNaN(n)){ toast('Enter a valid amount','err'); renderReviewList(); return; }
+    if(n===Math.abs(Number(t.Amount))){ renderReviewList(); return; }  // no-op
     patch.Amount=n;
   } else {
     var cur=(t[field]==null?'':String(t[field]));
-    if(String(val)===cur){ loadReviewTx(); return; }               // no-op → restore the row
+    if(String(val)===cur){ renderReviewList(); return; }           // no-op → restore the row
     patch[field]=val;
   }
+  // Optimistic: the row keeps its place showing the NEW value as loading; the reload
+  // that reconciles it only runs once the server has agreed.
+  S.tx.pendingEdits[t.ID]=patch; renderReviewList();
   gs('api_updateTransaction', patch).then(function(){
-    toast(field+' updated','ok'); afterReviewMutation();
-  }).catch(function(e){ toast(e.message||e,'err'); loadReviewTx(); });
+    delete S.tx.pendingEdits[t.ID]; toast(field+' updated','ok'); afterReviewMutation();
+  }).catch(function(e){
+    delete S.tx.pendingEdits[t.ID]; toast(e.message||e,'err'); renderReviewList();
+  });
 }
 
 /* —— selection + bulk bar —— */
@@ -1672,21 +1746,25 @@ function updateBulkBar(){
   add('Reassign','',openBulkReassign);
   add('Set date','',openBulkDate);
   add('Delete','danger',openBulkDelete);
-  add('Clear','ghost',function(){ clearSel(); loadReviewTx(); });
+  add('Clear','ghost',function(){ clearSel(); renderReviewList(); });
 }
 
 function afterReviewMutation(){
   dropCache();                   // version bumped server-side → drop stale payloads
-  loadReviewAccts(); loadReviewTx();
+  loadReviewAccts(); loadReviewTx(true);   // silent: no skeleton flash over a live list
 }
 
 function bulkApply(patch){
   var ids=bulkSelectedIds(); if(!ids.length) return;
+  // Optimistic: every picked row shows the patched value as loading straight away.
+  ids.forEach(function(id){ S.tx.pendingEdits[id]=patch; });
+  closeModal(); clearSel(); renderReviewList();
+  function done(){ ids.forEach(function(id){ delete S.tx.pendingEdits[id]; }); }
   gs('api_bulkUpdateTransactions',{ids:ids, patch:patch}).then(function(res){
-    closeModal();
+    done();
     toast('Updated '+res.updated+((res.skipped&&res.skipped.length)?(' · '+res.skipped.length+' skipped'):''),'ok');
-    clearSel(); afterReviewMutation();
-  }).catch(function(e){ toast(e.message||e,'err'); });
+    afterReviewMutation();
+  }).catch(function(e){ done(); toast(e.message||e,'err'); renderReviewList(); });
 }
 function openBulkRecat(){
   withBoot(function(){
@@ -1722,10 +1800,14 @@ function openBulkDelete(){
   var body=el('div','dim','Delete '+selCount()+' transactions permanently? This cannot be undone.');
   var yes=el('button','btn danger','Delete '+selCount());
   yes.onclick=function(){
-    yes.disabled=true; yes.textContent='Deleting…';
-    gs('api_bulkDeleteTransactions',{ids:bulkSelectedIds()}).then(function(res){
-      closeModal(); toast('Deleted '+res.deleted,'ok'); clearSel(); afterReviewMutation();
-    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
+    // Optimistic: the rows stay on screen as loading until the backend confirms.
+    var ids=bulkSelectedIds();
+    ids.forEach(function(id){ S.tx.pendingDeletes[id]=true; });
+    closeModal(); clearSel(); renderReviewList();
+    function done(){ ids.forEach(function(id){ delete S.tx.pendingDeletes[id]; }); }
+    gs('api_bulkDeleteTransactions',{ids:ids}).then(function(res){
+      done(); toast('Deleted '+res.deleted,'ok'); afterReviewMutation();
+    }).catch(function(e){ done(); toast(e.message||e,'err'); renderReviewList(); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
   openModal(modalShell('Confirm bulk delete', body, [no,yes]));
@@ -1928,7 +2010,9 @@ function openTxModal(t){
   var accs=acctOptions();
   // default account for any new tx = last one used (if it still exists); a draft carried
   // in from the transfer form may have no account yet, so this backfills that too.
-  var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===prefGet('lastAcct');})?prefGet('lastAcct'):'');
+  // Review's account rail is an explicit pick — it beats the last-used default.
+  var wantAcc=(S.screen==='review'&&S.review.filters.account)||prefGet('lastAcct');
+  var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===wantAcc;})?wantAcc:'');
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
   var fPeriod=periodEl(t);
@@ -1967,10 +2051,15 @@ function openTxModal(t){
     else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
     if(isEdit){
-      save.disabled=true; save.textContent='Saving…';
-      gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
-        .then(function(){ prefSet('lastAcct',payload.Account); closeModal(); toast('Updated','ok'); afterMutation(); })
-        .catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
+      // Optimistic, same as a create: close now, the row shows the new values as a
+      // loading row until the server confirms; on failure the modal comes back.
+      var patch=Object.assign({ID:t.ID},payload);
+      S.tx.pendingEdits[t.ID]=patch; prefSet('lastAcct',payload.Account);
+      closeModal(); toast('Updated','ok'); repaintTxList();
+      gs('api_updateTransaction', patch)
+        .then(function(){ delete S.tx.pendingEdits[t.ID]; afterMutation(); })
+        .catch(function(e){ delete S.tx.pendingEdits[t.ID]; repaintTxList();
+          toast('Update failed — reopening: '+(e.message||e),'err'); openTxModal(Object.assign({},t,payload)); });
       return;
     }
     // New tx: optimistic — close instantly and show the row as "loading" right away
@@ -1984,7 +2073,7 @@ function openTxModal(t){
       // Queued offline: the row stays exactly as it is (it's now backed by the queue,
       // and afterMutation would drop the cache we're about to need to render from).
       .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
-      .catch(function(e){ dropPendingAdd(tmp); if(S.screen==='transactions') renderTxList(); toast('Add failed — reopening: '+(e.message||e),'err'); openTxModal(payload); });
+      .catch(function(e){ dropPendingAdd(tmp); repaintTxList(); toast('Add failed — reopening: '+(e.message||e),'err'); openTxModal(payload); });
   };
   var foot=[save];
   if(isEdit){
@@ -2045,10 +2134,13 @@ function openTransferModal(t){
     if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
     if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
     if(isEdit){
-      save.disabled=true; save.textContent='Saving…';
-      gs('api_updateTransaction', Object.assign({ID:t.ID},payload))
-        .then(function(){ closeModal(); toast('Updated','ok'); afterMutation(); })
-        .catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
+      var patch=Object.assign({ID:t.ID},payload);              // optimistic — see openTxModal
+      S.tx.pendingEdits[t.ID]=patch;
+      closeModal(); toast('Updated','ok'); repaintTxList();
+      gs('api_updateTransaction', patch)
+        .then(function(){ delete S.tx.pendingEdits[t.ID]; afterMutation(); })
+        .catch(function(e){ delete S.tx.pendingEdits[t.ID]; repaintTxList();
+          toast('Update failed — reopening: '+(e.message||e),'err'); openTransferModal(Object.assign({},t,payload)); });
       return;
     }
     // New transfer: optimistic close + loading row (see openTxModal) — background write, reopen on failure.
@@ -2056,7 +2148,7 @@ function openTransferModal(t){
     var tmp=pushPendingAdd(payload);
     gs('api_createTransfer', payload)
       .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
-      .catch(function(e){ dropPendingAdd(tmp); if(S.screen==='transactions') renderTxList(); toast('Transfer failed — reopening: '+(e.message||e),'err'); openTransferModal(payload); });
+      .catch(function(e){ dropPendingAdd(tmp); repaintTxList(); toast('Transfer failed — reopening: '+(e.message||e),'err'); openTransferModal(payload); });
   };
   var foot=[save];
   if(isEdit){
@@ -2077,12 +2169,12 @@ function confirmDelete(t){
     // the list only once the backend confirms; on failure it reverts to a normal row.
     S.tx.pendingDeletes[t.ID]=true;
     closeModal();
-    if(S.screen==='transactions') renderTxList();
+    repaintTxList();
     gs('api_deleteTransaction',{ID:t.ID}).then(function(){
       delete S.tx.pendingDeletes[t.ID]; toast('Deleted','ok'); afterMutation();
     }).catch(function(e){
       delete S.tx.pendingDeletes[t.ID]; toast(e.message||e,'err');
-      if(S.screen==='transactions') renderTxList(); else render();
+      if(S.screen==='transactions'||S.screen==='review') repaintTxList(); else render();
     });
   };
   var no=el('button','btn','Cancel'); no.onclick=function(){ openTxModal(t); };
@@ -2174,6 +2266,9 @@ function afterMutation(){
   // on screen stays put until the fresh server page lands, then swaps in place
   // (no spinner flash). Other screens fully re-render.
   if(S.screen==='transactions'){ loadTx(null,true); }
+  // Review is a two-pane screen with filters/selection in the DOM — a full render()
+  // would rebuild it and flash skeletons on every add. Reload the panes in place.
+  else if(S.screen==='review'){ loadReviewAccts(); loadReviewTx(true); }
   else render();
 }
 
@@ -2187,11 +2282,11 @@ function optimisticTx(p){
   var rate=p.ExchangeRate?p.ExchangeRate:(cur==='USD'&&S.boot&&S.boot.fxUsdPhp?S.boot.fxUsdPhp:(cur==='PHP'?1:null));
   var php=rate!=null?p.Amount*rate:p.Amount;
   return { _pending:true, _tmpId:'tmp'+Date.now()+'-'+Math.round(Math.random()*1e6),
-    Date:p.Date, Category:cat, Account:p.Account, ToAccount:p.ToAccount||'',
+    Date:p.Date, Period:p.Period||'', Category:cat, Account:p.Account, ToAccount:p.ToAccount||'',
     Amount:p.Amount, 'Amount (PHP)':php, Currency:cur,
     Type:p.ToAccount?'Transfer':catType, Description:p.Description, ExchangeRate:p.ExchangeRate };
 }
-function pushPendingAdd(p){ var o=optimisticTx(p); S.tx.pendingAdds.unshift(o); if(S.screen==='transactions') renderTxList(); return o._tmpId; }
+function pushPendingAdd(p){ var o=optimisticTx(p); S.tx.pendingAdds.unshift(o); repaintTxList(); return o._tmpId; }
 function dropPendingAdd(id){ S.tx.pendingAdds=S.tx.pendingAdds.filter(function(x){return x._tmpId!==id;}); }
 function showErr(e){
   $('#main').innerHTML='<div class="empty">'+esc(e&&e.message?e.message:e)+
