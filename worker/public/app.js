@@ -189,16 +189,20 @@ function putCache(key, data, version){
   saveCache();
 }
 function cachedCall(key, loader, onData){
-  var cached = S.cache[key];
+  var cached = S.cache[key], gen = screenGen;
+  // Cache the payload regardless, but only PAINT it if the screen that asked for it
+  // is still on screen — otherwise a slow fetch lands after you've navigated away and
+  // yanks you back to the screen you left.
+  function emit(d){ if (gen === screenGen) onData(d); }
   function fill(v){                       // fetch the payload and cache it at version v
     return loader().then(function(data){
       var ver = (data && data.version != null) ? data.version : v;
-      if (ver == null) return gs('api_getDataVersion').then(function(r){ putCache(key, data, r.version); onData(data); });
-      putCache(key, data, ver); onData(data);
+      if (ver == null) return gs('api_getDataVersion').then(function(r){ putCache(key, data, r.version); emit(data); });
+      putCache(key, data, ver); emit(data);
     });
   }
   if (!cached) return fill(verKnown() ? S.dataVersion : null);
-  onData(cached.data);                    // instant paint from cache
+  emit(cached.data);                      // instant paint from cache
   if (verKnown()) return S.dataVersion === cached.version ? Promise.resolve() : fill(S.dataVersion);
   return gs('api_getDataVersion').then(function(v){
     S.dataVersion = v.version; S._verAt = Date.now();
@@ -473,8 +477,21 @@ function go(screen, fromHistory){
   render();
 }
 
+/* Bumped on every screen render; every async paint captures it and bails if it
+ * moved (see cachedCall / needBoot). */
+var screenGen=0;
+/* Screens that can't paint without the bootstrap payload: show a skeleton, then
+ * re-enter once it lands — unless the user has moved on. */
+function needBoot(kind, fn){
+  if(S.boot) return false;
+  loading(kind); var gen=screenGen;
+  ensureBoot().then(function(){ if(gen===screenGen) fn(); }).catch(showErr);
+  return true;
+}
+
 /* ── render dispatcher ───────────────────────────────────────────────────── */
 function render(){
+  screenGen++;
   var fns={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
            review:renderReview,budgets:renderBudgets,investments:renderInvestments,
            exchange:renderExchange,tax:renderTax};
@@ -792,7 +809,7 @@ function tile(label,val,sub){
  *  TRANSACTIONS
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTransactions(){
-  if(!S.boot){ loading('list'); ensureBoot().then(renderTransactions).catch(showErr); return; }
+  if(needBoot('list', renderTransactions)) return;
   var w=el('div','screen');
   w.appendChild(el('div','screen-title','Transactions'));
 
@@ -1372,7 +1389,7 @@ function ledgerDeleteRow(row){
  *  Defaults reproduce a sample Wise quote ($3.68 out, ₱154.83 in; tunable).
  * ════════════════════════════════════════════════════════════════════════ */
 function renderExchange(){
-  if(!S.boot){ loading('table'); ensureBoot().then(renderExchange).catch(showErr); return; }
+  if(needBoot('table', renderExchange)) return;
   var w=el('div','screen');
   w.appendChild(el('div','screen-title','Swap · Fair USD↔PHP'));
   w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with the other person'));
@@ -1438,7 +1455,7 @@ function exCalc(){
 function reviewTxKey(){ return 'revtx|'+JSON.stringify(S.review.filters||{})+'|'+S.review.offset+'|'+S.review.limit; }
 
 function renderReview(){
-  if(!S.boot){ loading('list'); ensureBoot().then(renderReview).catch(showErr); return; }
+  if(needBoot('list', renderReview)) return;
   if(S.review.filters.month===undefined) S.review.filters.month=S.month;
 
   var w=el('div','screen');
