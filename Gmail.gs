@@ -5,15 +5,19 @@
  * There is deliberately no per-sender parser: the email text goes through the same
  * Gemini parse the bot uses (tg_parse_, live Categories/Accounts inlined) and the
  * same tg_logItems_, so the receipt in Telegram is identical — ↻ Undo and ✎ Edit
- * details, plus a ⌕ Email button that quotes the mail it came from. A new sender needs
- * no code, only a wider GMAIL_QUERY.
+ * details, plus a ⌕ Email button that quotes the mail it came from.
+ *
+ * Which mail counts is decided in Gmail, not here: a Gmail filter labels transaction
+ * notifications "Finance Tracker" and this job takes the labelled mail in the inbox.
+ * Adding or dropping a sender is editing that filter — no code, no push, no deploy.
  *
  * Once logged, the email is moved to the trash (recoverable, and the same thing the
  * owner did by hand), which is what keeps the inbox meaning "not yet logged".
  *
  * Run from a time-based trigger (every 5 minutes; see gmail_ingest on overlap).
  * Script Properties (all optional):
- *   GMAIL_QUERY   — overrides GMAIL_QUERY_ below (add a sender, widen the window).
+ *   GMAIL_QUERY   — overrides GMAIL_QUERY_ below (only needed to change the scope
+ *                   itself; adding a sender is a Gmail-filter edit, not this).
  *   GMAIL_HINTS   — overrides GMAIL_HINTS_: free text appended to the parser prompt
  *                   for facts the email itself doesn't carry.
  *   GMAIL_LAST_TS — watermark, managed here; delete it to re-ingest the window.
@@ -24,15 +28,18 @@ const GMAIL_MAX_BODY_  = 3000;   // notification mail says everything up top; fo
 const GMAIL_QUOTE_BODY_ = 1200;  // ⌕ Email quotes less than the parser reads — it's for eyes
 const GMAIL_MAX_THREADS_ = 20;
 
-// Senders confirmed from the real mailbox (2026-08-11):
-//   alerts@maribank.com.ph — "Successful Debit Card Transaction", body carries
-//                            "Transaction Amount: PHP 369.00 Merchant: …"
-//   mail.anthropic.com     — "Your receipt from Anthropic, PBC #…" (Stripe; USD + PH VAT)
-//   wise.com               — "Money received from …" (the Pareto salary), "Transfer sent (#…)"
-// `in:inbox` is the whole scope: mail this job hasn't logged yet. Everything logged
-// is trashed on the spot (gmail_ingest), so the inbox is also the to-do list — and
+// The sender list lives in a Gmail filter that applies this label — that is the whole
+// point of keying on it: the owner edits the filter, the job needs no change. (Senders
+// seen when this was built, 2026-08-11: alerts@maribank.com.ph "Successful Debit Card
+// Transaction", mail.anthropic.com Stripe receipts, wise.com — historical note only.)
+// `in:inbox` is the other half of the scope: mail this job hasn't logged yet. Everything
+// logged is trashed on the spot (gmail_ingest), so the inbox is also the to-do list — and
 // no `newer_than:` is needed, because nothing that was handled is still in it.
-const GMAIL_QUERY_ = "in:inbox (from:alerts@maribank.com.ph OR from:mail.anthropic.com OR from:wise.com)";
+// Search matches *threads* but the loop below reads every message in them, so a label on
+// one message pulls in its thread siblings. That is wanted — MariBank's alerts all share
+// a single thread — and the watermark still means each message is looked at once.
+const GMAIL_LABEL_ = "Finance Tracker";
+const GMAIL_QUERY_ = 'in:inbox label:"' + GMAIL_LABEL_ + '"';
 
 // The account is the one thing these emails don't state — an Anthropic receipt names
 // a card ("Payment method - 8681"), never the account it belongs to.
@@ -148,16 +155,16 @@ function gmail_quote_(msg) {
 // ── setup helper (run from the Apps Script editor) ────────────────────────────
 /**
  * Print the senders/subjects/bodies of past notification mail, to see what a new
- * sender looks like before adding it to GMAIL_QUERY_. `in:anywhere` on purpose:
+ * sender looks like before pointing the Gmail filter at it. `in:anywhere` on purpose:
  * the best samples are the ones already logged by hand and thrown away. That is a
  * *development* view only — the job itself never reads outside the inbox.
  *
- * Usage: gmail_dumpSamples()                 — the known senders, trash included
+ * Usage: gmail_dumpSamples()                 — everything ever labelled, trash included
  *        gmail_dumpSamples(GMAIL_QUERY_)     — exactly what the next run will see
  *        gmail_dumpSamples("from:bpi.com.ph", 6)
  */
 function gmail_dumpSamples(query, limit) {
-  const q = query || "in:anywhere (from:alerts@maribank.com.ph OR from:wise.com OR from:mail.anthropic.com)";
+  const q = query || 'in:anywhere label:"' + GMAIL_LABEL_ + '"';
   const threads = GmailApp.search(q, 0, limit || 8);
   Logger.log("query: %s → %s threads", q, threads.length);
   threads.forEach(function (t) {

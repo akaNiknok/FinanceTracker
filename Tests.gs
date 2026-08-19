@@ -8,7 +8,7 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_createIdempotencyGuard",
-                  "test_gmailQuote", "test_gmailText", "test_interestNet",
+                  "test_gmailQuote", "test_gmailScope", "test_gmailText", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod", "test_routeMethodPrefixes",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
@@ -389,6 +389,21 @@ function test_gmailText() {
   if (body.length > GMAIL_MAX_BODY_ + 600) throw new Error("gmail_text_ FAIL: body not truncated (" + body.length + ")");
   if (body.indexOf("undefined") !== -1) throw new Error("gmail_text_ FAIL: empty hints leaked 'undefined'");
   Logger.log("test_gmailText OK");
+}
+
+/**
+ * GMAIL_QUERY_ — the two things about the job's scope that must not drift: it reads
+ * the inbox only (owner rule: never re-read trashed mail) and it selects by the Gmail
+ * label, so the sender list stays editable from Gmail rather than from here.
+ */
+function test_gmailScope() {
+  if (GMAIL_QUERY_.indexOf("in:inbox") === -1)
+    throw new Error("GMAIL_QUERY_ FAIL: scope left the inbox → " + GMAIL_QUERY_);
+  if (GMAIL_QUERY_.indexOf('label:"' + GMAIL_LABEL_ + '"') === -1)
+    throw new Error("GMAIL_QUERY_ FAIL: not label-driven → " + GMAIL_QUERY_);
+  if (/from:/.test(GMAIL_QUERY_))
+    throw new Error("GMAIL_QUERY_ FAIL: senders belong in the Gmail filter, not here");
+  Logger.log("test_gmailScope OK");
 }
 
 /**

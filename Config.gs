@@ -63,8 +63,10 @@ const LEDGER_TX_CATEGORY = "Income: Salary"; // the only category the Tax screen
 //                       address for the receipt's "Edit details" button.
 //   TELEGRAM_SECRET_TOKEN — optional shared secret the Worker checks on each
 //                       delivery; must match the Worker's SECRET_TOKEN.
-//   GMAIL_QUERY       — Gmail search selecting transaction notification mail
-//                       (Gmail.gs `gmail_ingest`); required by that job only.
+//   GMAIL_QUERY       — overrides the Gmail search selecting transaction mail
+//                       (Gmail.gs `gmail_ingest`). Optional: the default is
+//                       `in:inbox label:"Finance Tracker"`, so senders are added
+//                       by editing the Gmail filter, not this property.
 //   GMAIL_LAST_TS     — watermark written by gmail_ingest; not hand-set.
 function cfg_(key, fallback) {
   const v = PropertiesService.getScriptProperties().getProperty(key);
