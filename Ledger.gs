@@ -78,6 +78,7 @@ function api_appendLedgerRow(obj) {
   const h = su_headerMap_(sheet);
   const derived = ledger_derivedCols_(sheet);
   const row = sheet.getLastRow() + 1;
+  su_ensureRows_(sheet, row);   // the grid can be exactly full (deleteRow shrinks it)
   let wrote = 0;
   Object.keys(obj).forEach(function (header) {
     const col = h[header];
