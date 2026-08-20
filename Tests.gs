@@ -8,7 +8,7 @@
 
 /** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
 var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_createIdempotencyGuard",
-                  "test_gmailQuote", "test_gmailScope", "test_gmailText", "test_interestNet",
+                  "test_ensureRows", "test_gmailQuote", "test_gmailScope", "test_gmailText", "test_interestNet",
                   "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
                   "test_mirrorToAmount", "test_parseDate", "test_parsePeriod", "test_routeMethodPrefixes",
                   "test_telegram", "test_telegramQuery", "test_telegramBalance",
@@ -26,6 +26,21 @@ function test_all() {
   Logger.log("== test_all complete ==");
 }
 
+
+/** su_ensureRows_ — the append target must exist in the grid; deleteRow shrinks it,
+ *  so a sheet whose data reaches the bottom row can never be appended to again. */
+function test_ensureRows() {
+  let max = 10, calls = [];
+  const sheet = { getMaxRows: function () { return max; },
+                  insertRowsAfter: function (after, n) { calls.push([after, n]); max += n; } };
+  su_ensureRows_(sheet, 10);                       // inside the grid → no growth
+  if (calls.length) throw new Error("su_ensureRows_ FAIL: grew a grid that already fit");
+  su_ensureRows_(sheet, 11);                       // one past the bottom → one row
+  if (max !== 11 || String(calls) !== "10,1") throw new Error("su_ensureRows_ FAIL: " + max + " / " + calls);
+  su_ensureRows_(sheet, 14);                       // several past → close the whole gap
+  if (max !== 14 || String(calls[1]) !== "11,3") throw new Error("su_ensureRows_ FAIL: " + max + " / " + calls[1]);
+  Logger.log("test_ensureRows OK");
+}
 /** ledger_coerce_ — numeric strings become numbers (feed SUM); rest stays text. */
 function test_ledgerCoerce() {
   const cases = [["1234", 1234], ["1,234.50", 1234.5], ["-42", -42],
