@@ -101,9 +101,22 @@ function su_setInputCells_(sheet, headerMap, row, obj) {
   });
 }
 
+/**
+ * Make sure `row` exists in the grid. setValue can't write past the last grid row
+ * ("The coordinates of the range are outside the dimensions of the sheet"), and
+ * deleteRow SHRINKS the grid — so a sheet whose data reaches the bottom row stays
+ * full forever: each delete frees a row and removes it in the same move. Sheets'
+ * own appendRow grows the grid; the input-only writes here have to do it.
+ */
+function su_ensureRows_(sheet, row) {
+  const max = sheet.getMaxRows();
+  if (row > max) sheet.insertRowsAfter(max, row - max);
+}
+
 /** Append a new transaction row, writing input columns only. Returns the row #. */
 function su_appendInputRow_(sheet, headerMap, obj) {
   const row = su_lastDataRow_(sheet, headerMap) + 1;
+  su_ensureRows_(sheet, row);
   su_setInputCells_(sheet, headerMap, row, obj);
   SpreadsheetApp.flush();
   return row;
