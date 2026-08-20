@@ -826,9 +826,6 @@ function renderTransactions(){
   [fMonth,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
   var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
   f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fCat); f.appendChild(fAcc);
-  var addBtn=el('button','btn primary sm','+ Add'); addBtn.onclick=function(){openTxModal(null);};
-  var xferBtn=el('button','btn sm','⇄ Transfer'); xferBtn.onclick=function(){openTransferModal();};
-  f.appendChild(addBtn); f.appendChild(xferBtn);
   w.appendChild(f);
 
   function applyFilters(){
