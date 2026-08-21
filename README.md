@@ -13,7 +13,7 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 ## What it does
 
 - **Telegram bot.** Send "coffee 120 maya". The bot writes the row and answers with a receipt that has an **Undo** button. One message can hold more than one transaction. The bot also answers `/balance` and questions such as "how much on food this month".
-- **Progressive web app.** Eight screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
+- **Progressive web app.** Six screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
 - **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
 - **Two more parts.** A daily job records the interest of each account. A Tax screen collects the data for the Philippine BIR 8 percent regime.
 

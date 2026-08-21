@@ -2,7 +2,7 @@
  * app.js — the FinanceTracker SPA.
  * Vanilla JS, served as a static asset by the Cloudflare Worker, which also
  * proxies /api to the Apps Script service layer (same origin: no CORS). Eight
- * screens: Dashboard · Transactions · Budgets · Accounts · Review · Investments
+ * screens: Dashboard · Transactions · Budgets · Accounts · Exchange · Tax
  * · Exchange · Tax.
  * ========================================================================== */
 
@@ -243,13 +243,13 @@ function loadCache(){
   }catch(e){ return false; }
 }
 
-/* Shared transaction-page fetch (Transactions + Review). st = {filters,offset,limit}. */
+/* Transaction-page fetch. st = {filters,offset,limit}. */
 function fetchTxPage(st){
   var args={ limit:st.limit, offset:st.offset };
   var fl=st.filters||{};
   if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
   if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
-  if(fl.segment)args.segment=fl.segment;
+  if(fl.type)args.type=fl.type;
   return gs('api_listTransactions',args);
 }
 
@@ -261,9 +261,10 @@ var S = {
   dataVersion:null,     // last server data version we hold cache against
   _verAt:0,             // when we last confirmed dataVersion with the server (ms)
   cache:{},             // key → { data, version } (stale-while-revalidate, persisted)
-  tx:{ rows:[], total:0, offset:0, limit:50, filters:{},
-       pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },  // optimistic rows: in-flight creates / edits / deletes
-  review:{ sel:{}, filters:{}, rows:[], total:0, offset:0, limit:50 }
+  // edit: the Transactions screen's edit mode (account rail + checkboxes + inline edit);
+  // sel: ID → true for the bulk-action selection. pending*: optimistic in-flight writes.
+  tx:{ rows:[], total:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
+       pendingAdds:[], pendingDeletes:{}, pendingEdits:{} }
 };
 
 var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
@@ -332,6 +333,21 @@ function toast(msg,kind){
 function monthKey(d){return d.getFullYear()+'-'+MONTHS[d.getMonth()];}      // "2026-Jun"
 function monthLabel(m){var p=String(m).split('-');return p.length===2?p[1]+' '+p[0]:m;} // "Jun 2026"
 function monthOptions(){return buildMonthList().map(function(m){return {value:m,label:monthLabel(m)};});}
+/* The period control lives on the screens it actually drives (Dashboard, Budgets),
+ * not the topbar — there it was a silent no-op on the other six screens, since
+ * Transactions owns its month as one of five in-screen filters.
+ * Refocus after the repaint: the picker is inside the screen we just replaced, and
+ * arrow-keying a closed <select> fires change per keypress. */
+function monthPickerEl(){
+  var mp=el('select','month-picker'); mp.title='Period';
+  buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=monthLabel(m);mp.appendChild(o);});
+  mp.value=S.month;
+  mp.onchange=function(){
+    S.month=mp.value; S.cache={};
+    Promise.resolve(render()).then(function(){ var n=$('.month-picker'); if(n) n.focus(); });
+  };
+  return mp;
+}
 function buildMonthList(){
   var out=[], now=new Date();
   // Extend back to the oldest ledger month so older history is reachable; floor at
@@ -407,10 +423,6 @@ function boot(){
   });
   $('#refreshBtn').addEventListener('click', refresh);
   $('#fab').addEventListener('click', function(){ withBoot(function(){ openTxModal(null); }); });
-  var mp=$('#monthPicker');
-  buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=monthLabel(m);mp.appendChild(o);});
-  mp.value=S.month;
-  mp.addEventListener('change', function(){ S.month=mp.value; S.cache={}; render(); });
 
   // Browser back/forward moves between screens. Plain History API now that the app
   // is served from its own origin instead of the GAS sandbox iframe (which blocked
@@ -456,7 +468,12 @@ function refresh(){
   ensureBoot().then(function(){ return render(); }).finally(function(){ btn.classList.remove('spin'); });
 }
 
-var SECONDARY_SCREENS={review:1,investments:1,exchange:1,tax:1};
+/* The screen table — the single list of what a screen name may be. Also what `go()`
+ * validates against, so a retired name can't stick in the URL or in localStorage.
+ * (Function declarations hoist, so naming them here at load time is safe.) */
+var SCREEN_FNS={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
+                budgets:renderBudgets,exchange:renderExchange,tax:renderTax};
+var SECONDARY_SCREENS={exchange:1,tax:1};
 /* Last screen, so a browser reload comes back where you were. The parent URL
  * (?screen=, pushed below) is the primary channel; localStorage covers reloads
  * that drop it — an iOS home-screen shortcut reopens its start_url, not the
@@ -467,6 +484,11 @@ function openSheet(){ $('#sheetRoot').hidden=false; }
 function closeSheet(){ $('#sheetRoot').hidden=true; }
 
 function go(screen, fromHistory){
+  // A retired screen name (a stale bookmark or a stored 'ft.screen' from before the
+  // Review/Investments merge) becomes Dashboard here rather than at render time —
+  // otherwise it would paint the Dashboard while leaving the nav blank and writing
+  // the dead name straight back into localStorage.
+  if(!SCREEN_FNS[screen]) screen='dashboard';
   S.screen=screen;
   document.querySelectorAll('.nav-item[data-screen]').forEach(function(b){b.classList.toggle('active', b.dataset.screen===screen);});
   $('#navMore').classList.toggle('active', !!SECONDARY_SCREENS[screen]);
@@ -492,10 +514,7 @@ function needBoot(kind, fn){
 /* ── render dispatcher ───────────────────────────────────────────────────── */
 function render(){
   screenGen++;
-  var fns={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
-           review:renderReview,budgets:renderBudgets,investments:renderInvestments,
-           exchange:renderExchange,tax:renderTax};
-  return (fns[S.screen]||renderDashboard)();
+  return (SCREEN_FNS[S.screen]||renderDashboard)();
 }
 function paint(node){ var m=$('#main'); m.innerHTML=''; m.appendChild(node); }
 
@@ -636,21 +655,55 @@ function cashflowChart(cf,width){
   wrap.appendChild(svg); wrap.appendChild(tip);
   return wrap;
 }
-// Horizontal single-hue category bars (spend by segment) — label left,
-// value outside the bar end (never clipped inside).
-function hbarList(entries){
-  var host=el('div');
-  var max=0; entries.forEach(function(e2){max=Math.max(max,e2[1]);});
-  entries.forEach(function(pair){
-    var r=el('div','hbar');
-    r.appendChild(el('div','hbar-lab',esc(pair[0])));
-    var tr=el('div','hbar-track');
-    tr.innerHTML='<div class="hbar-fill" style="width:'+(max?Math.max(2,pair[1]/max*100):0)+'%"></div>';
-    r.appendChild(tr);
-    r.appendChild(el('div','hbar-val',money(pair[1],true)));
-    host.appendChild(r);
+// Categorical hues in FIXED slot order (validated on --surface: adjacent CVD
+// ΔE 8.4, normal-vision 19.3, all ≥3:1). Slot 7 is the "Other" bucket — the
+// palette is never cycled, so the slice count is capped instead.
+var PIE_HUES=['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300'];
+var PIE_OTHER='var(--text-faint)';
+function pieHue(i){ return i<PIE_HUES.length?PIE_HUES[i]:PIE_OTHER; }
+// Donut of expenses by category: slices ordered biggest-first (so adjacent
+// slices are adjacent palette slots), tail folded into "Other". The legend
+// carries the amount and share, so slice identity is never color-alone.
+// ponytail: no hover tooltip — the legend already shows every number one would
+// carry; native <title> covers the "which slice is that" case.
+function donutChart(entries){
+  var top=entries.slice(0,PIE_HUES.length), rest=entries.slice(PIE_HUES.length);
+  if(rest.length){
+    var o=0; rest.forEach(function(p){o+=p[1];});
+    top.push(['Other ('+rest.length+')',o]);
+  }
+  var total=0; top.forEach(function(p){total+=p[1];});
+  if(!(total>0)) return null;
+
+  var wrap=el('div','donut-wrap');
+  var R=52,SW=22,C=2*Math.PI*R;                       // circumference in user units
+  var svg=svgEl('svg',{class:'donut',viewBox:'0 0 128 128',role:'img',
+    'aria-label':'Expenses by category, '+monthLabel(S.month)});
+  var off=0;
+  top.forEach(function(pair,i){
+    var frac=pair[1]/total, len=frac*C, gap=Math.min(2,len*0.5); // 2px surface gap between slices
+    var c=svgEl('circle',{cx:64,cy:64,r:R,fill:'none',stroke:pieHue(i),'stroke-width':SW,
+      'stroke-dasharray':(len-gap)+' '+(C-len+gap),'stroke-dashoffset':-off,
+      transform:'rotate(-90 64 64)'});
+    var t=svgEl('title'); t.textContent=pair[0]+' — '+money(pair[1],true)+' ('+Math.round(frac*100)+'%)';
+    c.appendChild(t); svg.appendChild(c);
+    off+=len;
   });
-  return host;
+  var mid=el('div','donut-mid','<div class="donut-mid-l">Total</div><div class="donut-mid-v">'+money(total,true)+'</div>');
+  var ring=el('div','donut-ring'); ring.appendChild(svg); ring.appendChild(mid);
+  wrap.appendChild(ring);
+
+  var lg=el('div','donut-legend');
+  top.forEach(function(pair,i){
+    var r=el('div','dl-row');
+    r.innerHTML='<span class="lg-key" style="background:'+pieHue(i)+'"></span>'+
+      '<span class="dl-name">'+esc(pair[0])+'</span>'+
+      '<span class="dl-val">'+money(pair[1],true)+'</span>'+
+      '<span class="dl-pct">'+Math.round(pair[1]/total*100)+'%</span>';
+    lg.appendChild(r);
+  });
+  wrap.appendChild(lg);
+  return wrap;
 }
 // Budget meter: track is a lighter step of the fill's own ramp; the pace notch
 // marks how much of the period has elapsed (spend "should" sit near it).
@@ -689,15 +742,17 @@ function periodPace(period,monthStr){
 
 /* ════════════════════════════════════════════════════════════════════════
  *  DASHBOARD — hierarchy: hero number → KPI row → cash flow → budgets →
- *  where it went → balances → recent. One glance answers "am I okay?".
+ *  expenses by category → recent. One glance answers "am I okay?".
  * ════════════════════════════════════════════════════════════════════════ */
 function renderDashboard(){
   var key='dashboard|'+S.month;
   if(!S.cache[key]) loading('dashboard');
   return cachedCall(key, function(){return gs('api_getDashboard',{month:S.month});}, function(d){
     var w=el('div','screen');
-    w.appendChild(el('div','screen-title','Dashboard'));
-    w.appendChild(el('div','screen-sub',esc(monthLabel(S.month))));
+    var head=el('div','screen-head');
+    head.appendChild(el('div','screen-title','Dashboard'));
+    head.appendChild(monthPickerEl());
+    w.appendChild(head);
 
     var cf=d.cashflow||[];
     var cur=cf.length?cf[cf.length-1]:null, prev=cf.length>1?cf[cf.length-2]:null;
@@ -761,29 +816,15 @@ function renderDashboard(){
       w.appendChild(bc);
     }
 
-    // ── where it went (spend by segment) ──
-    var segs=Object.keys(d.spendBySegment||{}).map(function(k){return [k,d.spendBySegment[k]];})
+    // ── expenses by category (donut) ──
+    var cats=Object.keys(d.spendByCategory||{}).map(function(k){return [k,d.spendByCategory[k]];})
       .sort(function(a,b){return b[1]-a[1];});
-    if(segs.length){
-      var sc=el('div','card');
-      sc.appendChild(el('div','card-h','Where it went'));
-      sc.appendChild(hbarList(segs));
-      w.appendChild(sc);
-    }
-
-    // ── balances by type ──
-    var byType=d.balancesByType||{};
-    if (Object.keys(byType).length){
-      var tc=el('div','card');
-      tc.appendChild(el('div','card-h','Balances by type'));
-      var l=el('div','list');
-      Object.keys(byType).forEach(function(k){
-        var v=byType[k];
-        var r=el('div','litem');
-        r.innerHTML='<div class="grow"><div class="t1">'+esc(k)+'</div></div><div class="amt '+(v<0?'neg':'')+'">'+money(v)+'</div>';
-        l.appendChild(r);
-      });
-      tc.appendChild(l); w.appendChild(tc);
+    var pie=cats.length?donutChart(cats):null;
+    if(pie){
+      var pc=el('div','card');
+      pc.appendChild(el('div','card-h','Expenses by category'));
+      pc.appendChild(pie);
+      w.appendChild(pc);
     }
 
     // ── recent transactions ──
@@ -792,7 +833,7 @@ function renderDashboard(){
     var more=el('button','btn sm ghost','View all →'); more.onclick=function(){go('transactions');};
     rh.appendChild(more); rc.appendChild(rh);
     var rl=el('div','list'); rl.style.marginTop='8px';
-    (d.recentTransactions||[]).forEach(function(t){ rl.appendChild(txRow(t,true)); });
+    (d.recentTransactions||[]).forEach(function(t){ rl.appendChild(txRow(t,{clickable:true})); });
     if(!(d.recentTransactions||[]).length) rl.appendChild(el('div','empty','<span class="empty-ico">◌</span>No transactions yet.'));
     rc.appendChild(rl); w.appendChild(rc);
 
@@ -806,12 +847,24 @@ function tile(label,val,sub){
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- *  TRANSACTIONS
+ *  TRANSACTIONS — browse by default; the Edit toggle turns the same list into
+ *  the review surface (account rail + multi-select bulk edit + inline single-
+ *  field edit). One list, one state slice, one row renderer for both modes.
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTransactions(){
   if(needBoot('list', renderTransactions)) return;
   var w=el('div','screen');
-  w.appendChild(el('div','screen-title','Transactions'));
+
+  var head=el('div','screen-head');
+  head.appendChild(el('div','screen-title','Transactions'));
+  var toggle=el('button','btn sm'+(S.tx.edit?' primary':''), S.tx.edit?'Done':'✎ Edit');
+  toggle.title=S.tx.edit?'Back to browsing':'Bulk edit, inline edit and account rail';
+  toggle.onclick=function(){ S.tx.edit=!S.tx.edit; clearSel(); renderTransactions(); };
+  head.appendChild(toggle);
+  w.appendChild(head);
+
+  // sticky bulk-action bar (edit mode only; hidden until a selection exists)
+  if(S.tx.edit){ var bar=el('div','bulk-bar'); bar.id='bulkBar'; bar.hidden=true; w.appendChild(bar); }
 
   // filters
   var f=el('div','filters');
@@ -819,21 +872,21 @@ function renderTransactions(){
   // the combo showed a specific month while the list fetched everything.
   var seedMonth=S.tx.filters.month===undefined?S.month:(S.tx.filters.month===''?'(all months)':S.tx.filters.month);
   var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), seedMonth);
+  var fType=comboEl(['(all types)','Income','Expense','Transfer'], S.tx.filters.type||'(all types)');
   var cats=Object.keys((S.boot.categories)||{}).sort();
   var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
   var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
+  fAcc.id='fAcc';   // the account rail writes the picked account back into this combo
   var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
-  [fMonth,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
+  [fMonth,fType,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
   var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
-  f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fCat); f.appendChild(fAcc);
-  var addBtn=el('button','btn primary sm','+ Add'); addBtn.onclick=function(){openTxModal(null);};
-  var xferBtn=el('button','btn sm','⇄ Transfer'); xferBtn.onclick=function(){openTransferModal();};
-  f.appendChild(addBtn); f.appendChild(xferBtn);
+  f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fType); f.appendChild(fCat); f.appendChild(fAcc);
   w.appendChild(f);
 
   function applyFilters(){
     S.tx.filters={
       month: fMonth.value.indexOf('(all')===0?'':fMonth.value,
+      type: fType.value.indexOf('(all')===0?'':fType.value,
       category: fCat.value.indexOf('(all')===0?'':fCat.value,
       account: fAcc.value.indexOf('(all')===0?'':fAcc.value,
       search: fSearch.value.trim()
@@ -843,12 +896,62 @@ function renderTransactions(){
 
   var listCard=el('div','card'); listCard.id='txListCard';
   listCard.innerHTML=skRows(7);
-  w.appendChild(listCard);
+  // edit mode adds the account rail beside the list; browsing keeps the list full-width
+  if(S.tx.edit){
+    var split=el('div','tx-split');
+    var rail=el('div','tx-rail card'); rail.id='txAccts'; rail.innerHTML=skRows(6);
+    split.appendChild(rail); split.appendChild(listCard);
+    w.appendChild(split);
+  } else {
+    w.appendChild(listCard);
+  }
   paint(w);
 
   // default filter month to selected period on first open
   if (S.tx.filters.month===undefined) S.tx.filters.month=S.month;
   loadTx(w);
+  if(S.tx.edit){ loadTxAccts(); updateBulkBar(); }
+}
+
+/* —— account rail (edit mode): balances beside the list, click to filter —— */
+function loadTxAccts(){
+  return cachedCall('accounts', function(){return gs('api_getAccounts');}, function(res){
+    var host=$('#txAccts'); if(!host) return;
+    host.innerHTML='';
+    host.appendChild(el('div','card-h','Accounts'));
+    var all=el('div','litem click rail'+(!S.tx.filters.account?' sel':''));
+    all.innerHTML='<div class="grow"><div class="t1">All accounts</div></div>';
+    all.onclick=function(){ pickRailAccount(''); };
+    host.appendChild(all);
+    var groups={};
+    (res.accounts||[]).forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
+    Object.keys(groups).sort().forEach(function(t){
+      host.appendChild(el('div','rail-grp',esc(t)));
+      groups[t].forEach(function(a){ host.appendChild(acctRailRow(a)); });
+    });
+  }).catch(showErr);
+}
+
+// The rail and the account combo drive the SAME filter field, so a rail click has to
+// write the combo too or it sits there showing a stale account.
+function pickRailAccount(name){
+  S.tx.filters.account=name;
+  var c=$('#fAcc'); if(c) c.value=name||'(all accounts)';
+  S.tx.offset=0; loadTxAccts(); loadTx();
+}
+
+function acctRailRow(a){
+  var sel=S.tx.filters.account===a.name;
+  var r=el('div','litem click rail'+(sel?' sel':''));
+  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
+    '<div class="grow"><div class="t1">'+esc(a.name)+'</div></div>'+
+    acctAmtHtml(a);
+  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
+    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
+    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
+  }
+  r.onclick=function(){ pickRailAccount(a.name); };
+  return r;
 }
 
 // silent: skip the full-card spinner (keep optimistic rows on screen until fresh
@@ -864,7 +967,7 @@ function loadTx(w, silent){
 }
 
 // Bucket rows into day groups (display order preserved) with each day's net.
-// Shared by the Transactions and Review lists.
+// Used by the transactions list in both browse and edit mode.
 function groupByDay(rows){
   var groups=[], byDate={};
   (rows||[]).forEach(function(t){
@@ -884,12 +987,10 @@ function dayHeadEl(g){
     (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
 }
 
-/* Optimistic state is shared by BOTH transaction lists: the FAB, the row modal and
- * the Telegram deep link all work from either screen, so a write started on Review
- * must show as "loading" there too. One store, one repaint entry point. */
+/* The FAB, the row modal and the Telegram deep link can all write from any screen,
+ * so repaint the list only when it's actually on screen. */
 function repaintTxList(){
   if(S.screen==='transactions') renderTxList();
-  else if(S.screen==='review') renderReviewList();
 }
 function isPendingRow(t){ return !!(t._pending || (t.ID && (S.tx.pendingDeletes[t.ID] || S.tx.pendingEdits[t.ID]))); }
 // Show an in-flight edit's NEW values while it's still in the air. Amount is patched as
@@ -908,26 +1009,58 @@ function withPendingEdit(t){
   return o;
 }
 
+// A pending create only belongs on the list if the active filters would have returned
+// it — otherwise adding under one account/type flashes a row that the filter excludes.
+// Mirrors the server-side filter in api_listTransactions.
+function matchesTxFilters(t){
+  var f=S.tx.filters||{}, d=parseDate(t.Date);
+  if(f.account && t.Account!==f.account && t.ToAccount!==f.account) return false;
+  if(f.category && t.Category!==f.category) return false;
+  // an optimistic transfer may not carry its derived Type yet
+  if(f.type && (txIsXfer(t)?'Transfer':String(t.Type||''))!==f.type) return false;
+  if(f.month && (t.Period||(d?monthKey(d):''))!==f.month) return false;
+  if(f.search && ((t.Description||'')+' '+(t.Category||'')).toLowerCase()
+                   .indexOf(f.search.toLowerCase())<0) return false;
+  return true;
+}
+
 // Repaint the transactions list from S.tx.rows plus optimistic state (pending
-// creates shown at top, pending deletes shown in-place) — no server round-trip.
+// creates shown at top, pending deletes shown in-place) — no server round-trip,
+// so edit-mode selection and the filter DOM stay put.
 function renderTxList(){
   var c=$('#txListCard'); if(!c) return;
+  var edit=!!S.tx.edit;
   // pending creates only make sense on the first page (they'd be the newest rows)
-  var adds=(S.tx.offset<=0)?(S.tx.pendingAdds||[]):[];
-  var serverRows=S.tx.rows||[];
+  var adds=(S.tx.offset<=0)?(S.tx.pendingAdds||[]).filter(matchesTxFilters):[];
+  var rows=S.tx.rows||[];
   var total=(S.tx.total||0)+adds.length;
   c.innerHTML='';
   var head=el('div','row-between'); head.style.marginBottom='6px';
-  head.innerHTML='<div class="card-h" style="margin:0">'+total+' transaction'+(total===1?'':'s')+'</div>';
+  var label=total+' transaction'+(total===1?'':'s');
+  if(edit){
+    // select-all covers the current page's server rows (pending ones aren't editable yet)
+    var lbl=el('label','sel-all');
+    var selAll=el('input'); selAll.type='checkbox';
+    selAll.checked=rows.length>0 && rows.every(function(t){return S.tx.sel[t.ID];});
+    selAll.onclick=function(){
+      rows.forEach(function(t){ if(selAll.checked)S.tx.sel[t.ID]=true; else delete S.tx.sel[t.ID]; });
+      renderTxList();
+    };
+    lbl.appendChild(selAll);
+    lbl.appendChild(document.createTextNode(' '+label));
+    head.appendChild(lbl);
+  } else {
+    head.innerHTML='<div class="card-h" style="margin:0">'+label+'</div>';
+  }
   c.appendChild(head);
   // group by day: header shows weekday + date + the day's net (income − spend)
-  var allRows=adds.concat(serverRows);   // optimistic adds sort ahead within their date
+  var allRows=adds.concat(rows);   // optimistic adds sort ahead within their date
   var l=el('div','list');
   groupByDay(allRows).forEach(function(g){
     l.appendChild(dayHeadEl(g));
     g.rows.forEach(function(t){
-      var pending = isPendingRow(t);
-      l.appendChild(txRow(withPendingEdit(t),!pending,true,pending));
+      var pending=isPendingRow(t);
+      l.appendChild(txRow(withPendingEdit(t),{edit:edit, pending:pending, clickable:!pending, hideDate:true}));
     });
   });
   if(!allRows.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
@@ -944,9 +1077,17 @@ function renderTxList(){
     pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
     c.appendChild(pg);
   }
+  if(edit) updateBulkBar();
 }
 
-function txRow(t,clickable,hideDate,pending){  // hideDate: the list already groups rows under date headers; pending: in-flight write (loading state)
+/* One row renderer for both modes. opts:
+ *   edit      — checkbox + inline single-field editors (the icon opens the full modal)
+ *   pending   — in-flight write: spinner glyph, nothing interactive
+ *   clickable — browsing mode: the whole row opens the modal
+ *   hideDate  — the list already groups rows under date headers                       */
+function txRow(t,opts){
+  opts=opts||{};
+  var edit=!!opts.edit, pending=!!opts.pending, clickable=!!opts.clickable;
   var type=String(t.Type||'');
   var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
   var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
@@ -960,21 +1101,64 @@ function txRow(t,clickable,hideDate,pending){  // hideDate: the list already gro
   var sign=type==='Expense'?'-':(type==='Income'?'+':'');
   var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
   var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
-  // Description is optional: with none, the Category headlines the row and drops out
-  // of the sub line rather than printing twice under a "(no description)" placeholder.
-  var noDesc=!t.Description;
-  var sub=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+(noDesc?'':' · '+esc(t.Category||''));
-  var date=fmtDate(t.Date);
-  var r=el('div','litem'+(clickable?' click':'')+(pending?' pending':''));
+
+  var r=el('div','litem'+(edit?' edit':'')+(clickable&&!edit?' click':'')+
+                        (edit&&S.tx.sel[t.ID]?' sel':'')+(pending?' pending':''));
+  // in-flight write: nothing on the row is editable until the server has agreed
+  if(pending&&edit) r.style.pointerEvents='none';
+
+  if(edit){
+    var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.tx.sel[t.ID];
+    chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID, chk.checked); r.classList.toggle('sel', chk.checked); };
+    r.appendChild(chk);
+  }
   // a pending row swaps its type glyph for a spinner so it clearly reads as "loading"
-  var ic=pending?'<div class="ic"><span class="mini-spin"></span></div>':'<div class="ic '+icCls+'">'+icCh+'</div>';
-  r.innerHTML=ic+
-    '<div class="grow"><div class="t1">'+esc(noDesc?(t.Category||''):t.Description)+'</div>'+
-    '<div class="t2">'+sub+(hideDate?'':' · '+esc(date))+'</div></div>'+
-    '<div class="amt '+amtCls+'">'+sign+mainAmt+
-    (isForeign?'<span class="amt-sub">'+money(amtPhp)+'</span>':'')+'</div>';
+  var ic=pending?el('div','ic','<span class="mini-spin"></span>')
+                :el('div','ic '+(edit?'ic-edit ':'')+icCls, icCh);
+  if(edit&&!pending){ ic.title='Open details'; ic.onclick=function(e){ e.stopPropagation(); openTxModal(t); }; }
+  r.appendChild(ic);
+
+  var grow=el('div','grow');
+  if(edit){
+    // description — inline editable; empty = no description, and the ".t1-edit:empty"
+    // CSS supplies the "+ note" affordance rather than a placeholder string
+    var t1=el('div','t1 t1-edit', esc(t.Description||''));
+    t1.title='Edit description';
+    t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(v){ commitInline(t,'Description',v); }); };
+    grow.appendChild(t1);
+    var sub=el('div','t2');
+    sub.appendChild(editableSpan(dotHTML(fromC)+esc(t.Account||'(account)'), function(host){
+      inlineCombo(host, acctOptions(), t.Account, function(val){ commitInline(t,'Account',val); });
+    }));
+    if(isXfer) sub.appendChild(document.createTextNode(' → '+(t.ToAccount||'')));
+    sub.appendChild(document.createTextNode(' · '));
+    sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
+      inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
+    }));
+    if(isForeign) sub.appendChild(document.createTextNode(' · '+money(amtPhp)));
+    grow.appendChild(sub);
+  } else {
+    // Description is optional: with none, the Category headlines the row and drops out
+    // of the sub line rather than printing twice under a "(no description)" placeholder.
+    var noDesc=!t.Description;
+    var line=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+
+             (noDesc?'':' · '+esc(t.Category||''));
+    grow.innerHTML='<div class="t1">'+esc(noDesc?(t.Category||''):t.Description)+'</div>'+
+      '<div class="t2">'+line+(opts.hideDate?'':' · '+esc(fmtDate(t.Date)))+'</div>';
+  }
+  r.appendChild(grow);
+
+  // amount — inline editable in edit mode (edits the native magnitude; sign derives from Type)
+  var amt=el('div','amt '+(edit?'amt-edit ':'')+amtCls,
+    sign+mainAmt+(isForeign&&!edit?'<span class="amt-sub">'+money(amtPhp)+'</span>':''));
+  if(edit){
+    amt.title='Edit amount';
+    amt.onclick=function(){ inlineInput(amt,'number', Math.abs(Number(t.Amount)), function(v){ commitInline(t,'Amount',v); }); };
+  }
+  r.appendChild(amt);
+
   if(fromC){ r.style.borderLeft='3px solid '+fromC; r.style.paddingLeft='9px'; }
-  if(clickable) r.onclick=function(){ openTxModal(t); };
+  if(clickable&&!edit) r.onclick=function(){ openTxModal(t); };
   return r;
 }
 
@@ -1025,7 +1209,68 @@ function renderAccounts(){
       groups[t].forEach(function(a){ l.appendChild(accountRow(a)); });
       card.appendChild(l); w.appendChild(card);
     });
+
+    // Holdings: the share accounts above, re-cut by portfolio weight. Filled by a
+    // separate cachedCall — the 'accounts' payload is pre-seeded from getBootstrap
+    // and shared with the edit-mode rail, so its shape must not change.
+    var inv=el('div'); inv.id='invCards';
+    w.appendChild(inv);
     paint(w);
+    loadInvestments();
+  }).catch(showErr);
+}
+
+/* Investment positions as a card on Accounts (read-only). */
+function loadInvestments(){
+  return cachedCall('investments', function(){return gs('api_getInvestments');}, function(inv){
+    var host=$('#invCards'); if(!host) return;
+    host.innerHTML='';
+    var positions=inv.positions||[];
+    if(!positions.length) return;
+
+    var card=el('div','card');
+    var h=el('div','row-between'); h.style.marginBottom='12px';
+    var ttl=el('div','card-h','Holdings <span style="opacity:.55">· '+positions.length+'</span>'); ttl.style.margin='0';
+    h.appendChild(ttl); h.appendChild(el('div','dim mono',money(inv.totalValuePhp)));
+    card.appendChild(h);
+
+    // Color follows the entity: the account's own color when set, else a stable
+    // slot from the validated fallback palette (assigned by name, not by rank).
+    var fallback=['#3987e5','#199e70','#c98500','#9085e9','#e66767','#d55181','#d95926','#eb6834'];
+    var names=positions.map(function(p){return p.name;}).sort();
+    function posColor(p){ return acctColor(p.name)||fallback[names.indexOf(p.name)%fallback.length]; }
+    // one stacked allocation bar (part-to-whole), 2px surface gaps between fills
+    var stack=el('div'); stack.style.cssText='display:flex;gap:2px;height:14px;margin:2px 0 16px';
+    positions.forEach(function(p){
+      var seg=el('div'); seg.title=p.name+' · '+pct(p.weightPct);
+      seg.style.cssText='flex:'+Math.max(p.weightPct||0,.5)+';background:'+posColor(p)+';border-radius:4px;min-width:5px';
+      stack.appendChild(seg);
+    });
+    card.appendChild(stack);
+
+    var l=el('div','list');
+    positions.forEach(function(p){
+      var r=el('div','litem');
+      var q=p.quantity!=null?(num(p.quantity)+' · '):'';
+      var pc=posColor(p);
+      r.innerHTML='<div class="ic" style="color:'+pc+';background:'+pc+'22">▲</div>'+
+        '<div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
+        '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of portfolio</div></div>'+
+        '<div class="amt">'+money(p.valuePhp)+'</div>';
+      l.appendChild(r);
+    });
+    card.appendChild(l); host.appendChild(card);
+
+    // targets reference
+    var tc=el('div','card');
+    tc.appendChild(el('div','card-h','Strategy targets (reference)'));
+    var seg=inv.segmentTargets||{}, core=inv.coreTargets||{};
+    var html='<div class="dim" style="font-size:13px">Core allocation: ';
+    html+=Object.keys(core).map(function(k){return esc(core[k])+' '+esc(k)+'%';}).join(' · ');
+    html+='</div><div class="dim" style="font-size:13px;margin-top:6px">Segments: ';
+    html+=Object.keys(seg).map(function(k){return esc(k)+' '+esc(seg[k])+'%';}).join(' · ');
+    html+='</div>';
+    tc.innerHTML+=html; host.appendChild(tc);
   }).catch(showErr);
 }
 
@@ -1076,10 +1321,13 @@ function renderBudgets(){
     function(payload){
     var bg=payload.bg, rec=payload.rec;
     var w=el('div','screen');
-    w.appendChild(el('div','screen-title','Budgets'));
+    var head=el('div','screen-head');
+    head.appendChild(el('div','screen-title','Budgets'));
+    head.appendChild(monthPickerEl());
+    w.appendChild(head);
     var now=new Date(), daysLeft=(bg.month===monthKey(now))
       ? (new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()) : null;
-    w.appendChild(el('div','screen-sub','Period '+esc(monthLabel(bg.month))+' · planning income '+money(bg.incomePhp,true)+'/mo'+
+    w.appendChild(el('div','screen-sub','Planning income '+money(bg.incomePhp,true)+'/mo'+
       (daysLeft!=null?(' · '+daysLeft+' day'+(daysLeft===1?'':'s')+' left'):'')));
 
     var pace=periodPace('Monthly',bg.month);
@@ -1127,68 +1375,6 @@ function renderBudgets(){
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- *  INVESTMENTS
- * ════════════════════════════════════════════════════════════════════════ */
-function renderInvestments(){
-  if(!S.cache['investments']) loading('accounts');
-  return cachedCall('investments', function(){return gs('api_getInvestments');}, function(inv){
-    var w=el('div','screen');
-    w.appendChild(el('div','screen-title','Investments'));
-    w.appendChild(el('div','screen-sub','Read-only · valued in PHP via the sheet'));
-
-    var hero=el('div','stat hero');
-    hero.innerHTML='<div class="stat-label">Portfolio value</div><div class="stat-value">'+money(inv.totalValuePhp,true)+'</div>'+
-      '<div class="stat-sub">'+(inv.positions||[]).length+' positions · valued live</div>';
-    w.appendChild(hero);
-
-    var card=el('div','card');
-    card.appendChild(el('div','card-h','Holdings'));
-    var positions=inv.positions||[];
-    // Color follows the entity: the account's own color when set, else a stable
-    // slot from the validated fallback palette (assigned by name, not by rank).
-    var fallback=['#3987e5','#199e70','#c98500','#9085e9','#e66767','#d55181','#d95926','#eb6834'];
-    var names=positions.map(function(p){return p.name;}).sort();
-    function posColor(p){ return acctColor(p.name)||fallback[names.indexOf(p.name)%fallback.length]; }
-    // one stacked allocation bar (part-to-whole), 2px surface gaps between fills
-    if(positions.length){
-      var stack=el('div'); stack.style.cssText='display:flex;gap:2px;height:14px;margin:2px 0 16px';
-      positions.forEach(function(p){
-        var seg=el('div'); seg.title=p.name+' · '+pct(p.weightPct);
-        seg.style.cssText='flex:'+Math.max(p.weightPct||0,.5)+';background:'+posColor(p)+';border-radius:4px;min-width:5px';
-        stack.appendChild(seg);
-      });
-      card.appendChild(stack);
-    }
-    var l=el('div','list');
-    positions.forEach(function(p){
-      var r=el('div','litem');
-      var q=p.quantity!=null?(num(p.quantity)+' · '):'';
-      var pc=posColor(p);
-      r.innerHTML='<div class="ic" style="color:'+pc+';background:'+pc+'22">▲</div>'+
-        '<div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
-        '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of portfolio</div></div>'+
-        '<div class="amt">'+money(p.valuePhp)+'</div>';
-      l.appendChild(r);
-    });
-    if(!positions.length) l.appendChild(el('div','empty','<span class="empty-ico">◈</span>No investment positions found.'));
-    card.appendChild(l); w.appendChild(card);
-
-    // targets reference
-    var tc=el('div','card');
-    tc.appendChild(el('div','card-h','Strategy targets (reference)'));
-    var seg=inv.segmentTargets||{}, core=inv.coreTargets||{};
-    var html='<div class="dim" style="font-size:13px">Core allocation: ';
-    html+=Object.keys(core).map(function(k){return esc(core[k])+' '+esc(k)+'%';}).join(' · ');
-    html+='</div><div class="dim" style="font-size:13px;margin-top:6px">Segments: ';
-    html+=Object.keys(seg).map(function(k){return esc(k)+' '+esc(seg[k])+'%';}).join(' · ');
-    html+='</div>';
-    tc.innerHTML+=html; w.appendChild(tc);
-
-    paint(w);
-  }).catch(showErr);
-}
-
-/* ════════════════════════════════════════════════════════════════════════
  *  TAX / BIR (Ledger)
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTax(){
@@ -1207,7 +1393,7 @@ function renderTax(){
     });
 
     var w=el('div','screen');
-    var head=el('div','tax-head');
+    var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Tax · BIR Ledger'));
     var addBtn=el('button','btn sm primary','+ Add row');
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
@@ -1474,206 +1660,6 @@ function exCalc(){
       ' beats Wise for you both; at mid-market ('+num(rate)+') you each keep your own avoided fee.</div>';
 }
 
-/* ════════════════════════════════════════════════════════════════════════
- *  REVIEW — accounts + transactions side-by-side, multi-select bulk edit,
- *  inline single-field edit. Reuses fetchTxPage / comboEl / acctOptions.
- * ════════════════════════════════════════════════════════════════════════ */
-function reviewTxKey(){ return 'revtx|'+JSON.stringify(S.review.filters||{})+'|'+S.review.offset+'|'+S.review.limit; }
-
-function renderReview(){
-  if(needBoot('list', renderReview)) return;
-  if(S.review.filters.month===undefined) S.review.filters.month=S.month;
-
-  var w=el('div','screen');
-  w.appendChild(el('div','screen-title','Review'));
-
-  // sticky bulk-action bar (hidden until a selection exists)
-  var bar=el('div','bulk-bar'); bar.id='bulkBar'; bar.hidden=true;
-  w.appendChild(bar);
-
-  // right-pane filters
-  var f=el('div','filters');
-  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), S.review.filters.month||'(all months)');
-  var cats=Object.keys((S.boot.categories)||{}).sort();
-  var fCat=comboEl(['(all categories)'].concat(cats), S.review.filters.category||'(all categories)');
-  var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.review.filters.search||'';
-  [fMonth,fCat].forEach(function(s){s.onchange=applyRevFilters;});
-  var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyRevFilters,350);};
-  f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fCat);
-  w.appendChild(f);
-
-  function applyRevFilters(){
-    S.review.filters.month=fMonth.value.indexOf('(all')===0?'':fMonth.value;
-    S.review.filters.category=fCat.value.indexOf('(all')===0?'':fCat.value;
-    S.review.filters.search=fSearch.value.trim();
-    S.review.offset=0; loadReviewTx();
-  }
-
-  var split=el('div','review-split');
-  var left=el('div','rev-accts card'); left.id='revAccts';
-  left.innerHTML=skRows(6);
-  var right=el('div','rev-tx card'); right.id='revTxCard';
-  right.innerHTML=skRows(7);
-  split.appendChild(left); split.appendChild(right);
-  w.appendChild(split);
-  paint(w);
-
-  loadReviewAccts();
-  loadReviewTx();
-  updateBulkBar();
-}
-
-function loadReviewAccts(){
-  return cachedCall('accounts', function(){return gs('api_getAccounts');}, function(res){
-    var host=$('#revAccts'); if(!host) return;
-    host.innerHTML='';
-    host.appendChild(el('div','card-h','Accounts'));
-    var all=el('div','litem click rail'+(!S.review.filters.account?' sel':''));
-    all.innerHTML='<div class="grow"><div class="t1">All accounts</div></div>';
-    all.onclick=function(){ S.review.filters.account=''; S.review.offset=0; loadReviewAccts(); loadReviewTx(); };
-    host.appendChild(all);
-    var groups={};
-    (res.accounts||[]).forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
-    Object.keys(groups).sort().forEach(function(t){
-      host.appendChild(el('div','rail-grp',esc(t)));
-      groups[t].forEach(function(a){ host.appendChild(reviewAcctRow(a)); });
-    });
-  }).catch(showErr);
-}
-
-function reviewAcctRow(a){
-  var sel=S.review.filters.account===a.name;
-  var r=el('div','litem click rail'+(sel?' sel':''));
-  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
-    '<div class="grow"><div class="t1">'+esc(a.name)+'</div></div>'+
-    acctAmtHtml(a);
-  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
-    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
-    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
-  }
-  r.onclick=function(){ S.review.filters.account=a.name; S.review.offset=0; loadReviewAccts(); loadReviewTx(); };
-  return r;
-}
-
-function loadReviewTx(silent){
-  var st={filters:S.review.filters, offset:S.review.offset, limit:S.review.limit};
-  var key=reviewTxKey();
-  var card=$('#revTxCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skRows(7);
-  return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
-    S.review.total=res.total; S.review.rows=res.transactions;
-    renderReviewList();
-  }).catch(showErr);
-}
-
-// A pending create only belongs on this list if the rail/filters would have returned
-// it — otherwise adding to one account would flash a row under another. Mirrors the
-// server-side filter in api_listTransactions.
-function matchesReviewFilters(t){
-  var f=S.review.filters||{}, d=parseDate(t.Date);
-  if(f.account && t.Account!==f.account && t.ToAccount!==f.account) return false;
-  if(f.category && t.Category!==f.category) return false;
-  if(f.month && (t.Period||(d?monthKey(d):''))!==f.month) return false;
-  if(f.search && ((t.Description||'')+' '+(t.Category||'')).toLowerCase()
-                   .indexOf(f.search.toLowerCase())<0) return false;
-  return true;
-}
-
-// Repaint the Review list from S.review.rows plus the same optimistic state the
-// Transactions screen uses — no server round-trip, so selection and filter DOM stay put.
-function renderReviewList(){
-  var c=$('#revTxCard'); if(!c) return;
-  var rows=S.review.rows||[];
-  var adds=(S.review.offset<=0)?(S.tx.pendingAdds||[]).filter(matchesReviewFilters):[];
-  var total=(S.review.total||0)+adds.length;
-  c.innerHTML='';
-  var head=el('div','row-between'); head.style.marginBottom='6px';
-  var lbl=el('label','sel-all');
-  var selAll=el('input'); selAll.type='checkbox';
-  selAll.checked=rows.length>0 && rows.every(function(t){return S.review.sel[t.ID];});
-  selAll.onclick=function(){
-    rows.forEach(function(t){ if(selAll.checked)S.review.sel[t.ID]=true; else delete S.review.sel[t.ID]; });
-    renderReviewList();
-  };
-  lbl.appendChild(selAll);
-  lbl.appendChild(document.createTextNode(' '+total+' transaction'+(total===1?'':'s')));
-  head.appendChild(lbl); c.appendChild(head);
-
-  var l=el('div','list');
-  groupByDay(adds.concat(rows)).forEach(function(g){
-    l.appendChild(dayHeadEl(g));
-    g.rows.forEach(function(t){ l.appendChild(reviewTxRow(withPendingEdit(t), isPendingRow(t))); });
-  });
-  if(!adds.length && !rows.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
-  c.appendChild(l);
-
-  if(S.review.total>S.review.limit){
-    var pg=el('div','row-between'); pg.style.marginTop='12px';
-    var prev=el('button','btn sm','← Prev'); prev.disabled=S.review.offset<=0;
-    prev.onclick=function(){S.review.offset=Math.max(0,S.review.offset-S.review.limit);loadReviewTx();};
-    var next=el('button','btn sm','Next →'); next.disabled=S.review.offset+S.review.limit>=S.review.total;
-    next.onclick=function(){S.review.offset+=S.review.limit;loadReviewTx();};
-    var info=el('div','dim','Showing '+(S.review.offset+1)+'–'+Math.min(S.review.offset+S.review.limit,S.review.total));
-    info.style.fontSize='12px';
-    pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
-    c.appendChild(pg);
-  }
-  updateBulkBar();
-}
-
-function reviewTxRow(t,pending){
-  var type=String(t.Type||'');
-  var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
-  var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
-  var icCh=isXfer?'⇄':(type==='Expense'?'−':(type==='Income'?'+':'•'));
-  var amtPhp=t['Amount (PHP)'], cur=t.Currency||'PHP', isForeign=cur!=='PHP';
-  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(amtPhp);
-  var sign=type==='Expense'?'-':(type==='Income'?'+':'');
-  var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
-  var fromC=acctColor(t.Account);
-
-  var r=el('div','litem rev'+(S.review.sel[t.ID]?' sel':'')+(pending?' pending':''));
-  // in-flight write: nothing on the row is editable until the server has agreed
-  if(pending) r.style.pointerEvents='none';
-  var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.review.sel[t.ID];
-  chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID, chk.checked); r.classList.toggle('sel', chk.checked); };
-  r.appendChild(chk);
-  // icon = open the full modal (date / FX / transfer / delete)
-  var ic=pending?el('div','ic','<span class="mini-spin"></span>'):el('div','ic ic-edit '+icCls, icCh);
-  ic.title='Open details'; ic.onclick=function(e){ e.stopPropagation(); openTxModal(t); };
-  r.appendChild(ic);
-
-  var grow=el('div','grow');
-  // description — inline editable
-  // empty = no description; the ".t1-edit:empty" CSS supplies the "+ note" affordance
-  var t1=el('div','t1 t1-edit', esc(t.Description||''));
-  t1.title='Edit description';
-  t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(v){ commitInline(t,'Description',v); }); };
-  grow.appendChild(t1);
-  var sub=el('div','t2');
-  // account — inline editable
-  sub.appendChild(editableSpan(dotHTML(fromC)+esc(t.Account||'(account)'), function(host){
-    inlineCombo(host, acctOptions(), t.Account, function(val){ commitInline(t,'Account',val); });
-  }));
-  if(isXfer){ sub.appendChild(document.createTextNode(' → '+(t.ToAccount||''))); }
-  sub.appendChild(document.createTextNode(' · '));
-  // category — inline editable
-  sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
-    inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
-  }));
-  // date omitted — the list groups rows under date headers
-  if(isForeign) sub.appendChild(document.createTextNode(' · '+money(amtPhp)));
-  grow.appendChild(sub);
-  r.appendChild(grow);
-
-  // amount — inline editable (edits the native Amount magnitude; sign derives from Type)
-  var amt=el('div','amt amt-edit '+amtCls, sign+mainAmt);
-  amt.title='Edit amount';
-  amt.onclick=function(){ inlineInput(amt,'number', Math.abs(Number(t.Amount)), function(v){ commitInline(t,'Amount',v); }); };
-  r.appendChild(amt);
-  if(fromC){ r.style.borderLeft='3px solid '+fromC; r.style.paddingLeft='9px'; }
-  return r;
-}
-
 /* —— inline single-field edit (Category / Account / Description / Amount) —— */
 // Plain text/number input editor (Description, Amount). Commits on Enter or blur,
 // cancels on Escape. The `done` guard stops the blur firing a second commit after
@@ -1687,7 +1673,7 @@ function inlineInput(host, type, value, onPick){
   function commit(){ if(done) return; done=true; onPick(inp.value); }
   inp.onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); commit(); }
-    else if(e.key==='Escape'){ done=true; renderReviewList(); }
+    else if(e.key==='Escape'){ done=true; renderTxList(); }
   };
   inp.onblur=function(){ commit(); };
   host.appendChild(inp); inp.focus(); inp.select();
@@ -1711,29 +1697,29 @@ function commitInline(t, field, val){
   var patch={ID:t.ID};
   if(field==='Amount'){
     var n=parseFloat(val);
-    if(isNaN(n)){ toast('Enter a valid amount','err'); renderReviewList(); return; }
-    if(n===Math.abs(Number(t.Amount))){ renderReviewList(); return; }  // no-op
+    if(isNaN(n)){ toast('Enter a valid amount','err'); renderTxList(); return; }
+    if(n===Math.abs(Number(t.Amount))){ renderTxList(); return; }  // no-op
     patch.Amount=n;
   } else {
     var cur=(t[field]==null?'':String(t[field]));
-    if(String(val)===cur){ renderReviewList(); return; }           // no-op → restore the row
+    if(String(val)===cur){ renderTxList(); return; }           // no-op → restore the row
     patch[field]=val;
   }
   // Optimistic: the row keeps its place showing the NEW value as loading; the reload
   // that reconciles it only runs once the server has agreed.
-  S.tx.pendingEdits[t.ID]=patch; renderReviewList();
+  S.tx.pendingEdits[t.ID]=patch; renderTxList();
   gs('api_updateTransaction', patch).then(function(){
-    delete S.tx.pendingEdits[t.ID]; toast(field+' updated','ok'); afterReviewMutation();
+    delete S.tx.pendingEdits[t.ID]; toast(field+' updated','ok'); afterMutation();
   }).catch(function(e){
-    delete S.tx.pendingEdits[t.ID]; toast(e.message||e,'err'); renderReviewList();
+    delete S.tx.pendingEdits[t.ID]; toast(e.message||e,'err'); renderTxList();
   });
 }
 
 /* —— selection + bulk bar —— */
-function toggleSel(id,on){ if(on) S.review.sel[id]=true; else delete S.review.sel[id]; updateBulkBar(); }
-function selCount(){ return Object.keys(S.review.sel).length; }
-function bulkSelectedIds(){ return Object.keys(S.review.sel); }
-function clearSel(){ S.review.sel={}; }
+function toggleSel(id,on){ if(on) S.tx.sel[id]=true; else delete S.tx.sel[id]; updateBulkBar(); }
+function selCount(){ return Object.keys(S.tx.sel).length; }
+function bulkSelectedIds(){ return Object.keys(S.tx.sel); }
+function clearSel(){ S.tx.sel={}; }
 
 function updateBulkBar(){
   var bar=$('#bulkBar'); if(!bar) return;
@@ -1746,29 +1732,24 @@ function updateBulkBar(){
   add('Reassign','',openBulkReassign);
   add('Set date','',openBulkDate);
   add('Delete','danger',openBulkDelete);
-  add('Clear','ghost',function(){ clearSel(); renderReviewList(); });
-}
-
-function afterReviewMutation(){
-  dropCache();                   // version bumped server-side → drop stale payloads
-  loadReviewAccts(); loadReviewTx(true);   // silent: no skeleton flash over a live list
+  add('Clear','ghost',function(){ clearSel(); renderTxList(); });
 }
 
 function bulkApply(patch){
   var ids=bulkSelectedIds(); if(!ids.length) return;
   // Optimistic: every picked row shows the patched value as loading straight away.
   ids.forEach(function(id){ S.tx.pendingEdits[id]=patch; });
-  closeModal(); clearSel(); renderReviewList();
+  closeModal(); clearSel(); renderTxList();
   function done(){ ids.forEach(function(id){ delete S.tx.pendingEdits[id]; }); }
   gs('api_bulkUpdateTransactions',{ids:ids, patch:patch}).then(function(res){
     done();
     toast('Updated '+res.updated+((res.skipped&&res.skipped.length)?(' · '+res.skipped.length+' skipped'):''),'ok');
-    afterReviewMutation();
-  }).catch(function(e){ done(); toast(e.message||e,'err'); renderReviewList(); });
+    afterMutation();
+  }).catch(function(e){ done(); toast(e.message||e,'err'); renderTxList(); });
 }
 function openBulkRecat(){
   withBoot(function(){
-    var picked=(S.review.rows||[]).filter(function(t){return S.review.sel[t.ID];});
+    var picked=(S.tx.rows||[]).filter(function(t){return S.tx.sel[t.ID];});
     var anyXfer=picked.some(txIsXfer), anyReg=picked.some(function(t){return !txIsXfer(t);});
     if(anyXfer&&anyReg){ // a single category can't be valid for both shapes
       openModal(modalShell('Recategorize '+selCount()+' transactions',
@@ -1803,11 +1784,11 @@ function openBulkDelete(){
     // Optimistic: the rows stay on screen as loading until the backend confirms.
     var ids=bulkSelectedIds();
     ids.forEach(function(id){ S.tx.pendingDeletes[id]=true; });
-    closeModal(); clearSel(); renderReviewList();
+    closeModal(); clearSel(); renderTxList();
     function done(){ ids.forEach(function(id){ delete S.tx.pendingDeletes[id]; }); }
     gs('api_bulkDeleteTransactions',{ids:ids}).then(function(res){
-      done(); toast('Deleted '+res.deleted,'ok'); afterReviewMutation();
-    }).catch(function(e){ done(); toast(e.message||e,'err'); renderReviewList(); });
+      done(); toast('Deleted '+res.deleted,'ok'); afterMutation();
+    }).catch(function(e){ done(); toast(e.message||e,'err'); renderTxList(); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
   openModal(modalShell('Confirm bulk delete', body, [no,yes]));
@@ -2010,8 +1991,8 @@ function openTxModal(t){
   var accs=acctOptions();
   // default account for any new tx = last one used (if it still exists); a draft carried
   // in from the transfer form may have no account yet, so this backfills that too.
-  // Review's account rail is an explicit pick — it beats the last-used default.
-  var wantAcc=(S.screen==='review'&&S.review.filters.account)||prefGet('lastAcct');
+  // An account filter (rail pick or combo) is explicit — it beats the last-used default.
+  var wantAcc=(S.screen==='transactions'&&S.tx.filters.account)||prefGet('lastAcct');
   var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===wantAcc;})?wantAcc:'');
 
   var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
@@ -2174,7 +2155,7 @@ function confirmDelete(t){
       delete S.tx.pendingDeletes[t.ID]; toast('Deleted','ok'); afterMutation();
     }).catch(function(e){
       delete S.tx.pendingDeletes[t.ID]; toast(e.message||e,'err');
-      if(S.screen==='transactions'||S.screen==='review') repaintTxList(); else render();
+      if(S.screen==='transactions') repaintTxList(); else render();
     });
   };
   var no=el('button','btn','Cancel'); no.onclick=function(){ openTxModal(t); };
@@ -2264,11 +2245,9 @@ function afterMutation(){
   dropCache();
   // On the transactions screen do a *silent* reload: the optimistic row already
   // on screen stays put until the fresh server page lands, then swaps in place
-  // (no spinner flash). Other screens fully re-render.
-  if(S.screen==='transactions'){ loadTx(null,true); }
-  // Review is a two-pane screen with filters/selection in the DOM — a full render()
-  // would rebuild it and flash skeletons on every add. Reload the panes in place.
-  else if(S.screen==='review'){ loadReviewAccts(); loadReviewTx(true); }
+  // (no spinner flash) — and a full render() would rebuild the filter/selection
+  // DOM and flash skeletons on every write. Other screens fully re-render.
+  if(S.screen==='transactions'){ loadTx(null,true); if(S.tx.edit) loadTxAccts(); }
   else render();
 }
 

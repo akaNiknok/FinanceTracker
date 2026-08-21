@@ -15,18 +15,14 @@ function api_getDashboard(args) {
   // Net worth uses each account's signed PHP balance (netWorthPhp: assets +,
   // liabilities −). Balances come straight from the sheet's formula columns.
   let netWorth = 0, assets = 0, liabilities = 0, sharesValue = 0;
-  const byType = {}, bySubtype = {};
   accounts.forEach(function (a) {
     const php = (a.netWorthPhp === null || a.netWorthPhp === undefined) ? 0 : a.netWorthPhp;
     if (a.isInvestment) sharesValue += (a.balancePhp || 0); // invested contribution (always asset)
-    const t = a.type || "Unknown", s = a.subtype || "Unknown";
-    byType[t] = (byType[t] || 0) + php;
-    bySubtype[s] = (bySubtype[s] || 0) + php;
     netWorth += php;
     if (a.isLiability) liabilities += php; else assets += php; // liabilities are negative
   });
 
-  // This-month expenses by Segment + trailing-6-month cash flow (income vs
+  // This-month expenses by Segment and by Category + trailing-6-month cash flow (income vs
   // expense per month, ending at the requested month) in the same pass.
   const month = args.month ? String(args.month) : dash_currentMonth_();
   const tz = Session.getScriptTimeZone();
@@ -38,7 +34,7 @@ function api_getDashboard(args) {
     flowByMonth[k] = { income: 0, expense: 0 };
   }
   const tx = su_readObjects_(SHEET_TX);
-  const spendBySegment = {};
+  const spendBySegment = {}, spendByCategory = {};
   tx.forEach(function (r) {
     const m = String(r.Month), type = String(r.Type);
     const f = flowByMonth[m];
@@ -48,8 +44,10 @@ function api_getDashboard(args) {
       else if (type === "Expense") f.expense += php;
     }
     if (m !== month || type !== "Expense") return;
-    const seg = r.Segment || "Unsegmented";
-    spendBySegment[seg] = (spendBySegment[seg] || 0) + Math.abs(acct_num_(r["Amount (PHP)"]));
+    const seg = r.Segment || "Unsegmented", amt = Math.abs(acct_num_(r["Amount (PHP)"]));
+    spendBySegment[seg] = (spendBySegment[seg] || 0) + amt;
+    const cat = r.Category || "Uncategorized";
+    spendByCategory[cat] = (spendByCategory[cat] || 0) + amt;
   });
   const cashflow = flowMonths.map(function (k) {
     return { month: k,
@@ -67,9 +65,8 @@ function api_getDashboard(args) {
     assets: Math.round(assets * 100) / 100,
     liabilities: Math.round(liabilities * 100) / 100,
     sharesValue: Math.round(sharesValue * 100) / 100,
-    balancesByType: dash_round_(byType),
-    balancesBySubtype: dash_round_(bySubtype),
     spendBySegment: dash_round_(spendBySegment),
+    spendByCategory: dash_round_(spendByCategory),
     cashflow: cashflow,
     budgets: api_getBudgets({ month: month }).budgets, // targets + computed actuals, period-aware
     recentTransactions: recent
