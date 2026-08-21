@@ -647,21 +647,55 @@ function cashflowChart(cf,width){
   wrap.appendChild(svg); wrap.appendChild(tip);
   return wrap;
 }
-// Horizontal single-hue category bars (spend by segment) — label left,
-// value outside the bar end (never clipped inside).
-function hbarList(entries){
-  var host=el('div');
-  var max=0; entries.forEach(function(e2){max=Math.max(max,e2[1]);});
-  entries.forEach(function(pair){
-    var r=el('div','hbar');
-    r.appendChild(el('div','hbar-lab',esc(pair[0])));
-    var tr=el('div','hbar-track');
-    tr.innerHTML='<div class="hbar-fill" style="width:'+(max?Math.max(2,pair[1]/max*100):0)+'%"></div>';
-    r.appendChild(tr);
-    r.appendChild(el('div','hbar-val',money(pair[1],true)));
-    host.appendChild(r);
+// Categorical hues in FIXED slot order (validated on --surface: adjacent CVD
+// ΔE 8.4, normal-vision 19.3, all ≥3:1). Slot 7 is the "Other" bucket — the
+// palette is never cycled, so the slice count is capped instead.
+var PIE_HUES=['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300'];
+var PIE_OTHER='var(--text-faint)';
+function pieHue(i){ return i<PIE_HUES.length?PIE_HUES[i]:PIE_OTHER; }
+// Donut of expenses by category: slices ordered biggest-first (so adjacent
+// slices are adjacent palette slots), tail folded into "Other". The legend
+// carries the amount and share, so slice identity is never color-alone.
+// ponytail: no hover tooltip — the legend already shows every number one would
+// carry; native <title> covers the "which slice is that" case.
+function donutChart(entries){
+  var top=entries.slice(0,PIE_HUES.length), rest=entries.slice(PIE_HUES.length);
+  if(rest.length){
+    var o=0; rest.forEach(function(p){o+=p[1];});
+    top.push(['Other ('+rest.length+')',o]);
+  }
+  var total=0; top.forEach(function(p){total+=p[1];});
+  if(!(total>0)) return null;
+
+  var wrap=el('div','donut-wrap');
+  var R=52,SW=22,C=2*Math.PI*R;                       // circumference in user units
+  var svg=svgEl('svg',{class:'donut',viewBox:'0 0 128 128',role:'img',
+    'aria-label':'Expenses by category, '+monthLabel(S.month)});
+  var off=0;
+  top.forEach(function(pair,i){
+    var frac=pair[1]/total, len=frac*C, gap=Math.min(2,len*0.5); // 2px surface gap between slices
+    var c=svgEl('circle',{cx:64,cy:64,r:R,fill:'none',stroke:pieHue(i),'stroke-width':SW,
+      'stroke-dasharray':(len-gap)+' '+(C-len+gap),'stroke-dashoffset':-off,
+      transform:'rotate(-90 64 64)'});
+    var t=svgEl('title'); t.textContent=pair[0]+' — '+money(pair[1],true)+' ('+Math.round(frac*100)+'%)';
+    c.appendChild(t); svg.appendChild(c);
+    off+=len;
   });
-  return host;
+  var mid=el('div','donut-mid','<div class="donut-mid-l">Total</div><div class="donut-mid-v">'+money(total,true)+'</div>');
+  var ring=el('div','donut-ring'); ring.appendChild(svg); ring.appendChild(mid);
+  wrap.appendChild(ring);
+
+  var lg=el('div','donut-legend');
+  top.forEach(function(pair,i){
+    var r=el('div','dl-row');
+    r.innerHTML='<span class="lg-key" style="background:'+pieHue(i)+'"></span>'+
+      '<span class="dl-name">'+esc(pair[0])+'</span>'+
+      '<span class="dl-val">'+money(pair[1],true)+'</span>'+
+      '<span class="dl-pct">'+Math.round(pair[1]/total*100)+'%</span>';
+    lg.appendChild(r);
+  });
+  wrap.appendChild(lg);
+  return wrap;
 }
 // Budget meter: track is a lighter step of the fill's own ramp; the pace notch
 // marks how much of the period has elapsed (spend "should" sit near it).
@@ -700,7 +734,7 @@ function periodPace(period,monthStr){
 
 /* ════════════════════════════════════════════════════════════════════════
  *  DASHBOARD — hierarchy: hero number → KPI row → cash flow → budgets →
- *  where it went → balances → recent. One glance answers "am I okay?".
+ *  expenses by category → recent. One glance answers "am I okay?".
  * ════════════════════════════════════════════════════════════════════════ */
 function renderDashboard(){
   var key='dashboard|'+S.month;
@@ -774,29 +808,15 @@ function renderDashboard(){
       w.appendChild(bc);
     }
 
-    // ── where it went (spend by segment) ──
-    var segs=Object.keys(d.spendBySegment||{}).map(function(k){return [k,d.spendBySegment[k]];})
+    // ── expenses by category (donut) ──
+    var cats=Object.keys(d.spendByCategory||{}).map(function(k){return [k,d.spendByCategory[k]];})
       .sort(function(a,b){return b[1]-a[1];});
-    if(segs.length){
-      var sc=el('div','card');
-      sc.appendChild(el('div','card-h','Where it went'));
-      sc.appendChild(hbarList(segs));
-      w.appendChild(sc);
-    }
-
-    // ── balances by type ──
-    var byType=d.balancesByType||{};
-    if (Object.keys(byType).length){
-      var tc=el('div','card');
-      tc.appendChild(el('div','card-h','Balances by type'));
-      var l=el('div','list');
-      Object.keys(byType).forEach(function(k){
-        var v=byType[k];
-        var r=el('div','litem');
-        r.innerHTML='<div class="grow"><div class="t1">'+esc(k)+'</div></div><div class="amt '+(v<0?'neg':'')+'">'+money(v)+'</div>';
-        l.appendChild(r);
-      });
-      tc.appendChild(l); w.appendChild(tc);
+    var pie=cats.length?donutChart(cats):null;
+    if(pie){
+      var pc=el('div','card');
+      pc.appendChild(el('div','card-h','Expenses by category'));
+      pc.appendChild(pie);
+      w.appendChild(pc);
     }
 
     // ── recent transactions ──
