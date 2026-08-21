@@ -332,6 +332,21 @@ function toast(msg,kind){
 function monthKey(d){return d.getFullYear()+'-'+MONTHS[d.getMonth()];}      // "2026-Jun"
 function monthLabel(m){var p=String(m).split('-');return p.length===2?p[1]+' '+p[0]:m;} // "Jun 2026"
 function monthOptions(){return buildMonthList().map(function(m){return {value:m,label:monthLabel(m)};});}
+/* The period control lives on the screens it actually drives (Dashboard, Budgets),
+ * not the topbar — there it was a silent no-op on the other six screens, since
+ * Transactions/Review own their month as one of four in-screen filters.
+ * Refocus after the repaint: the picker is inside the screen we just replaced, and
+ * arrow-keying a closed <select> fires change per keypress. */
+function monthPickerEl(){
+  var mp=el('select','month-picker'); mp.title='Period';
+  buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=monthLabel(m);mp.appendChild(o);});
+  mp.value=S.month;
+  mp.onchange=function(){
+    S.month=mp.value; S.cache={};
+    Promise.resolve(render()).then(function(){ var n=$('.month-picker'); if(n) n.focus(); });
+  };
+  return mp;
+}
 function buildMonthList(){
   var out=[], now=new Date();
   // Extend back to the oldest ledger month so older history is reachable; floor at
@@ -407,10 +422,6 @@ function boot(){
   });
   $('#refreshBtn').addEventListener('click', refresh);
   $('#fab').addEventListener('click', function(){ withBoot(function(){ openTxModal(null); }); });
-  var mp=$('#monthPicker');
-  buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=monthLabel(m);mp.appendChild(o);});
-  mp.value=S.month;
-  mp.addEventListener('change', function(){ S.month=mp.value; S.cache={}; render(); });
 
   // Browser back/forward moves between screens. Plain History API now that the app
   // is served from its own origin instead of the GAS sandbox iframe (which blocked
@@ -696,8 +707,10 @@ function renderDashboard(){
   if(!S.cache[key]) loading('dashboard');
   return cachedCall(key, function(){return gs('api_getDashboard',{month:S.month});}, function(d){
     var w=el('div','screen');
-    w.appendChild(el('div','screen-title','Dashboard'));
-    w.appendChild(el('div','screen-sub',esc(monthLabel(S.month))));
+    var head=el('div','screen-head');
+    head.appendChild(el('div','screen-title','Dashboard'));
+    head.appendChild(monthPickerEl());
+    w.appendChild(head);
 
     var cf=d.cashflow||[];
     var cur=cf.length?cf[cf.length-1]:null, prev=cf.length>1?cf[cf.length-2]:null;
@@ -1073,10 +1086,13 @@ function renderBudgets(){
     function(payload){
     var bg=payload.bg, rec=payload.rec;
     var w=el('div','screen');
-    w.appendChild(el('div','screen-title','Budgets'));
+    var head=el('div','screen-head');
+    head.appendChild(el('div','screen-title','Budgets'));
+    head.appendChild(monthPickerEl());
+    w.appendChild(head);
     var now=new Date(), daysLeft=(bg.month===monthKey(now))
       ? (new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()) : null;
-    w.appendChild(el('div','screen-sub','Period '+esc(monthLabel(bg.month))+' · planning income '+money(bg.incomePhp,true)+'/mo'+
+    w.appendChild(el('div','screen-sub','Planning income '+money(bg.incomePhp,true)+'/mo'+
       (daysLeft!=null?(' · '+daysLeft+' day'+(daysLeft===1?'':'s')+' left'):'')));
 
     var pace=periodPace('Monthly',bg.month);
@@ -1204,7 +1220,7 @@ function renderTax(){
     });
 
     var w=el('div','screen');
-    var head=el('div','tax-head');
+    var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Tax · BIR Ledger'));
     var addBtn=el('button','btn sm primary','+ Add row');
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
