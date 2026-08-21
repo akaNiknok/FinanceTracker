@@ -328,16 +328,16 @@ table.tbl td.editing{padding:0}
 @keyframes pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
 @keyframes shimmer{to{background-position:-200% 0}}
 
-/* ── Review (accounts + transactions side-by-side) ───────────────────────── */
-.review-split{display:grid;grid-template-columns:1fr;gap:14px}
-.rev-accts{max-height:320px;overflow:auto}        /* capped on phone so it doesn't dominate */
-.rev-tx{min-width:0}
+/* ── Transactions edit mode (account rail beside the list) ───────────────── */
+.tx-split{display:grid;grid-template-columns:1fr;gap:14px}
+.tx-split>.card{min-width:0}
+.tx-rail{max-height:320px;overflow:auto}          /* capped on phone so it doesn't dominate */
 .rail-grp{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-faint);font-weight:600;margin:10px 0 2px;padding:0 4px}
 .litem.rail .t1{font-size:13.5px}
 .litem.rail .ic{width:30px;height:30px;font-size:13px}
 .litem.sel{background:rgba(91,140,255,.12);border-radius:10px}
 .litem.rail.sel{background:rgba(91,140,255,.16)}
-.litem.rev{overflow:visible}                       /* let inline-edit dropdown escape the row */
+.litem.edit{overflow:visible}                      /* let inline-edit dropdown escape the row */
 .tx-check{width:17px;height:17px;flex:none;accent-color:var(--accent);cursor:pointer;margin:0}
 .sel-all{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-dim);cursor:pointer}
 .sel-all input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
@@ -367,8 +367,8 @@ table.tbl td.editing{padding:0}
 
 /* ── Responsive: tablet & up → sidebar layout ────────────────────────────── */
 @media(min-width:860px){
-  .review-split{grid-template-columns:300px minmax(0,1fr);align-items:start}
-  .rev-accts{position:sticky;top:0;max-height:calc(100vh - 160px)}
+  .tx-split{grid-template-columns:300px minmax(0,1fr);align-items:start}
+  .tx-rail{position:sticky;top:0;max-height:calc(100vh - 160px)}
   #app{grid-template-columns:var(--nav-w) minmax(0,1fr);grid-template-rows:auto 1fr;
     grid-template-areas:"nav topbar" "nav main"}
   /* Sidebar spans both grid rows, so it starts behind the status bar too. */

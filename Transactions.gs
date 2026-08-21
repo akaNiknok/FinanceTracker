@@ -135,6 +135,7 @@ function api_listTransactions(args) {
   const account  = args.account  ? String(args.account) : "";
   const category = args.category ? String(args.category) : "";
   const segment  = args.segment  ? String(args.segment) : "";
+  const type     = args.type     ? String(args.type) : "";   // Income / Expense / Transfer
   const search   = args.search   ? String(args.search).toLowerCase() : "";
 
   const id       = args.id       ? String(args.id) : "";   // ?tx= deep link (Telegram "Edit details")
@@ -145,6 +146,7 @@ function api_listTransactions(args) {
     if (account  && String(r.Account)  !== account && String(r.ToAccount) !== account) return false;
     if (category && String(r.Category) !== category) return false;
     if (segment  && String(r.Segment)  !== segment) return false;
+    if (type     && String(r.Type)     !== type) return false;
     if (search) {
       const hay = (String(r.Description) + " " + String(r.Category)).toLowerCase();
       if (hay.indexOf(search) === -1) return false;
