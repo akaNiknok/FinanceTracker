@@ -149,17 +149,26 @@ button{font-family:inherit;cursor:pointer}
 /* Donut (expenses by category) — ring + legend; legend carries the numbers,
  * so identity is never color-alone. Stacks under the ring on a phone. */
 .donut-wrap{display:flex;gap:22px;align-items:center;flex-wrap:wrap}
-.donut-ring{position:relative;width:168px;flex:0 0 168px;margin:0 auto}
+.donut-ring{position:relative;width:224px;flex:0 0 224px;margin:0 auto}
 .donut{display:block;width:100%;height:auto}
 .donut-mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none}
-.donut-mid-l{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-faint)}
-.donut-mid-v{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
+.donut-mid-l{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-faint)}
+.donut-mid-v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
 .donut-legend{flex:1 1 240px;min-width:0}
 .dl-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto 38px;gap:10px;align-items:center;padding:5px 0;font-size:13px}
 .dl-row .lg-key{margin:0}
 .dl-name{color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dl-val{font-variant-numeric:tabular-nums;color:var(--text)}
 .dl-pct{font-variant-numeric:tabular-nums;color:var(--text-faint);text-align:right}
+/* "Other" drill-down: a native <details>, so keyboard and screen readers work
+   without JS. Own marker (the default triangle sits outside the row grid). */
+.dl-drill>summary{list-style:none;cursor:pointer;border-radius:8px}
+.dl-drill>summary::-webkit-details-marker{display:none}
+.dl-drill>summary:hover{background:var(--surface-2)}
+.dl-drill>summary .dl-name::after{content:' ▸';color:var(--text-faint)}
+.dl-drill[open]>summary .dl-name::after{content:' ▾'}
+.dl-sub{padding-left:19px;font-size:12.5px}
+.dl-sub .lg-key{opacity:.5}
 
 /* ── Meters (budgets / utilization): track = lighter step of the same ramp ── */
 .meter{position:relative;height:10px;border-radius:6px;background:rgba(91,140,255,.15);margin-top:9px}
