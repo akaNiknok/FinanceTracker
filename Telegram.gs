@@ -514,7 +514,10 @@ function tg_prompt_(unixDate) {
     "10. If the message is none of the four intents, set error to a short reason and leave the rest null",
     '11. Description: use normal capitalization even if the source shouts ("SM SUPERMARKET" -> "SM Supermarket");',
     "    keep all-caps only for names that are genuinely all-caps (acronyms, brands like BPI, SM, GCash)",
-    "12. Leave reference/confirmation/transaction numbers out of the Description"
+    "12. Leave reference/confirmation/transaction numbers out of the Description",
+    "13. Leave Description empty when it would only restate the Category or the accounts",
+    '    ("Transfer to Maribank" for a transfer to Maribank, "Cashback" on Income: Cashback).',
+    "    Only describe what the Category and Account do not already say (merchant, item, reason)"
   ].join("\n");
 }
 
@@ -523,10 +526,11 @@ function tg_prompt_(unixDate) {
 function tg_receipt_(p, status) {
   const lines = [status === "duplicate" ? "✦ *Already logged*" : "✦ *Logged*",
                  "› _" + p.Date + "_",
-                 "› _" + p.Category + "_",
-                 "› _" + (p.Description || "") + "_",
-                 "› _" + p.Account + "_",
-                 "› `" + p.Amount + "`"];
+                 "› _" + p.Category + "_"];
+  // A blank Description is normal (the Category/Account already say it) — no empty line.
+  if (p.Description) lines.push("› _" + p.Description + "_");
+  lines.push("› _" + p.Account + "_",
+             "› `" + p.Amount + "`");
   if (p.ToAccount) lines.push("› To: _" + p.ToAccount + "_");
   if (p.ToAmount)  lines.push("› `" + p.ToAmount + "`");
   return lines.join("\n");

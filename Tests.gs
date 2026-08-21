@@ -218,6 +218,10 @@ function test_telegram() {
                               Account: "Maya", Amount: 250, ToAccount: null, ToAmount: null }, "success");
   if (plain.indexOf("✦ *Logged*") !== 0 || plain.indexOf("To:") !== -1 || plain.split("\n").length !== 6)
     throw new Error("tg_receipt_ FAIL (plain): " + plain);
+  const bare = tg_receipt_({ Date: "2026-07-29", Category: "Income: Cashback", Description: "",
+                             Account: "Maya", Amount: 12, ToAccount: null, ToAmount: null }, "success");
+  if (bare.indexOf("__") !== -1 || bare.split("\n").length !== 5)
+    throw new Error("tg_receipt_ FAIL (no description): " + bare);
   const xfer = tg_receipt_({ Date: "2026-07-29", Category: "Investment: Growth", Description: "top up",
                              Account: "BPI", Amount: 5000, ToAccount: "IBKR", ToAmount: 81 }, "duplicate");
   if (xfer.indexOf("Already logged") === -1 || xfer.indexOf("› To: _IBKR_") === -1 || xfer.indexOf("`81`") === -1)
