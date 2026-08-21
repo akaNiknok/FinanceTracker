@@ -343,7 +343,10 @@ function monthPickerEl(){
   buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=monthLabel(m);mp.appendChild(o);});
   mp.value=S.month;
   mp.onchange=function(){
-    S.month=mp.value; S.cache={};
+    // Do NOT wipe S.cache here: 'dashboard|<month>' / 'budgets|<month>' are already
+    // month-scoped keys, so flipping the picker repaints a visited month from cache
+    // (version-gated) instead of refetching behind a skeleton.
+    S.month=mp.value;
     Promise.resolve(render()).then(function(){ var n=$('.month-picker'); if(n) n.focus(); });
   };
   return mp;
@@ -666,6 +669,9 @@ function pieHue(i){ return i<PIE_HUES.length?PIE_HUES[i]:PIE_OTHER; }
 // carries the amount and share, so slice identity is never color-alone.
 // ponytail: no hover tooltip — the legend already shows every number one would
 // carry; native <title> covers the "which slice is that" case.
+// "Other" drills down through a native <details> (keyboard + screen reader for
+// free); its tail stays a list rather than more slices because the palette is
+// capped at 6 and is never cycled.
 function donutChart(entries){
   var top=entries.slice(0,PIE_HUES.length), rest=entries.slice(PIE_HUES.length);
   if(rest.length){
@@ -679,7 +685,7 @@ function donutChart(entries){
   var R=52,SW=22,C=2*Math.PI*R;                       // circumference in user units
   var svg=svgEl('svg',{class:'donut',viewBox:'0 0 128 128',role:'img',
     'aria-label':'Expenses by category, '+monthLabel(S.month)});
-  var off=0;
+  var off=0, otherSlice=null;
   top.forEach(function(pair,i){
     var frac=pair[1]/total, len=frac*C, gap=Math.min(2,len*0.5); // 2px surface gap between slices
     var c=svgEl('circle',{cx:64,cy:64,r:R,fill:'none',stroke:pieHue(i),'stroke-width':SW,
@@ -687,21 +693,33 @@ function donutChart(entries){
       transform:'rotate(-90 64 64)'});
     var t=svgEl('title'); t.textContent=pair[0]+' — '+money(pair[1],true)+' ('+Math.round(frac*100)+'%)';
     c.appendChild(t); svg.appendChild(c);
+    if(rest.length&&i===top.length-1) otherSlice=c;
     off+=len;
   });
   var mid=el('div','donut-mid','<div class="donut-mid-l">Total</div><div class="donut-mid-v">'+money(total,true)+'</div>');
   var ring=el('div','donut-ring'); ring.appendChild(svg); ring.appendChild(mid);
   wrap.appendChild(ring);
 
-  var lg=el('div','donut-legend');
-  top.forEach(function(pair,i){
-    var r=el('div','dl-row');
-    r.innerHTML='<span class="lg-key" style="background:'+pieHue(i)+'"></span>'+
+  function dlRow(pair,color,cls){
+    var r=el('div','dl-row'+(cls?' '+cls:''));
+    r.innerHTML='<span class="lg-key" style="background:'+color+'"></span>'+
       '<span class="dl-name">'+esc(pair[0])+'</span>'+
       '<span class="dl-val">'+money(pair[1],true)+'</span>'+
       '<span class="dl-pct">'+Math.round(pair[1]/total*100)+'%</span>';
-    lg.appendChild(r);
+    return r;
+  }
+  var lg=el('div','donut-legend'), det=null;
+  top.forEach(function(pair,i){
+    if(!(rest.length&&i===top.length-1)){ lg.appendChild(dlRow(pair,pieHue(i))); return; }
+    det=el('details','dl-drill');
+    var sm=el('summary'); sm.appendChild(dlRow(pair,PIE_OTHER)); det.appendChild(sm);
+    rest.forEach(function(p){ det.appendChild(dlRow(p,PIE_OTHER,'dl-sub')); });
+    lg.appendChild(det);
   });
+  if(det&&otherSlice){
+    otherSlice.style.cursor='pointer';
+    otherSlice.onclick=function(){ det.open=!det.open; };
+  }
   wrap.appendChild(lg);
   return wrap;
 }
