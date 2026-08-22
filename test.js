@@ -52,6 +52,38 @@ console.log(failed
   ].forEach(function (c) {
     if (cacheableRead(c[0], q(c[1])) !== c[2]) { failed++; console.error("FAIL cacheableRead: " + c[3]); }
   });
-  if (!failed) console.log("Worker cacheableRead guard passed.");
+  // The other half of the same contract, client side: gs() must stamp `_v` ONLY when
+  // verKnown(). A version we hold but have not confirmed may predate another device's
+  // write, and stamping it reads that device's pre-write bucket out of KV — the exact
+  // cross-device staleness reported after the first deploy. app.js runs in a vm here
+  // because the bug was in what gs() BUILDS, which a source-text check would have missed.
+  const noop = function () {};
+  const app = {
+    console: { log: noop, warn: noop, error: noop },
+    navigator: {}, window: { addEventListener: noop },
+    document: { addEventListener: noop, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    setTimeout, clearTimeout, Date, Math, JSON, encodeURIComponent, URLSearchParams,
+    history: {}, location: { search: "", href: "https://x/" }
+  };
+  app.globalThis = app;
+  let seen = "";
+  app.fetch = function (u) { seen = u; return Promise.resolve({ status: 200, json: () => Promise.resolve({ status: "ok" }) }); };
+  vm.createContext(app);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "worker", "public", "app.js"), "utf8"), app, { filename: "app.js" });
+
+  const read = async function (action, verAt) { app.S.dataVersion = 41; app.S._verAt = verAt; seen = ""; await app.gs("api_" + action, {}); return seen; };
+  const stamped = (u) => /[?&]_v=41(&|$)/.test(u);
+  const cases = [
+    ["getDashboard", Date.now(),        true,  "a confirmed version is stamped"],
+    ["getDashboard", 0,                 false, "an unconfirmed version is NEVER stamped (fill(null))"],
+    ["getDashboard", Date.now() - 9000, false, "a version older than VER_TTL is not stamped"],
+    ["getDataVersion", Date.now(),      false, "getDataVersion never carries _v"]
+  ];
+  for (const c of cases) {
+    if (stamped(await read(c[0], c[1])) !== c[2]) { failed++; console.error("FAIL gs _v stamp: " + c[3]); }
+  }
+
+  if (!failed) console.log("Worker cache guards passed (cacheableRead + gs _v stamping).");
   process.exit(failed ? 1 : 0);
 })();

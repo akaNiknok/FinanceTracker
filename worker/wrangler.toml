@@ -21,6 +21,6 @@ run_worker_first = ["/api", "/login", "/tg"]
 # cacheableRead() in worker.js. Optional: unbound, /api just proxies as before.
 #   npx wrangler kv namespace create API_CACHE   → paste the id below
 # NOT the Cache API: caches.default is a silent no-op on a .workers.dev subdomain.
-# [[kv_namespaces]]
-# binding = "API_CACHE"
-# id = "<paste the id from the command above>"
+[[kv_namespaces]]
+binding = "API_CACHE"
+id = "414311e8408f43679204a86377b6c414"
