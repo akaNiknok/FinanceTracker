@@ -141,6 +141,20 @@ Use `npx wrangler secret put <NAME>` in the `worker/` folder.
 
 For `npx wrangler dev`, put the same three names in `worker/.dev.vars`. Git ignores this file.
 
+### Cloudflare KV cache (optional)
+
+The Worker can keep the read replies in a KV namespace. This makes a second device, or a device that a person cleared, much faster. The app operates correctly without the namespace. It only becomes slower.
+
+To add the namespace, run this command in the `worker/` folder:
+
+```bash
+npx wrangler kv namespace create API_CACHE
+```
+
+The command prints an id. Put the id in `worker/wrangler.toml`, in the `kv_namespaces` block, then remove the comment marks from the three lines of that block. Then run `npx wrangler deploy`.
+
+The Worker never clears this cache. Each key holds the data version, thus a write makes a new key, and an old reply cannot be read again. Each entry expires after 10 minutes.
+
 ### Apps Script triggers
 
 Add these two triggers manually in the editor. They are not in the source code.
@@ -195,9 +209,10 @@ The command sends the code to Apps Script, deploys the same deployment id, deplo
 | The app starts, but each request fails. | The secret `GAS_URL` is old, usually because a person made a new deployment. Run `tg_gasEndpoint()`, then set `GAS_URL` again. |
 | The code 401 on each request. | A person changed `API_TOKEN` but not `GAS_URL`. To recover quickly, set `ENFORCE_TOKEN` to `false`. |
 | A change is not in the live system. | You did not deploy. `npm run release` deploys the two halves. |
+| The app shows data that is too old. | The KV cache holds an entry for a maximum of 10 minutes. To be sure, push the refresh button. Do not use the Cloudflare Cache API here, because it does nothing on a `workers.dev` address. |
 | The values in one column are incorrect. | The formula in the workbook. The code does not calculate the derived values. |
 
-**Free plan limits.** Apps Script gives approximately 90 minutes of trigger time each day, and the Gmail job uses 6 to 10 percent. Cloudflare permits 100 000 Worker requests each day, and only `/api`, `/login` and `/tg` count. Gemini has a limit for each key.
+**Free plan limits.** Apps Script gives approximately 90 minutes of trigger time each day, and the Gmail job uses 6 to 10 percent. Cloudflare permits 100 000 Worker requests each day, and only `/api`, `/login` and `/tg` count. Cloudflare KV permits 100 000 reads and 1 000 writes each day. Gemini has a limit for each key.
 
 ## How to build the system again
 
@@ -209,7 +224,7 @@ The manifest must keep `executeAs: USER_DEPLOYING` and `access: ANYONE_ANONYMOUS
 4. Deploy as a Web App with **execute as me** and **access: anyone (anonymous)**.
 5. Put the deployment id in `.deploymentid`.
 6. Set each script property, then add the two triggers.
-7. Make the Cloudflare Worker, set the three secrets, then run `npx wrangler deploy`.
+7. Make the Cloudflare Worker, set the three secrets, then run `npx wrangler deploy`. The KV namespace is optional.
 8. Make the bot with BotFather, set the Telegram properties, then run `tg_setWebhook`.
 9. Make the Gmail label and the Gmail filter.
 

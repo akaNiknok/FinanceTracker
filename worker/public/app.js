@@ -20,6 +20,11 @@ function gs(fn, arg, _retried){
     Object.keys(arg || {}).forEach(function(k){
       if (arg[k] != null && arg[k] !== '') url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(arg[k]);
     });
+    // Edge-cache bucket for the Worker (see cacheableRead there). Version-scoped, so a
+    // bumped DATA_VERSION can never be answered with a pre-write payload. Omitted when
+    // the version isn't known yet, and never sent on getDataVersion itself — that call
+    // is what tells us the version moved, so it has to reach GAS every time.
+    if (S.dataVersion != null && action !== 'getDataVersion') url += '&_v=' + encodeURIComponent(S.dataVersion);
     init = { method:'GET' };
   } else {
     body = arg ? JSON.parse(JSON.stringify(arg)) : {};

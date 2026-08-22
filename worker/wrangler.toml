@@ -16,3 +16,11 @@ compatibility_date = "2026-07-28"
 [assets]
 directory = "./public"
 run_worker_first = ["/api", "/login", "/tg"]
+
+# Edge read cache for /api. Version-keyed, so nothing here is ever purged — see
+# cacheableRead() in worker.js. Optional: unbound, /api just proxies as before.
+#   npx wrangler kv namespace create API_CACHE   → paste the id below
+# NOT the Cache API: caches.default is a silent no-op on a .workers.dev subdomain.
+# [[kv_namespaces]]
+# binding = "API_CACHE"
+# id = "<paste the id from the command above>"

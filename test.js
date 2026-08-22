@@ -36,4 +36,22 @@ sandbox.PURE_TESTS.forEach(function (name) {
 console.log(failed
   ? failed + " of " + sandbox.PURE_TESTS.length + " pure test(s) FAILED"
   : "All " + sandbox.PURE_TESTS.length + " pure tests passed.");
-process.exit(failed ? 1 : 0);
+
+// The Worker is ESM and lives outside the .gs namespace, so it gets its own tiny
+// check here rather than a second runner. Only one predicate is worth guarding:
+// caching getDataVersion would freeze the SPA's freshness oracle app-wide, and it
+// would fail silently — stale screens, no error anywhere.
+(async function () {
+  const { pathToFileURL } = require("url");
+  const { cacheableRead } = await import(pathToFileURL(path.join(__dirname, "worker", "worker.js")).href);
+  const q = (s) => new URLSearchParams(s);
+  [["GET", "action=getDashboard&month=2026-Aug&_v=41", true,  "version-stamped read caches"],
+   ["GET", "action=getDataVersion&_v=41",              false, "getDataVersion must never cache"],
+   ["GET", "action=getDashboard&month=2026-Aug",       false, "no _v (cold boot) bypasses"],
+   ["POST", "action=createTransaction&_v=41",          false, "writes never cache"]
+  ].forEach(function (c) {
+    if (cacheableRead(c[0], q(c[1])) !== c[2]) { failed++; console.error("FAIL cacheableRead: " + c[3]); }
+  });
+  if (!failed) console.log("Worker cacheableRead guard passed.");
+  process.exit(failed ? 1 : 0);
+})();

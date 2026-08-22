@@ -32,6 +32,10 @@
  *   APP_PASS      — the SPA passphrase. Unset = /api is closed, not open.
  *   SECRET_TOKEN  — optional; must equal the secret_token registered by
  *                   tg_setWebhook. Set both or neither.
+ *
+ * Bindings (wrangler.toml):
+ *   API_CACHE     — optional KV namespace, the edge read cache. Unbound = no
+ *                   caching, everything still works; see cacheableRead().
  */
 
 const COOKIE = "ft_auth";
@@ -46,7 +50,7 @@ export default {
     // So set WEBHOOK_URL to <worker>/tg and re-run tg_setWebhook.
     if (request.method === "POST" && path === "/tg") return telegram(request, env, ctx);
     if (path === "/login") return login(request, env);
-    if (path === "/api") return api(request, env);
+    if (path === "/api") return api(request, env, ctx);
     return new Response("not found", { status: 404 });   // assets never reach here
   }
 };
@@ -86,8 +90,32 @@ async function login(request, env) {
   });
 }
 
+/**
+ * Is this GET worth putting in the edge cache?
+ *
+ * `_v` is the SPA's DATA_VERSION, stamped onto every read by gs(). Keying on it
+ * means a write bumps the version, the next read asks for a different key, and a
+ * stale payload becomes unreachable by construction — no purge logic, no TTL race,
+ * and the payload carries its own `version` anyway, so the key is only a bucket
+ * hint and can never be the thing that decides freshness. A request with no `_v`
+ * (a cold boot that has not learned the version yet) simply bypasses.
+ *
+ * getDataVersion is the exception and MUST stay one: it is the oracle the SPA
+ * gates its own cache on, so caching it would make every other entry
+ * unfalsifiable — the app would sit on stale data until the entry expired.
+ *
+ * KV rather than the Cache API on purpose: caches.default is a silent no-op on a
+ * .workers.dev subdomain (it needs a zone, i.e. a domain, which this deploy has
+ * no more than Cloudflare Access did). Swap it back if a domain ever appears.
+ */
+export function cacheableRead(method, params) {
+  return method === "GET" && params.has("_v") && params.get("action") !== "getDataVersion";
+}
+
+const CACHE_TTL = 600;   // seconds; entries are version-keyed, so this only bounds junk
+
 /** Gated proxy to GAS. GET ?action=<read>&… / POST {action,…}. */
-async function api(request, env) {
+async function api(request, env, ctx) {
   if (!env.APP_PASS) return json({ status: "error", message: "APP_PASS is not set on the Worker." }, 503);
   const want = `${COOKIE}=${await sha256(env.APP_PASS)}`;
   if (!(request.headers.get("Cookie") || "").split(/;\s*/).includes(want)) {
@@ -95,6 +123,19 @@ async function api(request, env) {
   }
 
   const src = new URL(request.url);
+  const key = src.pathname + src.search;
+  // ponytail: hit rate is modest by design — the SPA's own persisted S.cache already
+  // covers repeat reads on one device, so this earns its keep on the SECOND device, a
+  // wiped client and post-Refresh. A >400-char key (a long search filter) just skips
+  // rather than risking KV's 512-byte key limit. Move to a shared read model in D1
+  // only if that stops being enough.
+  const kv = env.API_CACHE;
+  const hot = !!kv && key.length <= 400 && cacheableRead(request.method, src.searchParams);
+  if (hot) {
+    const hit = await kv.get(key, { cacheTtl: CACHE_TTL });
+    if (hit) return json(hit);
+  }
+
   const gas = new URL(env.GAS_URL);                    // <exec>?action=telegram&token=<tok>
   const target = new URL(gas.origin + gas.pathname);
   const token = gas.searchParams.get("token");
@@ -107,6 +148,7 @@ async function api(request, env) {
     init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   } else {
     src.searchParams.forEach((v, k) => target.searchParams.set(k, v));
+    target.searchParams.delete("_v");                  // ours; rt_args_ never needs to see it
     if (token) target.searchParams.set("token", token);
   }
 
@@ -114,7 +156,16 @@ async function api(request, env) {
   // by default and the JSON comes off the final hop. This is the whole reason the
   // browser cannot talk to GAS itself.
   const res = await fetch(target, init);
-  return json(await res.text(), res.status);
+  const body = await res.text();
+  // GAS answers a payload it refused with HTTP 200 + {status:"error"} — never cache that.
+  if (hot && res.ok && !isError(body)) {
+    ctx.waitUntil(kv.put(key, body, { expirationTtl: CACHE_TTL }));
+  }
+  return json(body, res.status);
+}
+
+function isError(body) {
+  try { return JSON.parse(body).status === "error"; } catch { return true; }
 }
 
 const json = (body, status = 200) =>
