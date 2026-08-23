@@ -1,17 +1,18 @@
 /* ============================================================================
  * app.js — the FinanceTracker SPA.
- * Vanilla JS, served as a static asset by the Cloudflare Worker, which also
- * proxies /api to the Apps Script service layer (same origin: no CORS). Eight
- * screens: Dashboard · Transactions · Budgets · Accounts · Exchange · Tax
- * · Exchange · Tax.
+ * Vanilla JS, served as a static asset by the Cloudflare Worker, which since
+ * v2.0.0 IS the backend: /api runs against Cloudflare D1, not Apps Script. The
+ * JSON contract did not change with that swap, so nothing in this file did
+ * either, apart from the new Admin screen. Seven screens: Dashboard ·
+ * Transactions · Budgets · Accounts · Swap · Tax · Admin.
  * ========================================================================== */
 
 /* ── server bridge: /api → Promise ───────────────────────────────────────────
- * fn is the GAS handler name ('api_getDashboard'); the Worker takes the action
- * without the prefix. Reads go over GET so they stay cacheable — the `get`/`list`
- * name prefix IS the rule, matching Router.gs ROUTES_READ_, so there's no second
- * list to keep in sync. Writes POST the args as JSON. The Worker adds the GAS
- * token; nothing secret reaches this file. */
+ * fn is the handler name ('api_getDashboard'); the Worker takes the action without
+ * the prefix. Reads go over GET, writes POST the args as JSON, and the `get`/`list`
+ * name prefix IS the rule that picks between them — it matches ROUTES_READ in
+ * worker.js, so there's no second list to keep in sync. Nothing secret reaches
+ * this file. */
 function gs(fn, arg, _retried){
   var action = fn.replace(/^api_/, '');
   var read = /^(get|list)/.test(action);
@@ -20,20 +21,10 @@ function gs(fn, arg, _retried){
     Object.keys(arg || {}).forEach(function(k){
       if (arg[k] != null && arg[k] !== '') url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(arg[k]);
     });
-    // Edge-cache bucket for the Worker (see cacheableRead there). Version-scoped, so a
-    // bumped DATA_VERSION can never be answered with a pre-write payload.
-    //
-    // The gate is verKnown(), NOT `S.dataVersion != null`, and that distinction is the
-    // whole correctness of the shared cache. An UNCONFIRMED version is exactly what
-    // cachedCall means by fill(null): we hold a number, but it may predate someone
-    // else's write. Stamping it would read another device's pre-write bucket out of KV
-    // and paint data we already had reason to distrust — a private per-device cache
-    // could not do that, a shared one can. No stamp = bypass = straight to GAS, which
-    // is the only honest answer when we do not know what version we are on.
-    //
-    // getDataVersion never carries it either: that call is what tells us the version
-    // moved, so it has to reach GAS every time.
-    if (verKnown() && action !== 'getDataVersion') url += '&_v=' + encodeURIComponent(S.dataVersion);
+    // No `_v` cache-bucket stamp any more: the Worker's KV read cache went away with
+    // Apps Script in v2.0.0 (it existed to hide GAS latency, and D1 is the thing it was
+    // faking). The version gate that mattered is still here, one level up in
+    // cachedCall — it is also what makes the persisted cache the offline story.
     init = { method:'GET' };
   } else {
     body = arg ? JSON.parse(JSON.stringify(arg)) : {};
@@ -187,7 +178,7 @@ function unlock(){
  * `loader` is a thunk returning a Promise (so callers can Promise.all).
  *
  * Round trips are the whole cost here — every /api call is a fresh GAS execution
- * behind the Worker — so two things keep them to a minimum: a cold key takes the version
+ * a round trip — so two things keep them to a minimum: a cold key takes the version
  * straight out of its own payload (read handlers stamp `version`; the separate
  * api_getDataVersion is only a fallback for composite payloads), and a version
  * checked within VER_TTL is trusted, which kills the duplicate pings from a
@@ -234,7 +225,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 1;
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 2;   // 2 = the D1 cutover; forces one clean start
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -278,7 +269,9 @@ var S = {
   // edit: the Transactions screen's edit mode (account rail + checkboxes + inline edit);
   // sel: ID → true for the bulk-action selection. pending*: optimistic in-flight writes.
   tx:{ rows:[], total:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
-       pendingAdds:[], pendingDeletes:{}, pendingEdits:{} }
+       pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },
+  // admin: which whitelisted table the Admin grid is showing (sticky, like the screen)
+  admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })() }
 };
 
 var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
@@ -489,8 +482,8 @@ function refresh(){
  * validates against, so a retired name can't stick in the URL or in localStorage.
  * (Function declarations hoist, so naming them here at load time is safe.) */
 var SCREEN_FNS={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
-                budgets:renderBudgets,exchange:renderExchange,tax:renderTax};
-var SECONDARY_SCREENS={exchange:1,tax:1};
+                budgets:renderBudgets,exchange:renderExchange,tax:renderTax,admin:renderAdmin};
+var SECONDARY_SCREENS={exchange:1,tax:1,admin:1};
 /* Last screen, so a browser reload comes back where you were. The parent URL
  * (?screen=, pushed below) is the primary channel; localStorage covers reloads
  * that drop it — an iOS home-screen shortcut reopens its start_url, not the
@@ -1690,6 +1683,157 @@ function exCalc(){
     '</div>'+
     '<div class="hint" style="margin-top:10px">Any rate from '+num(wiseNetPhp/usd)+' to '+num(broWiseCostPhp/usd)+
       ' beats Wise for you both; at mid-market ('+num(rate)+') you each keep your own avoided fee.</div>';
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  ADMIN — a generic CRUD grid over the server-side table whitelist.
+ *
+ *  The Sheet used to be the admin UI: adding a category, retiring an account,
+ *  correcting a budget target or typing a BSP rate were all "open the tab and
+ *  edit the cell". D1 has no such tab, so this is it. Deliberately generic and
+ *  deliberately dumb — the server decides which tables exist and which columns
+ *  are writable (TABLES in worker/src/api.js), and this screen just renders
+ *  whatever it is told. There is no SQL console: anything this cannot express is
+ *  `wrangler d1 execute` from the owner's machine.
+ *
+ *  `transactions` is listed but read-only apart from delete: it has real handlers
+ *  with validation, FX stamping and version bumping, and this grid must not be a
+ *  way around them.
+ * ════════════════════════════════════════════════════════════════════════ */
+var ADMIN_TABLES=['accounts','categories','account_types','budgets','recurring',
+                  'ledger','prices','meta','transactions','email_quotes'];
+function adminTable(){ return S.admin.table||ADMIN_TABLES[0]; }
+
+function renderAdmin(){
+  var t=adminTable();
+  if(!S.cache['table|'+t]) loading('table');
+  return cachedCall('table|'+t, function(){ return gs('api_listTable',{table:t,limit:500}); }, function(res){
+    var w=el('div','screen');
+    var head=el('div','screen-head');
+    head.appendChild(el('div','screen-title','Admin · '+t));
+    var actions=el('div','btn-row');
+    if((res.addable||[]).length){
+      var add=el('button','btn sm primary','+ Add row');
+      add.onclick=function(){ adminAddRow(res); };
+      actions.appendChild(add);
+    }
+    var csv=el('button','btn sm','↓ CSV');
+    csv.onclick=function(){ downloadCsv(t+'.csv', res.cols, res.rows); };
+    actions.appendChild(csv);
+    head.appendChild(actions);
+    w.appendChild(head);
+    w.appendChild(el('div','screen-sub','The tables behind the app. '+res.total+' row'+(res.total===1?'':'s')+
+      ' · tap an editable cell to change it'+((res.editable||[]).length?'':' (this table is read-only)')));
+
+    var picker=el('div','btn-row'); picker.style.marginBottom='14px';
+    ADMIN_TABLES.forEach(function(name){
+      var b=el('button','btn sm'+(name===t?' primary':''),esc(name));
+      b.onclick=function(){ S.admin.table=name; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
+      picker.appendChild(b);
+    });
+    w.appendChild(picker);
+
+    if(!res.rows.length){ w.appendChild(el('div','empty','No rows.')); paint(w); return; }
+    var editable={}; (res.editable||[]).forEach(function(c){ editable[c]=true; });
+    var money={}; (res.money||[]).forEach(function(c){ money[c]=true; });
+
+    var card=el('div','card'), wrap=el('div','tbl-wrap'), tbl=el('table','tbl');
+    var htr=el('tr');
+    res.cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(money[c]?' <span class="faint">₱</span>':''))); });
+    htr.appendChild(el('th'));
+    var thead=el('thead'); thead.appendChild(htr); tbl.appendChild(thead);
+
+    var tb=el('tbody');
+    res.rows.forEach(function(row){ tb.appendChild(adminRowTr(row,res,editable)); });
+    tbl.appendChild(tb); wrap.appendChild(tbl); card.appendChild(wrap); w.appendChild(card);
+    if(res.total>res.rows.length)
+      w.appendChild(el('div','dim','Showing the first '+res.rows.length+' of '+res.total+' rows.'));
+    paint(w);
+  }).catch(showErr);
+}
+
+function adminRowTr(row,res,editable){
+  var tr=el('tr');
+  res.cols.forEach(function(c){
+    var td=el('td',null,esc(row[c]==null?'':row[c]));
+    if(editable[c]){
+      td.classList.add('ed-cell');
+      td.onclick=function(){ adminCellEdit(td,tr,row,res,editable,c); };
+    }
+    tr.appendChild(td);
+  });
+  var del=el('td');
+  var b=el('button','btn sm ghost','✕'); b.title='Delete row';
+  b.onclick=function(e){ e.stopPropagation(); adminDeleteRow(res,row[res.pk]); };
+  del.appendChild(b); tr.appendChild(del);
+  return tr;
+}
+
+/* Same swap-the-td-for-an-input editor the Tax screen uses, against the generic
+ * updateTableCell handler instead of a ledger-specific one. */
+function adminCellEdit(td,tr,row,res,editable,col){
+  var cur=row[col];
+  var inp=el('input','ledger-edit-input'); inp.type='text';
+  if(cur!=null) inp.value=String(cur);
+  td.classList.add('editing'); td.textContent=''; td.appendChild(inp); inp.focus(); inp.select();
+  var done=false;
+  function restore(){ tr.parentNode.replaceChild(adminRowTr(row,res,editable),tr); }
+  function commit(){
+    if(done) return; done=true;
+    var v=inp.value;
+    if(v===String(cur==null?'':cur)){ restore(); return; }
+    gs('api_updateTableCell',{table:res.table,pk:row[res.pk],column:col,value:v}).then(function(){
+      row[col]=v; toast('Saved','ok'); restore(); dropCache();
+    }).catch(function(e){ toast(e.message||e,'err'); restore(); });
+  }
+  inp.onblur=commit;
+  inp.onkeydown=function(e){
+    if(e.key==='Enter'){ e.preventDefault(); commit(); }
+    else if(e.key==='Escape'){ done=true; restore(); }
+  };
+}
+
+function adminAddRow(res){
+  var inputs={}, body=el('div');
+  (res.addable||[]).forEach(function(c){
+    var inp=inputEl('text',''); inputs[c]=inp; body.appendChild(fieldEl(c,inp));
+  });
+  var save=el('button','btn primary','Add row');
+  save.onclick=function(){
+    var row={}, any=false;
+    Object.keys(inputs).forEach(function(c){ if(inputs[c].value!==''){ row[c]=inputs[c].value; any=true; } });
+    if(!any){ toast('Fill at least one field','err'); return; }
+    save.disabled=true; save.textContent='Adding…';
+    gs('api_insertTableRow',{table:res.table,row:row}).then(function(){
+      closeModal(); toast('Row added','ok'); dropCache(); render();
+    }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
+  };
+  openModal(modalShell('Add row · '+res.table, body, [save]));
+}
+
+function adminDeleteRow(res,pk){
+  var yes=el('button','btn danger','Delete');
+  yes.onclick=function(){
+    yes.disabled=true; yes.textContent='Deleting…';
+    gs('api_deleteTableRow',{table:res.table,pk:pk}).then(function(){
+      closeModal(); toast('Row deleted','ok'); dropCache(); render();
+    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
+  };
+  var no=el('button','btn','Cancel'); no.onclick=closeModal;
+  openModal(modalShell('Delete '+res.table+' row '+pk+'?',
+    el('div','dim','This removes the row permanently. D1 Time Travel can restore the database for 7 days.'), [no,yes]));
+}
+
+/* Backup layer 2b: the table you are looking at, as a file. (Layer 1 is the nightly
+ * Apps Script pull of getExportAll into a spreadsheet; layer 3 is D1 Time Travel.) */
+function downloadCsv(name, cols, rows){
+  var cell=function(v){ var s=v==null?'':String(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  var out=[cols.map(cell).join(',')].concat(rows.map(function(r){
+    return cols.map(function(c){ return cell(r[c]); }).join(',');
+  })).join('\n');
+  var url=URL.createObjectURL(new Blob([out],{type:'text/csv'}));
+  var a=el('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
+  a.remove(); setTimeout(function(){ URL.revokeObjectURL(url); },1000);
 }
 
 /* —— inline single-field edit (Category / Account / Description / Amount) —— */

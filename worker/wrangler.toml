@@ -1,7 +1,17 @@
-# Deploy:  cd worker && npx wrangler deploy   (also run by `npm run release`)
-# Secrets: npx wrangler secret put GAS_URL       (run tg_gasEndpoint() to get it)
-#          npx wrangler secret put APP_PASS      (the SPA passphrase)
-#          npx wrangler secret put SECRET_TOKEN  (same value as TELEGRAM_SECRET_TOKEN)
+# Deploy:     cd worker && npx wrangler deploy        (also run by `npm run release`)
+# Migrations: npx wrangler d1 migrations apply financetracker --remote
+# Secrets:    npx wrangler secret put APP_PASS            (the SPA passphrase)
+#             npx wrangler secret put SECRET_TOKEN        (= TELEGRAM_SECRET_TOKEN)
+#             npx wrangler secret put TELEGRAM_BOT_TOKEN
+#             npx wrangler secret put TELEGRAM_USER_ID
+#             npx wrangler secret put GEMINI_API_KEY
+#             npx wrangler secret put INGEST_TOKEN        (= the GAS script property)
+#             npx wrangler secret put IBKR_FLEX_TOKEN
+#             npx wrangler secret put IBKR_FLEX_QUERY_ID
+#
+# DO NOT RENAME the worker: `name` is the .workers.dev subdomain, which is both the
+# Telegram webhook target and the app's URL. GAS_URL is gone — there is no Apps Script
+# web app any more.
 name = "financetracker-telegram"
 main = "worker.js"
 # UTC, and Cloudflare rejects a future date — Manila is a day ahead of UTC.
@@ -11,16 +21,30 @@ compatibility_date = "2026-07-28"
 # the three routes below burn invocations.
 #
 # not_found_handling is deliberately left at the default: "single-page-application"
-# would answer /api with index.html instead of invoking the Worker. Screen routing
-# is on ?screen= query params, not paths, so there is nothing to fall back for.
+# would answer /api with index.html instead of invoking the Worker. Screen routing is
+# on ?screen= query params, not paths, so there is nothing to fall back for.
 [assets]
 directory = "./public"
 run_worker_first = ["/api", "/login", "/tg"]
 
-# Edge read cache for /api. Version-keyed, so nothing here is ever purged — see
-# cacheableRead() in worker.js. Optional: unbound, /api just proxies as before.
-#   npx wrangler kv namespace create API_CACHE   → paste the id below
-# NOT the Cache API: caches.default is a silent no-op on a .workers.dev subdomain.
+# The source of truth. --location=apac at creation time (nearest region to Manila).
+#   npx wrangler d1 create financetracker --location=apac   -> paste the id below
+[[d1_databases]]
+binding = "DB"
+database_name = "financetracker"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# FX rates, cached 6h. This is the old API_CACHE namespace rebound: the edge read cache
+# it used to hold existed to hide Apps Script latency and went away with GAS. Optional —
+# unbound just means every FX lookup fetches.
 [[kv_namespaces]]
-binding = "API_CACHE"
+binding = "FX_CACHE"
 id = "414311e8408f43679204a86377b6c414"
+
+# 2 of the 5 free cron triggers. UTC; Manila is UTC+8.
+#   30 16 * * *  = 00:30 Manila — daily interest (closed days only, 7-day reprice)
+#   0  22 * * *  = 06:00 Manila — IBKR Flex -> prices (after IBKR's overnight refresh)
+# The free plan does NOT retry a failed cron; src/jobs.js reports failures to Telegram.
+[triggers]
+crons = ["30 16 * * *", "0 22 * * *"]

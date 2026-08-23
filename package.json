@@ -1,20 +1,21 @@
 {
-  "name": "financetracker-gas",
-  "version": "1.9.2",
-  "description": "Google Apps Script backend for a personal finance tracker built on Google Sheets",
+  "name": "financetracker",
+  "version": "2.0.0",
+  "description": "Personal finance tracker: Cloudflare Worker + D1, a PWA, and a Telegram bot",
   "private": true,
   "scripts": {
-    "test": "node test.js",
+    "test": "node test.js && node --disable-warning=ExperimentalWarning test-api.js",
     "icons": "node icons.js",
+    "dev": "cd worker && npx wrangler dev",
+    "deploy": "cd worker && npx wrangler deploy",
+    "migrate": "cd worker && npx wrangler d1 migrations apply financetracker --remote",
+    "migrate:local": "cd worker && npx wrangler d1 migrations apply financetracker --local",
+    "tail": "cd worker && npx wrangler tail",
     "login": "clasp login",
     "push": "clasp push",
-    "watch": "clasp push --watch",
     "pull": "clasp pull",
     "open": "clasp open",
-    "deploy": "clasp deploy",
-    "release": "node release.js",
-    "deployments": "clasp deployments",
-    "logs": "clasp logs --watch"
+    "release": "node release.js"
   },
   "devDependencies": {
     "@google/clasp": "^2.4.2"

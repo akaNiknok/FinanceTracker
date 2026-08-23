@@ -1,413 +1,18 @@
 /**
- * Tests.gs — manual verification runners for the service layer.
- * Select a function in the Apps Script editor and Run, then read the Logs.
- * Nothing here is web-exposed. test_createReadDelete_ mutates then cleans up
- * after itself; test_balanceReconciliation is the one that validates the balance
- * assumptions documented in Accounts.gs.
+ * Tests.gs — what is left to test in Apps Script after v2.0.0: the mail courier.
+ *
+ * Everything else moved to the Worker and is tested by `npm test` as plain ESM
+ * (test.js), which also still runs PURE_TESTS below through a vm — the same trick as
+ * before, kept only because these three helpers live in the GAS flat namespace.
+ *
+ * Sheet-bound tests are gone with the sheet. The end-to-end reconciliation they used
+ * to provide is now migrate/verify.js, run against the real database.
  */
-
-/** Pure tests — no sheet/network access. Also run locally by `npm test` (test.js). */
-var PURE_TESTS = ["test_a1", "test_assertShape", "test_byDateDesc", "test_createIdempotencyGuard",
-                  "test_ensureRows", "test_gmailQuote", "test_gmailScope", "test_gmailText", "test_interestNet",
-                  "test_isInvestment", "test_ledgerCoerce", "test_matchSalaryTx", "test_mergePartition",
-                  "test_mirrorToAmount", "test_parseDate", "test_parsePeriod", "test_routeMethodPrefixes",
-                  "test_telegram", "test_telegramQuery", "test_telegramBalance",
-                  "test_telegramUndoData", "test_telegramUndoGlyph"];
+var PURE_TESTS = ["test_gmailScope", "test_gmailQuote", "test_gmailPayload"];
 
 function test_all() {
   PURE_TESTS.forEach(function (n) { globalThis[n](); });
-  test_referenceData();
-  test_fx();
-  test_bootstrap();
-  test_listTransactions();
-  test_budgets();
-  test_balanceReconciliation();
-  test_createReadDelete();
   Logger.log("== test_all complete ==");
-}
-
-
-/** su_ensureRows_ — the append target must exist in the grid; deleteRow shrinks it,
- *  so a sheet whose data reaches the bottom row can never be appended to again. */
-function test_ensureRows() {
-  let max = 10, calls = [];
-  const sheet = { getMaxRows: function () { return max; },
-                  insertRowsAfter: function (after, n) { calls.push([after, n]); max += n; } };
-  su_ensureRows_(sheet, 10);                       // inside the grid → no growth
-  if (calls.length) throw new Error("su_ensureRows_ FAIL: grew a grid that already fit");
-  su_ensureRows_(sheet, 11);                       // one past the bottom → one row
-  if (max !== 11 || String(calls) !== "10,1") throw new Error("su_ensureRows_ FAIL: " + max + " / " + calls);
-  su_ensureRows_(sheet, 14);                       // several past → close the whole gap
-  if (max !== 14 || String(calls[1]) !== "11,3") throw new Error("su_ensureRows_ FAIL: " + max + " / " + calls[1]);
-  Logger.log("test_ensureRows OK");
-}
-/** ledger_coerce_ — numeric strings become numbers (feed SUM); rest stays text. */
-function test_ledgerCoerce() {
-  const cases = [["1234", 1234], ["1,234.50", 1234.5], ["-42", -42],
-                 ["2026-07-04", "2026-07-04"], ["Filed", "Filed"], ["", ""], [null, ""]];
-  cases.forEach(function (c) {
-    const got = ledger_coerce_(c[0]);
-    if (got !== c[1]) throw new Error("ledger_coerce_ FAIL: " + JSON.stringify(c[0]) + " → " + JSON.stringify(got));
-  });
-  Logger.log("test_ledgerCoerce OK");
-}
-
-/** mig_matchSalaryTx_ — the setupLedgerSchema backfill: exactly-one match, or nothing. */
-function test_matchSalaryTx() {
-  const rows = [
-    { ID: "a", Category: LEDGER_TX_CATEGORY, Date: "2026-07-15", Amount: 47200 },
-    { ID: "b", Category: LEDGER_TX_CATEGORY, Date: "2026-07-15", Amount: 47200 },  // ambiguous pair
-    { ID: "c", Category: LEDGER_TX_CATEGORY, Date: "2026-06-15", Amount: 47200 },
-    { ID: "d", Category: "Income: Interest", Date: "2026-05-15", Amount: 47200 }   // wrong category
-  ];
-  const cases = [
-    [["2026-06-15", 47200], "c"],
-    [["2026-06-15", -47200], "c"],      // sign-agnostic
-    [["2026-07-15", 47200], null],      // two candidates → refuse to guess
-    [["2026-05-15", 47200], null],      // not a salary row
-    [["2026-06-15", 47201], null],      // amount must match
-    [["", 47200], null], [["2026-06-15", 0], null], [["2026-06-15", ""], null]
-  ];
-  cases.forEach(function (c) {
-    const got = mig_matchSalaryTx_(rows, c[0][0], c[0][1]);
-    if (got !== c[1]) throw new Error("mig_matchSalaryTx_ FAIL: " + JSON.stringify(c[0]) + " → " + JSON.stringify(got));
-  });
-  Logger.log("test_matchSalaryTx OK");
-}
-
-/** su_a1_ column-letter math (drives the RangeList bulk writes). */
-function test_a1() {
-  const cases = { "A1": [1, 1], "Z9": [9, 26], "AA10": [10, 27], "AZ2": [2, 52], "BA3": [3, 53] };
-  Object.keys(cases).forEach(function (want) {
-    const got = su_a1_(cases[want][0], cases[want][1]);
-    if (got !== want) throw new Error("su_a1_ FAIL: expected " + want + ", got " + got);
-  });
-  Logger.log("test_a1 OK");
-}
-
-/** tx_assertShape_ — Transfer category ⇔ ToAccount present (issue #8). */
-function test_assertShape() {
-  tx_assertShape_("Transfer", true);   // ok
-  tx_assertShape_("Expense", false);   // ok
-  tx_assertShape_("Income", false);    // ok
-  [["Transfer", false], ["Expense", true], ["Income", true], [null, true]].forEach(function (c) {
-    let threw = false;
-    try { tx_assertShape_(c[0], c[1]); } catch (e) { threw = true; }
-    if (!threw) throw new Error("tx_assertShape_ FAIL: expected reject for " + JSON.stringify(c));
-  });
-  Logger.log("test_assertShape OK");
-}
-
-/** tx_mirrorToAmount_ — an Amount edit drags ToAmount along on same-currency transfers. */
-function test_mirrorToAmount() {
-  const xfer = { ToAccount: "IBKR", Amount: 500, ToAmount: 500 };
-  const cases = [
-    [xfer, { Amount: 600 }, 600],                                  // same-currency → mirror
-    [xfer, { Amount: 600, ToAmount: 9 }, undefined],               // explicit override wins
-    [xfer, { Description: "x" }, undefined],                       // Amount untouched
-    [{ ToAccount: "IBKR", Amount: 5000, ToAmount: 81 }, { Amount: 6000 }, undefined], // cross-currency
-    [{ ToAccount: "", Amount: 500, ToAmount: "" }, { Amount: 600 }, undefined]        // not a transfer
-  ];
-  cases.forEach(function (c) {
-    const got = tx_mirrorToAmount_(c[0], c[1]);
-    if (got !== c[2]) throw new Error("tx_mirrorToAmount_ FAIL: " + JSON.stringify(c[1]) +
-                                      " → " + got + ", expected " + c[2]);
-  });
-  Logger.log("test_mirrorToAmount OK");
-}
-
-/**
- * tx_parsePeriod_ — normalizes the reporting-month override to the "yyyy-MMM" the
- * Month ARRAYFORMULA emits, and rejects anything that would write a key no report
- * can ever match.
- */
-function test_parsePeriod() {
-  const ok = { "2026-Aug": "2026-Aug", "2026-08": "2026-Aug", "2026-8": "2026-Aug",
-               "2026-aug": "2026-Aug", "2026-AUGUST": "2026-Aug", " 2026-Jan ": "2026-Jan",
-               "2026-12": "2026-Dec" };
-  Object.keys(ok).forEach(function (input) {
-    const got = tx_parsePeriod_(input);
-    if (got !== ok[input]) throw new Error("tx_parsePeriod_ FAIL: " + input + " → " + got + " (want " + ok[input] + ")");
-  });
-  ["", null, undefined, "  "].forEach(function (blank) {
-    if (tx_parsePeriod_(blank) !== "") throw new Error("tx_parsePeriod_ FAIL: blank should clear the override");
-  });
-  ["2026-13", "2026-00", "August", "2026", "26-Aug", "2026-Aug-01", "next month"].forEach(function (bad) {
-    let threw = false;
-    try { tx_parsePeriod_(bad); } catch (e) { threw = true; }
-    if (!threw) throw new Error("tx_parsePeriod_ FAIL: expected reject for " + JSON.stringify(bad));
-  });
-  Logger.log("test_parsePeriod OK");
-}
-
-/** tx_byDateDesc_ — newest date first; same-day ties fall back to row order (later row first). */
-function test_byDateDesc() {
-  const rows = [
-    { ID: "old",  Date: new Date(2026, 0, 1),  __row: 2 },
-    { ID: "new",  Date: new Date(2026, 5, 1),  __row: 3 },
-    { ID: "same-early", Date: new Date(2026, 5, 1), __row: 4 },  // same day as "new", later row
-    { ID: "iso",  Date: "2026-03-15",            __row: 5 }       // string date still sorts
-  ];
-  const order = rows.slice().sort(tx_byDateDesc_).map(function (r) { return r.ID; });
-  const want = ["same-early", "new", "iso", "old"];
-  if (order.join(",") !== want.join(","))
-    throw new Error("tx_byDateDesc_ FAIL: got " + order.join(",") + " want " + want.join(","));
-  Logger.log("test_byDateDesc OK");
-}
-
-/** interest_net_ — daily accrual less 20% withholding, rounded to centavos. */
-function test_interestNet() {
-  const cases = [
-    [100000, 0.0625, 13.7],    // 6.25% p.a. on 100k → 17.1233 gross → 13.70 net
-    [0, 0.0625, 0], [100000, 0, 0],
-    [-1000, 0.05, -0.11],      // overdrawn: negative accrual, not silently dropped
-    [1, 0.0001, 0]             // rounds to nothing → caller treats as "no row"
-  ];
-  cases.forEach(function (c) {
-    const got = interest_net_(c[0], c[1]);
-    if (got !== c[2]) throw new Error("interest_net_ FAIL: (" + c[0] + "," + c[1] + ") → " + got + " want " + c[2]);
-  });
-  Logger.log("test_interestNet OK");
-}
-
-/** mig_mergePartition_ — an account merge must not delete and patch the same row. */
-function test_mergePartition() {
-  const rows = [
-    { ID: 1, Account: "Maya Savings", ToAccount: "" },        // src
-    { ID: 2, Account: "Maya", ToAccount: "" },                // untouched (survivor)
-    { ID: 3, Account: "Maya", ToAccount: "Maya Savings" },    // self (both sides)
-    { ID: 4, Account: "Maya Savings", ToAccount: "Maya" },    // self (other direction)
-    { ID: 5, Account: "BPI", ToAccount: "Maya Savings" },     // dst
-    { ID: 6, Account: "Maya Savings", ToAccount: "BPI" },     // src (transfer out)
-    { ID: 7, Account: "BPI", ToAccount: null },               // untouched, null ToAccount
-    { ID: 8, Account: "Maya Savings", ToAccount: "Maya Savings" } // legacy junk → self, not both
-  ];
-  const got = mig_mergePartition_(rows, "Maya Savings", "Maya");
-  const want = { self: ["3", "4", "8"], src: ["1", "6"], dst: ["5"] };
-  ["self", "src", "dst"].forEach(function (k) {
-    if (got[k].join() !== want[k].join())
-      throw new Error("mig_mergePartition_ FAIL " + k + ": " + got[k].join() + " want " + want[k].join());
-  });
-  Logger.log("test_mergePartition OK");
-}
-
-/** acct_isInvestment_ — Dashboard tile + Investments screen must agree on this predicate. */
-function test_isInvestment() {
-  const cases = [
-    ["SHARES", "", true], ["PHP", "Investment", true], ["USD", "ETF Growth", true],
-    ["PHP", "Stock", true], ["PHP", "Savings", false], ["USD", "Checking", false], ["PHP", "", false]
-  ];
-  cases.forEach(function (c) {
-    const got = acct_isInvestment_(c[0], c[1]);
-    if (got !== c[2]) throw new Error("acct_isInvestment_ FAIL: " + JSON.stringify(c) + " → " + got);
-  });
-  Logger.log("test_isInvestment OK");
-}
-
-/** Telegram bot pure bits: Gemini unwrap (incl. the empty-candidate case) + receipt shape. */
-function test_telegram() {
-  const ok = { candidates: [{ content: { parts: [{ text: '{"error":null}' }] } }] };
-  if (tg_geminiText_(ok) !== '{"error":null}') throw new Error("tg_geminiText_ FAIL: text not extracted");
-  [{}, { candidates: [] }, { candidates: [{ finishReason: "SAFETY", content: {} }] }].forEach(function (j) {
-    let threw = false;
-    try { tg_geminiText_(j); } catch (e) { threw = true; }
-    if (!threw) throw new Error("tg_geminiText_ FAIL: expected throw for " + JSON.stringify(j));
-  });
-
-  const plain = tg_receipt_({ Date: "2026-07-29", Category: "Food", Description: "lunch",
-                              Account: "Maya", Amount: 250, ToAccount: null, ToAmount: null }, "success");
-  if (plain.indexOf("✦ *Logged*") !== 0 || plain.indexOf("To:") !== -1 || plain.split("\n").length !== 6)
-    throw new Error("tg_receipt_ FAIL (plain): " + plain);
-  const bare = tg_receipt_({ Date: "2026-07-29", Category: "Income: Cashback", Description: "",
-                             Account: "Maya", Amount: 12, ToAccount: null, ToAmount: null }, "success");
-  if (bare.indexOf("__") !== -1 || bare.split("\n").length !== 5)
-    throw new Error("tg_receipt_ FAIL (no description): " + bare);
-  const xfer = tg_receipt_({ Date: "2026-07-29", Category: "Investment: Growth", Description: "top up",
-                             Account: "BPI", Amount: 5000, ToAccount: "IBKR", ToAmount: 81 }, "duplicate");
-  if (xfer.indexOf("Already logged") === -1 || xfer.indexOf("› To: _IBKR_") === -1 || xfer.indexOf("`81`") === -1)
-    throw new Error("tg_receipt_ FAIL (transfer): " + xfer);
-
-  // Model fallback: first success wins, a dead model is skipped, all-dead rethrows.
-  const tried = [];
-  const call = function (failUntil) {
-    return function (m) { tried.push(m); if (tried.length <= failUntil) throw new Error("503 " + m); return m; };
-  };
-  if (tg_tryModels_(["a", "b", "c"], call(0)) !== "a" || tried.length !== 1)
-    throw new Error("tg_tryModels_ FAIL: should stop at the first success");
-  tried.length = 0;
-  if (tg_tryModels_(["a", "b", "c"], call(2)) !== "c" || tried.join() !== "a,b,c")
-    throw new Error("tg_tryModels_ FAIL: should fall through to the last model");
-  tried.length = 0;
-  let threw = "";
-  try { tg_tryModels_(["a", "b"], call(9)); } catch (e) { threw = e.message; }
-  if (threw !== "503 b") throw new Error("tg_tryModels_ FAIL: last error should surface, got " + threw);
-  Logger.log("test_telegram OK");
-}
-
-/** Telegram query path: month normalisation, filter mapping, summary arithmetic. */
-function test_telegramQuery() {
-  // Whatever form the model emits must become the sheet's derived Month key.
-  if (tg_monthKey_("2026-08") !== "2026-Aug" || tg_monthKey_("2026-Aug") !== "2026-Aug")
-    throw new Error("tg_monthKey_ FAIL: " + tg_monthKey_("2026-08") + " / " + tg_monthKey_("2026-Aug"));
-
-  // Only the filters the model supplied are passed through — a blank must not
-  // become month:"" (api_listTransactions would still treat it as unset, but an
-  // empty category would silently match nothing).
-  const all = tg_queryFilters_({ month: "2026-08", category: "Food", account: "Maya", search: "lunch" });
-  if (all.month !== "2026-Aug" || all.category !== "Food" || all.account !== "Maya" ||
-      all.search !== "lunch" || all.limit !== 500)
-    throw new Error("tg_queryFilters_ FAIL (all): " + JSON.stringify(all));
-  [null, {}, { month: "", category: null }].forEach(function (q) {
-    const got = tg_queryFilters_(q);
-    if (Object.keys(got).join() !== "limit")
-      throw new Error("tg_queryFilters_ FAIL (empty): " + JSON.stringify(got));
-  });
-
-  if (tg_querySummary_([], 0) !== "No matching transactions.")
-    throw new Error("tg_querySummary_ FAIL: empty result");
-  // Income (+) and expense (−) rows both count toward "how much moved through".
-  const rows = [{ Date: "2026-08-01", Category: "Food", Description: "lunch", "Amount (PHP)": -250 },
-                { Date: "2026-08-02", Category: "Food", Description: "", "Amount (PHP)": 100.5 }];
-  const s = tg_querySummary_(rows);
-  if (s.indexOf("*₱350.5* across 2 tx") !== 0 || s.indexOf("— lunch `₱250`") === -1 || s.indexOf("more") !== -1)
-    throw new Error("tg_querySummary_ FAIL: " + s);
-  // total > rows.length (page cut short) reports the true count and says so.
-  const capped = tg_querySummary_(rows, 9);
-  if (capped.indexOf("across 9 tx") === -1 || capped.indexOf("› _…7 more_") === -1)
-    throw new Error("tg_querySummary_ FAIL (capped): " + capped);
-  Logger.log("test_telegramQuery OK");
-}
-
-/** tg_balanceText_ — account filtering, native-vs-PHP display, signed net-worth total. */
-function test_telegramBalance() {
-  const accts = [
-    { name: "Maya", currency: "PHP", balancePhp: 1200.5, balanceNative: 1200.5, netWorthPhp: 1200.5, isLiability: false },
-    { name: "IBKR USD", currency: "USD", balancePhp: 5600, balanceNative: 100, netWorthPhp: 5600, isLiability: false },
-    { name: "BPI Credit Card", currency: "PHP", balancePhp: 8000, balanceNative: 8000, netWorthPhp: -8000, isLiability: true }
-  ];
-  const all = tg_balanceText_(accts, null);
-  // Non-PHP leads native, PHP behind it; liabilities are flagged and pull the total down.
-  if (all.indexOf("› _IBKR USD_ `$100` · `₱5,600`") === -1) throw new Error("tg_balanceText_ FAIL (native): " + all);
-  if (all.indexOf("› _BPI Credit Card_ `₱8,000` owed") === -1) throw new Error("tg_balanceText_ FAIL (liability): " + all);
-  if (all.indexOf("*Total* `-₱1,199.5`") === -1) throw new Error("tg_balanceText_ FAIL (total): " + all);
-
-  // One account: case-insensitive partial name, and no total line for a single row.
-  const one = tg_balanceText_(accts, "maya");
-  if (one !== "◈ *Balance*\n› _Maya_ `₱1,200.5`") throw new Error("tg_balanceText_ FAIL (single): " + one);
-  if (tg_balanceText_(accts, "gcash").indexOf("No account matching") === -1)
-    throw new Error("tg_balanceText_ FAIL: unknown account should say so");
-  Logger.log("test_telegramBalance OK");
-}
-
-/** Undo button payload — round-trips to the same IDs tg_logItems_ wrote, and only ours. */
-function test_telegramUndoData() {
-  const ids = tg_undoIds_(tg_undoData_("tg-90210", [0, 2]));
-  if (ids.join("|") !== "tg-90210-0|tg-90210-2")
-    throw new Error("tg_undoIds_ FAIL: " + JSON.stringify(ids));
-  // A Gmail-sourced receipt (Gmail.gs) carries its own prefix and must round-trip
-  // to the row IDs tg_logItems_ wrote, inside Telegram's 64-byte callback_data cap.
-  const gm = tg_undoData_("gm-198f2a3b4c5d6e7f", [0]);
-  if (tg_undoIds_(gm).join("|") !== "gm-198f2a3b4c5d6e7f-0" || gm.length > 64)
-    throw new Error("tg_undoIds_ FAIL (gmail): " + gm + " → " + JSON.stringify(tg_undoIds_(gm)));
-  // Receipts sent before the prefix named a source are digits-only and mean Telegram.
-  if (tg_undoIds_("u:90210:1").join("|") !== "tg-90210-1")
-    throw new Error("tg_undoIds_ FAIL: legacy payload no longer resolves");
-  ["", null, "u:90210:", "u::0", "undo", "u:90210:0;DROP"].forEach(function (bad) {
-    if (tg_undoIds_(bad).length) throw new Error("tg_undoIds_ FAIL: accepted " + JSON.stringify(bad));
-  });
-  Logger.log("test_telegramUndoData OK");
-}
-
-/**
- * The undo glyph stays text. "↩" (U+21A9) is Emoji=Yes, so Telegram renders it with its
- * own emoji font and ignores the U+FE0E text-presentation selector — "↩︎ Undo" shipped
- * as a yellow ↩️ twice. "↻" (U+21BB) isn't in the emoji set, so it can't be substituted.
- * Error marks (❌ ⛔) are deliberately emoji and deliberately not covered here.
- */
-function test_telegramUndoGlyph() {
-  // Emoji=Yes glyphs that keep suggesting themselves for these buttons: ↩ undo,
-  // ✉/📧 mail, ✏ edit. Their text-looking cousins (↻ ⌕ ✎) are outside the emoji set.
-  ["↩", "✉", "📧", "✏"].forEach(function (bad) {
-    [tg_logKeyboard_, tg_deleteIds_].forEach(function (f) {
-      if (f.toString().indexOf(bad) !== -1)
-        throw new Error("test_telegramUndoGlyph FAIL: " + bad + " is Emoji=Yes — VS15 won't stop "
-                        + "Telegram emoji-fying it; use ↻ / ⌕ / ✎");
-    });
-  });
-  Logger.log("test_telegramUndoGlyph OK");
-}
-
-/**
- * The SPA's gs() (worker/public/app.js) chooses GET vs POST from the handler-name
- * prefix instead of shipping a second copy of the route table. That stays correct
- * only while every read action is named `get…`/`list…` and no write action is — so
- * assert the split here, where the tables live. Break it and the symptom is remote:
- * a write silently goes out as a GET and doGet answers "requires POST".
- */
-function test_routeMethodPrefixes() {
-  const READY = /^(get|list)/;
-  Object.keys(ROUTES_READ_).forEach(function (a) {
-    if (!READY.test(a))
-      throw new Error("test_routeMethodPrefixes FAIL: read action '" + a
-                      + "' must be named get…/list… or the SPA will POST it");
-  });
-  Object.keys(ROUTES_WRITE_).forEach(function (a) {
-    if (READY.test(a))
-      throw new Error("test_routeMethodPrefixes FAIL: write action '" + a
-                      + "' reads as a get…/list… name, so the SPA will GET it and doGet will refuse it");
-  });
-  Logger.log("test_routeMethodPrefixes OK");
-}
-
-/**
- * The SPA's offline write queue replays creates, and a replay may be of a write that
- * ALREADY landed — the connection can die after GAS committed the row but before the
- * response gets back. The only thing making that safe is the supplied-ID
- * short-circuit in both create paths. Remove it and the queue silently starts
- * double-posting money, on the one code path nobody watches. Source-text check, like
- * test_telegramUndoGlyph — exercising the behaviour itself needs a sheet.
- */
-function test_createIdempotencyGuard() {
-  [["api_createTransaction", api_createTransaction], ["api_createTransfer", api_createTransfer]]
-    .forEach(function (pair) {
-      const src = pair[1].toString();
-      if (src.indexOf("args.ID") === -1 || src.indexOf("su_findRowById_") === -1)
-        throw new Error("test_createIdempotencyGuard FAIL: " + pair[0] + " lost its supplied-ID "
-                        + "duplicate check — the SPA's offline queue would double-post on replay");
-    });
-  if (TX_INPUT_COLS.indexOf("ID") === -1)
-    throw new Error("test_createIdempotencyGuard FAIL: ID is no longer an input column, so a "
-                    + "client-supplied ID cannot be written and replays cannot be deduped");
-  Logger.log("test_createIdempotencyGuard OK");
-}
-
-/**
- * gmail_text_ — what Gmail.gs actually hands the parser. The two lines that must
- * survive an edit: the "only log money that moved" guard (nothing else stops a
- * marketing email becoming a transaction) and the hints (an Anthropic receipt
- * names a card, never an account, so only the hint puts it on Wise). Body is a
- * real receipt from the mailbox, 2026-08-10.
- */
-function test_gmailText() {
-  const msg = {
-    getFrom:      function () { return "invoice+statements@mail.anthropic.com"; },
-    getSubject:   function () { return "Your receipt from Anthropic, PBC #2882-8893-8665"; },
-    getDate:      function () { return new Date(2026, 7, 11); },
-    getPlainBody: function () { return "Receipt from Anthropic, PBC $22.40 Paid August 10, 2026 " +
-                                       "Payment method - 8681 Claude Pro Qty 1 $20.00 VAT $2.40 Total $22.40"; }
-  };
-  const text = gmail_text_(msg, "Anthropic / Stripe receipts are charged to the Wise account.");
-  ["does not report money", "tax included", "charged to the Wise account",
-   "From: invoice+statements@mail.anthropic.com", "$22.40"].forEach(function (needle) {
-    if (text.indexOf(needle) === -1) throw new Error("gmail_text_ FAIL: missing " + needle);
-  });
-
-  // A long footer must not push the amount out of the prompt — and no hints is fine.
-  const long = Object.assign({}, msg, { getPlainBody: function () { return new Array(9000).join("x"); } });
-  const body = gmail_text_(long, "");
-  if (body.length > GMAIL_MAX_BODY_ + 600) throw new Error("gmail_text_ FAIL: body not truncated (" + body.length + ")");
-  if (body.indexOf("undefined") !== -1) throw new Error("gmail_text_ FAIL: empty hints leaked 'undefined'");
-  Logger.log("test_gmailText OK");
 }
 
 /**
@@ -420,24 +25,18 @@ function test_gmailScope() {
     throw new Error("GMAIL_QUERY_ FAIL: scope left the inbox → " + GMAIL_QUERY_);
   if (GMAIL_QUERY_.indexOf('label:"' + GMAIL_LABEL_ + '"') === -1)
     throw new Error("GMAIL_QUERY_ FAIL: not label-driven → " + GMAIL_QUERY_);
-  if (/from:/.test(GMAIL_QUERY_))
+  if (/from:/.test(GMAIL_QUERY_))
     throw new Error("GMAIL_QUERY_ FAIL: senders belong in the Gmail filter, not here");
   Logger.log("test_gmailScope OK");
 }
 
 /**
- * gmail_quote_ — what the ⌕ Email button posts back. It exists to be *read* on a
- * phone, so the two things that matter are that the amount/merchant line survives and
- * that a long footer can't push the quote past Telegram's 4096-char message limit.
+ * gmail_quote_ — what the ⌕ Email button posts back. It exists to be READ on a phone,
+ * so the two things that matter are that the amount/merchant line survives and that a
+ * long footer cannot push the quote past Telegram's 4096-char message limit.
  */
 function test_gmailQuote() {
-  const msg = {
-    getFrom:      function () { return "alerts@maribank.com.ph"; },
-    getSubject:   function () { return "Successful Debit Card Transaction"; },
-    getDate:      function () { return new Date(2026, 7, 11); },
-    getPlainBody: function () { return "Hi Austin,\n\n\n\n\nTransaction Amount: PHP 369.00\n" +
-                                       "Merchant: GRAB *TRIP\n"; }
-  };
+  const msg = gmailTestMsg_();
   const q = gmail_quote_(msg);
   ["Successful Debit Card Transaction", "alerts@maribank.com.ph",
    "PHP 369.00", "GRAB *TRIP"].forEach(function (needle) {
@@ -453,105 +52,35 @@ function test_gmailQuote() {
   Logger.log("test_gmailQuote OK");
 }
 
-/** tx_parseDate_ — the Date gotcha: ISO "yyyy-MM-dd" parses as a LOCAL date (no UTC day-shift). */
-function test_parseDate() {
-  const d = tx_parseDate_("2026-01-02");
-  if (d.getFullYear() !== 2026 || d.getMonth() !== 0 || d.getDate() !== 2)
-    throw new Error("tx_parseDate_ FAIL: ISO string day-shifted → " + d);
-  const real = new Date(2026, 5, 15);
-  if (tx_parseDate_(real) !== real) throw new Error("tx_parseDate_ FAIL: Date not passed through");
-  [undefined, null, "", "not-a-date"].forEach(function (v) {
-    const got = tx_parseDate_(v);
-    if (!(got instanceof Date) || isNaN(got.getTime()))
-      throw new Error("tx_parseDate_ FAIL: no valid fallback for " + JSON.stringify(v));
-  });
-  Logger.log("test_parseDate OK");
-}
-
-function test_referenceData() {
-  const cats = tx_categoriesMap_(), accts = tx_accountsMap_();
-  Logger.log("Categories: %s · Accounts: %s", Object.keys(cats).length, Object.keys(accts).length);
-  if (!Object.keys(cats).length) Logger.log("FAIL: no categories loaded.");
-  if (!Object.keys(accts).length) Logger.log("FAIL: no accounts loaded.");
-}
-
-function test_fx() {
-  Logger.log("Live USD→PHP: %s", fx_liveRate_("USD", BASE_CURRENCY));
-}
-
-function test_bootstrap() {
-  const b = api_getBootstrap();
-  Logger.log("Bootstrap keys: %s · accounts: %s · categories: %s",
-    Object.keys(b).join(","), b.accounts.length, Object.keys(b.categories).length);
-}
-
-function test_listTransactions() {
-  const r = api_listTransactions({ limit: 5 });
-  Logger.log("listTransactions total=%s, returned=%s", r.total, r.transactions.length);
-  if (r.transactions.length) Logger.log("newest: %s", JSON.stringify(r.transactions[0]));
-}
-
 /**
- * Integrity check: does the ledger (Transactions) agree with the Accounts sheet's
- * balance formula? Compares the sheet's NATIVE `Current Balance` against an
- * independent recompute (Starting Balance + Σ native deltas). This is in native
- * currency, so USD and Shares accounts reconcile too (no FX noise). Any flagged
- * row means the ledger and the sheet's SUMIF disagree — a real data issue to chase.
+ * gmail_payload_ — the courier's whole job now. Four things the Worker cannot recover
+ * if this drops them: the messageId (the idempotent row id AND the quote's key), the
+ * hints (an Anthropic receipt names a card, never an account, so only the hint puts it
+ * on Wise), the body (truncated, or a long footer pushes the amount out of the prompt)
+ * and the quote (the Worker cannot call GmailApp to fetch it later).
  */
-function test_balanceReconciliation() {
-  const accts = api_getAccounts().accounts;
-  const deltas = acct_computeDeltas_();
-  Logger.log("== Ledger vs sheet balance (native currency) ==");
-  accts.forEach(function (a) {
-    const start = a.startingBalance || 0;
-    const recompute = Math.round((start + (deltas[a.name] ? deltas[a.name].net : 0)) * 100) / 100;
-    const sheetNative = a.balanceNative;
-    const diff = (sheetNative === null) ? "n/a" : Math.round((recompute - sheetNative) * 100) / 100;
-    const flag = (diff !== "n/a" && Math.abs(diff) >= 0.01) ? "  <-- CHECK" : "";
-    Logger.log(a.name + " (" + a.currency + ") | sheet=" + sheetNative + " ledger=" + recompute +
-               " diff=" + diff + " | PHP=" + a.balancePhp + flag);
+function test_gmailPayload() {
+  const p = gmail_payload_(gmailTestMsg_(), "Anthropic / Stripe receipts are charged to the Wise account.");
+  ["messageId", "from", "subject", "date", "hints", "body", "quote"].forEach(function (k) {
+    if (!p[k]) throw new Error("gmail_payload_ FAIL: missing " + k);
   });
-  Logger.log("Flagged rows = ledger and sheet disagree. Clean = the sheet's balance formula matches the Transactions ledger.");
+  if (p.action !== "ingestEmail") throw new Error("gmail_payload_ FAIL: wrong action " + p.action);
+  if (p.body.indexOf("PHP 369.00") === -1) throw new Error("gmail_payload_ FAIL: body lost the amount");
+  if (p.hints.indexOf("Wise") === -1) throw new Error("gmail_payload_ FAIL: hints dropped");
+
+  const long = Object.assign({}, gmailTestMsg_(), { getPlainBody: function () { return new Array(9000).join("x"); } });
+  const big = gmail_payload_(long, "");
+  if (big.body.length > GMAIL_MAX_BODY_) throw new Error("gmail_payload_ FAIL: body not truncated");
+  Logger.log("test_gmailPayload OK");
 }
 
-/** Budget targets resolve and actuals roll up. Prints each segment + the
- *  Essentials+Rewards combined figure. Flags any percent row that couldn't resolve
- *  (MONTHLY_INCOME_PHP unset) or USD cap with no FX. */
-function test_budgets() {
-  const b = api_getBudgets();
-  Logger.log("== Budgets (month=%s, incomePHP=%s, fx=%s) ==", b.month, b.incomePhp, b.fxUsdPhp);
-  b.budgets.forEach(function (x) {
-    const flag = (x.targetPhp === null) ? "  <-- target unresolved" : "";
-    Logger.log(x.segment + " [" + x.period + " " + x.targetType + " " + x.targetValue +
-      (x.currency ? " " + x.currency : "") + "] target=" + x.targetPhp +
-      " actual=" + x.actualPhp + " remaining=" + x.remainingPhp + " used=" + x.pctUsed + "%" +
-      (x.isOver ? " OVER" : "") + flag);
-  });
-  if (b.essentialsRewards) {
-    const er = b.essentialsRewards;
-    Logger.log("Essentials+Rewards: target=" + er.targetPhp + " actual=" + er.actualPhp +
-      " remaining=" + er.remainingPhp + " used=" + er.pctUsed + "%" + (er.isOver ? " OVER" : ""));
-  }
-  if (!b.budgets.length) Logger.log("FAIL: no budget rows — run Migration.setupBudgets() and check the Budgets sheet.");
-}
-
-/** Create a throwaway transaction with real category/account, read it, delete it. */
-function test_createReadDelete() {
-  const cat = Object.keys(tx_categoriesMap_())[0];
-  const acc = Object.keys(tx_accountsMap_())[0];
-  if (!cat || !acc) { Logger.log("SKIP createReadDelete: need at least one category and account."); return; }
-
-  const created = api_createTransaction({ Category: cat, Account: acc, Amount: 1, Description: "TEST — auto-delete" });
-  const id = created.transaction.ID;
-  Logger.log("created id=%s month=%s type=%s amountPhp=%s",
-    id, created.transaction.Month, created.transaction.Type, created.transaction["Amount (PHP)"]);
-
-  const found = api_listTransactions({ search: "auto-delete", limit: 5 });
-  Logger.log("list found %s row(s) matching test marker", found.total);
-
-  const del = api_deleteTransaction({ ID: id });
-  Logger.log("deleted: %s", del.status);
-
-  const after = su_findRowById_(su_sheet_(SHEET_TX), su_headerMap_(su_sheet_(SHEET_TX)), id);
-  Logger.log(after ? "FAIL: row still present after delete." : "OK: test row cleaned up.");
+/** A real MariBank alert from the mailbox, as a GmailMessage-shaped stub. */
+function gmailTestMsg_() {
+  return {
+    getId:        function () { return "198f2a3b4c5d6e7f"; },
+    getFrom:      function () { return "alerts@maribank.com.ph"; },
+    getSubject:   function () { return "Successful Debit Card Transaction"; },
+    getDate:      function () { return new Date(2026, 7, 11); },
+    getPlainBody: function () { return "Hi Austin,\n\n\n\n\nTransaction Amount: PHP 369.00\nMerchant: GRAB *TRIP\n"; }
+  };
 }

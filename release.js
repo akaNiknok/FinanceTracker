@@ -1,10 +1,17 @@
 // release.js — run `npm run release` on main only.
-// Pushes code to GAS, redeploys the SAME deploymentId (URL stable for the bot),
-// deploys the Worker (which serves the SPA), tags vX.Y.Z from package.json,
-// pushes, and creates a GitHub Release.
+// Applies pending D1 migrations, deploys the Worker (which IS the app: API, bot, crons
+// and the SPA), tags vX.Y.Z from package.json, pushes, and creates a GitHub Release.
+//
+// The clasp push/redeploy steps are gone with v2.0.0: there is no Apps Script web app
+// any more, only two trigger-driven files (Gmail.gs, Backup.gs) that change rarely and
+// are pushed by hand with `npm run push` when they do.
+//
+// Migrations run BEFORE the deploy, and the deploy before the tag: new code must never
+// meet an old schema, and a failed deploy must abort rather than leave a tag whose
+// halves disagree.
 const { execSync } = require('child_process');
-const fs = require('fs');
 const run = (cmd) => execSync(cmd, { stdio: 'inherit' });
+const inWorker = (cmd) => execSync(cmd, { cwd: 'worker', stdio: 'inherit' });
 const out = (cmd) => execSync(cmd).toString().trim();
 
 const branch = out('git rev-parse --abbrev-ref HEAD');
@@ -12,8 +19,6 @@ if (branch !== 'main') { console.error(`release runs on main (currently on ${bra
 if (out('git status --porcelain')) { console.error('working tree not clean'); process.exit(1); }
 const tag = 'v' + require('./package.json').version;
 if (out(`git tag -l ${tag}`)) { console.error(`${tag} already tagged — bump first: npm version patch|minor`); process.exit(1); }
-if (!fs.existsSync('.deploymentid')) { console.error('.deploymentid missing (gitignored file holding the live web-app deploymentId)'); process.exit(1); }
-const depId = fs.readFileSync('.deploymentid', 'utf8').trim();
 
 // ponytail: notes from commit subjects, not --generate-notes — this repo commits
 // straight to develop, so PR-derived notes come out empty. Revisit if it goes PR-based.
@@ -22,12 +27,8 @@ const log = out(`git log --no-merges --invert-grep --grep="^Bump version" --form
 const repo = out('gh repo view --json nameWithOwner -q .nameWithOwner');
 const notes = `## What's Changed\n${log}\n\n**Full Changelog**: https://github.com/${repo}/compare/${prev}...${tag}`;
 
-run('npx clasp push -f');
-run(`npx clasp deploy --deploymentId ${depId} --description "${tag}"`);
-// The frontend ships here too since v1.6.0 — worker/public IS the app. Before the
-// tag, so a failed Worker deploy aborts the release instead of leaving a tag whose
-// GAS and Worker halves disagree.
-execSync('npx wrangler deploy', { cwd: 'worker', stdio: 'inherit' });
+inWorker('npx wrangler d1 migrations apply financetracker --remote');
+inWorker('npx wrangler deploy');
 run(`git tag ${tag}`);
 run('git push origin main --tags');
 execSync(`gh release create ${tag} --title ${tag} --notes-file -`, { stdio: ['pipe', 'inherit', 'inherit'], input: notes });

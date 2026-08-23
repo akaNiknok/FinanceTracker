@@ -1,0 +1,168 @@
+/**
+ * gemini.js — the message parser. Straight port of tg_parse_/tg_tryModels_/
+ * tg_prompt_ from Telegram.gs: same REST endpoint, same responseSchema, same
+ * flash -> flash-lite -> pro fallback, same prompt text word for word.
+ *
+ * UrlFetchApp becomes fetch, and the live category/account lists come from D1
+ * instead of two sheet reads. Nothing else moved: the free tier is keyed to the API
+ * key, not to the runtime, so the same GEMINI_API_KEY works from the Worker.
+ */
+import { manilaToday } from './db.js';
+
+// Tried in order; the next is used if the previous errors (overload, 5xx, a model id
+// that stopped existing). Cheapest-capable first.
+export const MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'];
+
+// Structured-output schema (OpenAPI subset: nullable, not union types). Only
+// intent/error are required — a non-transaction message must be able to come back as
+// {error:"..."} without the model inventing a Category to satisfy the schema.
+const TX_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    Date: { type: 'STRING', description: 'Transaction date, ISO yyyy-MM-dd' },
+    Category: { type: 'STRING', description: 'Exact match from VALID CATEGORIES' },
+    Description: { type: 'STRING', description: 'Concise description, max 256 chars' },
+    Account: { type: 'STRING', description: 'Exact match from VALID ACCOUNTS (source account)' },
+    Amount: { type: 'NUMBER', description: 'Positive amount leaving/entering the source account' },
+    ExchangeRate: { type: 'NUMBER', nullable: true, description: 'PHP per 1 USD, only if explicitly mentioned' },
+    ToAccount: { type: 'STRING', nullable: true, description: 'Destination account, transfers only' },
+    ToAmount: { type: 'NUMBER', nullable: true, description: 'Amount received in the destination account, transfers only' }
+  }
+};
+
+const SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    // Plain STRING, not an enum: an unrecognised value falls back to "log", which is
+    // the pre-existing behaviour — safer than risking a schema the API rejects.
+    intent: { type: 'STRING', description: '"log" to record transactions, "query" to answer a question about past ones, "balance" to report what is in the accounts right now, "undo" to take back the previous message' },
+    items: { type: 'ARRAY', nullable: true, items: TX_SCHEMA,
+             description: 'One entry per transaction in the message (intent=log). A message may contain several.' },
+    query: { type: 'OBJECT', nullable: true, description: 'Filters for intent=query (intent=balance uses account only); omit the ones the message does not imply',
+             properties: {
+               month: { type: 'STRING', nullable: true, description: 'Month to restrict to, yyyy-MM. Null means all time' },
+               category: { type: 'STRING', nullable: true, description: 'Exact match from VALID CATEGORIES' },
+               account: { type: 'STRING', nullable: true, description: 'Exact match from VALID ACCOUNTS' },
+               search: { type: 'STRING', nullable: true, description: 'Free-text words to match in the description' }
+             } },
+    error: { type: 'STRING', nullable: true, description: 'Short error message if the message is none of the four intents; else null' }
+  },
+  required: ['intent', 'error']
+};
+
+/** Message text -> the structured object. Throws on API/parse failure. */
+export async function parse(env, refs, text, unixDate) {
+  const key = env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY is not set.');
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: prompt(refs, unixDate) }] },
+    contents: [{ role: 'user', parts: [{ text }] }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: SCHEMA }
+  });
+  return JSON.parse(await tryModels(MODELS, (model) => generate(model, key, payload)));
+}
+
+/**
+ * Call `fn` with each model until one returns; the last failure surfaces if none do.
+ * ponytail: retries the whole call, so a 503 on the primary costs one extra round
+ * trip. No per-status logic — a bad response is a bad response either way.
+ */
+export async function tryModels(models, fn) {
+  for (let i = 0; i < models.length; i++) {
+    try { return await fn(models[i]); }
+    catch (err) {
+      console.warn('gemini ' + models[i] + ' failed: ' + (err && err.message ? err.message : err));
+      if (i === models.length - 1) throw err;
+    }
+  }
+}
+
+/** One generateContent call -> the model's raw text. Throws on non-200/empty. */
+async function generate(model, key, payload) {
+  const res = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/' + model +
+      ':generateContent?key=' + encodeURIComponent(key),
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload });
+  const body = await res.text();
+  if (!res.ok) throw new Error('Gemini ' + res.status + ': ' + body.slice(0, 200));
+  return textOf(JSON.parse(body));
+}
+
+/** Pull the model's text out of a generateContent response. Throws if it is empty. */
+export function textOf(json) {
+  const c = json && json.candidates && json.candidates[0];
+  const parts = c && c.content && c.content.parts;
+  const text = parts && parts[0] && parts[0].text;
+  if (!text) throw new Error('Gemini returned no content' + (c && c.finishReason ? ' (' + c.finishReason + ')' : '') + '.');
+  return text;
+}
+
+/** The parser system prompt, with the live category/account lists inlined. */
+export function prompt(refs, unixDate) {
+  const today = manilaToday(unixDate ? new Date(unixDate * 1000) : new Date());
+  const cats = refs.categories
+    .map((c) => '- "' + c.name + '" (' + (c.type || '') + ') - ' + (c.description || '')).join('\n');
+  const accts = refs.accounts
+    .map((a) => '- "' + a.name + '" (' + (a.currency || '') + ')').join('\n');
+
+  return [
+    "You are a personal finance assistant. Classify the user's message and extract structured data.",
+    '',
+    'VALID CATEGORIES ("Name" (Type) - Description):', cats,
+    '',
+    'VALID ACCOUNTS ("Name" (Currency)):', accts,
+    '',
+    'INTENT:',
+    'A. "log" — the message records money moving. Put ONE entry in items per transaction;',
+    '   a message may describe several (e.g. one per line). Leave query null.',
+    'B. "query" — the message asks about transactions already recorded ("how much on food",',
+    '   "what did I spend at bpi"). Fill query with only the filters the message implies,',
+    '   and leave items empty.',
+    'C. "balance" — the message asks how much is in an account RIGHT NOW ("how much do I',
+    '   have", "balance", "how much is in maya", "my bpi balance"). Set query.account only',
+    '   when one account is named; leave query null for all accounts. Leave items empty.',
+    'D. "undo" — the message asks to take back / cancel / delete what was just logged.',
+    '   Leave items and query null.',
+    '',
+    'RULES:',
+    '1. Date must be ISO yyyy-MM-dd. If no date is mentioned, use: ' + today,
+    '2. Category must exactly match a name from VALID CATEGORIES (case-sensitive)',
+    '3. Account must exactly match a name from VALID ACCOUNTS (case-sensitive)',
+    '4. Amount must be a positive number',
+    '5. For a transfer between accounts: use a Transfer-type category and set BOTH ToAccount and ToAmount',
+    '6. ExchangeRate is PHP per 1 USD — only set it if explicitly mentioned, otherwise null',
+    '7. If it is not a transfer, ToAccount and ToAmount must be null',
+    '8. query.month is yyyy-MM; "this month" is ' + today.slice(0, 7) + ', and no period mentioned means null (all time)',
+    '9. Past spending/earning is "query"; money sitting in an account today is "balance"',
+    '10. If the message is none of the four intents, set error to a short reason and leave the rest null',
+    '11. Description: use normal capitalization even if the source shouts ("SM SUPERMARKET" -> "SM Supermarket");',
+    '    keep all-caps only for names that are genuinely all-caps (acronyms, brands like BPI, SM, GCash)',
+    '12. Leave reference/confirmation/transaction numbers out of the Description',
+    '13. Leave Description empty when it would only restate the Category or the accounts',
+    '    ("Transfer to Maribank" for a transfer to Maribank, "Cashback" on Income: Cashback).',
+    '    Only describe what the Category and Account do not already say (merchant, item, reason)'
+  ].join('\n');
+}
+
+/**
+ * The text an ingested email is parsed as. The leading instructions are what the chat
+ * prompt cannot cover: a chat message is sent BECAUSE it is a transaction, whereas a
+ * receipt-shaped marketing email is still not one. Port of gmail_text_ — it moves
+ * here because the parse moved here; GAS now only ships the raw fields.
+ */
+export const EMAIL_MAX_BODY = 3000;   // notification mail says everything up top; footers are noise
+export function emailText(mail, hints) {
+  return [
+    'The following is an email notification, not a chat message.',
+    'If it does not report money that has actually moved (a payment, charge,',
+    'transfer or credit that already happened), set error and log nothing.',
+    'The amount to log is the total actually charged or received, tax included.',
+    hints || '',
+    '',
+    'From: ' + (mail.from || ''),
+    'Subject: ' + (mail.subject || ''),
+    'Date: ' + (mail.date || ''),
+    '',
+    String(mail.body || '').slice(0, EMAIL_MAX_BODY)
+  ].join('\n');
+}

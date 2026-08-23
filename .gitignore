@@ -10,9 +10,6 @@ npm-debug.log*
 .DS_Store
 *.log
 
-# Live web-app deploymentId (URL component = credential) — used by release.js
-.deploymentid
-
 # Session handoff notes (per-session artifact, not history)
 HANDOFF.md
 
@@ -22,5 +19,10 @@ n8n-data/
 # Wrangler local state/cache
 worker/.wrangler/
 
-# Local `wrangler dev` secrets (APP_PASS, GAS_URL incl. the API token)
+# Local `wrangler dev` secrets (APP_PASS, the bot/Gemini/IBKR tokens)
 worker/.dev.vars
+
+# v2 migration artefacts — real financial data, never committed
+migrate/fixtures/
+seed.sql
+financetracker-export-*.json

@@ -1,178 +1,169 @@
 /**
- * Cloudflare Worker — hosts the FinanceTracker SPA and fronts the Apps Script API.
+ * worker.js — the whole backend. Cloudflare Worker + D1, as of v2.0.0.
  *
- * Two jobs, and the second is why the first lives here too:
+ * Before v2 this file was a 178-line proxy in front of an Apps Script web app: it
+ * existed because Telegram rejects a redirecting webhook and Apps Script 302s every
+ * POST, and it grew /api and the SPA because GAS cannot send CORS headers either.
+ * The Sheet is now a frozen archive, D1 is the source of truth, and the proxy is the
+ * application.
  *
- * 1. The Telegram proxy (the original reason this Worker exists). Telegram refuses
- *    a webhook that answers with a redirect ("Wrong response from the webhook: 302
- *    Found") and keeps redelivering, and an Apps Script /exec URL always answers
- *    POST with a 302 to script.googleusercontent.com. So this answers Telegram
- *    200 immediately and forwards the update to GAS via waitUntil.
+ * Routes (everything else is a static asset from public/, free and unmetered):
+ *   POST /tg     — the Telegram webhook. Same URL as before, so no setWebhook re-run.
+ *                  Answers 200 immediately and does the work in waitUntil, because a
+ *                  Gemini round trip is slower than Telegram's patience.
+ *   POST /login  — passphrase -> sha256(APP_PASS) cookie (HttpOnly/Secure/Lax, 1yr).
+ *   GET|POST /api — the JSON API. GET = reads, POST = writes; the split comes from the
+ *                  handler name's get…/list… prefix, which is also how the SPA's gs()
+ *                  picks its method, so there is exactly one list to keep in sync.
  *
- * 2. /api — the SPA's data path. GAS cannot send CORS headers and 302s every
- *    request, so the browser can never call it directly; something has to sit in
- *    front either way. Since it does, the SPA is served from this same Worker
- *    (public/ static assets) and is therefore SAME-ORIGIN with /api: no CORS, no
- *    preflight round trip on writes. Static assets are free and unmetered and
- *    bypass this script entirely — only /api, /login and /tg burn invocations.
+ * Auth on /api: the ft_auth cookie (the SPA) OR `Authorization: Bearer INGEST_TOKEN`
+ * (the two remaining Apps Script jobs — the Gmail courier and the backup puller).
+ * 401 is JSON, never a redirect: that is what lets gs() prompt for the passphrase and
+ * retry the call in place.
  *
- * Auth: /api needs an ft_auth cookie (see /login); the app shell is public, which
- * is fine because it holds no data and no secrets. Deliberately NOT Cloudflare
- * Access — that needs a domain on a Cloudflare zone and there isn't one.
- *
- * Don't add a /mail route to open the receipt's ⌕ Email button in Gmail — it was tried
- * and it cannot work; CLAUDE.md's worker/ row has the why.
+ * The KV edge read cache is GONE. It existed to hide Apps Script latency and D1 is the
+ * thing it was faking; the namespace is rebound as FX_CACHE (see src/fx.js). The
+ * client's own version-gated cache is untouched — it is still the offline story.
  *
  * Secrets (wrangler secret put ...):
- *   GAS_URL       — the full endpoint, incl. ?action=telegram and &token= if
- *                   ENFORCE_TOKEN is on. Run tg_gasEndpoint() in the Apps Script
- *                   editor to print exactly this string. /api reuses it: the exec
- *                   base and the token are parsed back out of it, so there is one
- *                   GAS secret here, not three.
- *   APP_PASS      — the SPA passphrase. Unset = /api is closed, not open.
- *   SECRET_TOKEN  — optional; must equal the secret_token registered by
- *                   tg_setWebhook. Set both or neither.
- *
- * Bindings (wrangler.toml):
- *   API_CACHE     — optional KV namespace, the edge read cache. Unbound = no
- *                   caching, everything still works; see cacheableRead().
+ *   APP_PASS, SECRET_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, GEMINI_API_KEY,
+ *   INGEST_TOKEN, IBKR_FLEX_TOKEN, IBKR_FLEX_QUERY_ID
+ * Bindings: DB (D1), FX_CACHE (KV, optional — unbound just means every FX lookup fetches).
  */
+import {
+  getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
+  getLedger, getCategories, getDataVersion, listTransactions, listTable, getExportAll,
+  createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
+  bulkUpdateTransactions, bulkDeleteTransactions, updateLedgerCell, appendLedgerRow,
+  deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
+} from './src/api.js';
+import { handleUpdate, ingestEmail } from './src/telegram.js';
+import { runCron } from './src/jobs.js';
 
-const COOKIE = "ft_auth";
+const COOKIE = 'ft_auth';
+
+/**
+ * GET-only, side-effect-free. Names MUST stay get…/list… — worker/public/app.js picks
+ * GET vs POST off that prefix rather than shipping a second copy of this table, and
+ * test.js fails the build if a route is ever named against the rule.
+ */
+export const ROUTES_READ = {
+  getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
+  getLedger, getCategories, getDataVersion, listTransactions,
+  listTable,        // admin grid
+  getExportAll      // backup puller + the admin screen's CSV
+};
+
+export const ROUTES_WRITE = {
+  createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
+  bulkUpdateTransactions, bulkDeleteTransactions,
+  updateLedgerCell, appendLedgerRow, deleteLedgerRow,
+  updateTableCell, insertTableRow, deleteTableRow,   // admin grid
+  ingestEmail                                        // the Gmail courier
+};
 
 export default {
   async fetch(request, env, ctx) {
-    const path = new URL(request.url).pathname;
-    // A webhook carries no cookie, so this route is gated by SECRET_TOKEN instead.
-    // It MUST be /tg, not "/" as before v1.6.0: verified with `wrangler dev` — a POST
-    // to "/" is answered 405 by the static-asset handler and never reaches this
-    // script, because assets are matched before the Worker and only serve GET/HEAD.
-    // So set WEBHOOK_URL to <worker>/tg and re-run tg_setWebhook.
-    if (request.method === "POST" && path === "/tg") return telegram(request, env, ctx);
-    if (path === "/login") return login(request, env);
-    if (path === "/api") return api(request, env, ctx);
-    return new Response("not found", { status: 404 });   // assets never reach here
+    const url = new URL(request.url);
+    // The receipt's "Edit details" button links back into the SPA, which is this same
+    // origin now — no WEBHOOK_URL-minus-/tg derivation and no WEB_APP_URL trap left.
+    env.APP_URL = url.origin;
+    // A webhook carries no cookie, so /tg is gated by SECRET_TOKEN instead. It MUST be
+    // /tg and not "/": a POST to "/" is answered 405 by the static-asset handler and
+    // never reaches this script, because assets match before the Worker and only serve
+    // GET/HEAD. Verified with `wrangler dev`; undocumented either way, so do not
+    // re-derive it.
+    if (request.method === 'POST' && url.pathname === '/tg') return telegram(request, env, ctx);
+    if (url.pathname === '/login') return login(request, env);
+    if (url.pathname === '/api') return api(request, env, url);
+    return new Response('not found', { status: 404 });   // assets never reach here
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runCron(env, event.cron));
   }
 };
 
-function telegram(request, env, ctx) {
+async function telegram(request, env, ctx) {
   if (env.SECRET_TOKEN &&
-      request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.SECRET_TOKEN) {
-    return new Response("forbidden", { status: 403 });
+      request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.SECRET_TOKEN) {
+    return new Response('forbidden', { status: 403 });
   }
-  // waitUntil keeps the fetch alive after we have already answered Telegram.
-  // The GAS execution happens on the POST itself, so the 302 that comes back
-  // is of no interest — it is neither followed nor read.
-  return request.text().then((update) => {
-    ctx.waitUntil(fetch(env.GAS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: update
-    }));
-    return new Response("ok");
-  });
+  const update = await request.json().catch(() => null);
+  // Answer first, work after: Telegram redelivers anything it has not heard back from,
+  // and a Gemini parse plus a few D1 round trips is well inside waitUntil but not
+  // inside Telegram's patience. handleUpdate never throws.
+  ctx.waitUntil(handleUpdate(env, update));
+  return new Response('ok');
 }
 
-/** POST {pass} → sets the session cookie. The SPA calls this on a 401 from /api. */
+/** POST {pass} -> sets the session cookie. The SPA calls this on a 401 from /api. */
 async function login(request, env) {
-  if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+  if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
   const body = await request.json().catch(() => ({}));
-  // ponytail: plain compare, no rate limiting — use a long random passphrase and
-  // the free plan's 100k requests/day is the brute-force ceiling. Add Turnstile or
-  // a KV attempt counter only if this ever gets more than one user.
-  if (!env.APP_PASS || body.pass !== env.APP_PASS) return new Response("unauthorized", { status: 401 });
-  // Hashed so the passphrase itself never sits in the cookie jar. Year-long, since
-  // rotating APP_PASS invalidates every cookie anyway (the hash changes).
-  return new Response("ok", {
+  // ponytail: plain compare, no rate limiting — use a long random passphrase and the
+  // free plan's 100k requests/day is the brute-force ceiling. Add Turnstile or a KV
+  // attempt counter only if this ever gets more than one user.
+  if (!env.APP_PASS || body.pass !== env.APP_PASS) return new Response('unauthorized', { status: 401 });
+  return new Response('ok', {
     headers: {
-      "Set-Cookie": `${COOKIE}=${await sha256(env.APP_PASS)}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`
+      'Set-Cookie': `${COOKIE}=${await sha256(env.APP_PASS)}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`
     }
   });
 }
 
 /**
- * Is this GET worth putting in the edge cache?
- *
- * `_v` is the SPA's DATA_VERSION, stamped onto every read by gs(). Keying on it
- * means a write bumps the version, the next read asks for a different key, and a
- * stale payload becomes unreachable by construction — no purge logic, no TTL race,
- * and the payload carries its own `version` anyway, so the key is only a bucket
- * hint and can never be the thing that decides freshness. A request with no `_v`
- * (a cold boot that has not learned the version yet) simply bypasses.
- *
- * getDataVersion is the exception and MUST stay one: it is the oracle the SPA
- * gates its own cache on, so caching it would make every other entry
- * unfalsifiable — the app would sit on stale data until the entry expired.
- *
- * KV rather than the Cache API on purpose: caches.default is a silent no-op on a
- * .workers.dev subdomain (it needs a zone, i.e. a domain, which this deploy has
- * no more than Cloudflare Access did). Swap it back if a domain ever appears.
+ * Is the caller allowed? The SPA presents the cookie; the two Apps Script jobs present
+ * the bearer token. Either is the owner — there is one user — so both are accepted on
+ * every action rather than maintaining a per-route credential matrix.
  */
-export function cacheableRead(method, params) {
-  return method === "GET" && params.has("_v") && params.get("action") !== "getDataVersion";
-}
-
-const CACHE_TTL = 600;   // seconds; entries are version-keyed, so this only bounds junk
-
-/** Gated proxy to GAS. GET ?action=<read>&… / POST {action,…}. */
-async function api(request, env, ctx) {
-  if (!env.APP_PASS) return json({ status: "error", message: "APP_PASS is not set on the Worker." }, 503);
+async function authorized(request, env) {
+  const bearer = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (env.INGEST_TOKEN && bearer && bearer === env.INGEST_TOKEN) return true;
+  if (!env.APP_PASS) return false;
   const want = `${COOKIE}=${await sha256(env.APP_PASS)}`;
-  if (!(request.headers.get("Cookie") || "").split(/;\s*/).includes(want)) {
-    return json({ status: "error", message: "Locked" }, 401);
-  }
-
-  const src = new URL(request.url);
-  const key = src.pathname + src.search;
-  // ponytail: hit rate is modest by design — the SPA's own persisted S.cache already
-  // covers repeat reads on one device, so this earns its keep on the SECOND device, a
-  // wiped client and post-Refresh. A >400-char key (a long search filter) just skips
-  // rather than risking KV's 512-byte key limit. Move to a shared read model in D1
-  // only if that stops being enough.
-  const kv = env.API_CACHE;
-  const hot = !!kv && key.length <= 400 && cacheableRead(request.method, src.searchParams);
-  if (hot) {
-    const hit = await kv.get(key, { cacheTtl: CACHE_TTL });
-    if (hit) return json(hit);
-  }
-
-  const gas = new URL(env.GAS_URL);                    // <exec>?action=telegram&token=<tok>
-  const target = new URL(gas.origin + gas.pathname);
-  const token = gas.searchParams.get("token");
-
-  let init = { method: "GET" };
-  if (request.method === "POST") {
-    const body = await request.json().catch(() => ({}));
-    if (token) body.token = token;                     // auth_extractToken_ reads body.token
-    target.searchParams.set("action", body.action || src.searchParams.get("action") || "");
-    init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-  } else {
-    src.searchParams.forEach((v, k) => target.searchParams.set(k, v));
-    target.searchParams.delete("_v");                  // ours; rt_args_ never needs to see it
-    if (token) target.searchParams.set("token", token);
-  }
-
-  // GAS answers /exec with a 302 to script.googleusercontent.com; fetch follows it
-  // by default and the JSON comes off the final hop. This is the whole reason the
-  // browser cannot talk to GAS itself.
-  const res = await fetch(target, init);
-  const body = await res.text();
-  // GAS answers a payload it refused with HTTP 200 + {status:"error"} — never cache that.
-  if (hot && res.ok && !isError(body)) {
-    ctx.waitUntil(kv.put(key, body, { expirationTtl: CACHE_TTL }));
-  }
-  return json(body, res.status);
+  return (request.headers.get('Cookie') || '').split(/;\s*/).includes(want);
 }
 
-function isError(body) {
-  try { return JSON.parse(body).status === "error"; } catch { return true; }
+/** The JSON API. Handlers throw; a throw becomes {status:'error', message}. */
+async function api(request, env, url) {
+  if (!env.APP_PASS) return json({ status: 'error', message: 'APP_PASS is not set on the Worker.' }, 503);
+  if (!env.DB) return json({ status: 'error', message: 'The D1 binding DB is not configured.' }, 503);
+  if (!await authorized(request, env)) return json({ status: 'error', message: 'Locked' }, 401);
+
+  // Query params + JSON body merged into one args object, body winning. Port of rt_args_.
+  const args = {};
+  url.searchParams.forEach((v, k) => { args[k] = v; });
+  let body = null;
+  if (request.method === 'POST') {
+    try { body = await request.json(); }
+    catch (err) { return json({ status: 'error', message: 'Invalid JSON body: ' + err.message }); }
+    Object.keys(body || {}).forEach((k) => { args[k] = body[k]; });
+  }
+
+  const action = args.action || '';
+  const read = ROUTES_READ[action], write = ROUTES_WRITE[action];
+  // Never mutate over GET — link previewers and scanners prefetch URLs.
+  if (request.method === 'GET' && write) return json({ status: 'error', message: "Action '" + action + "' requires POST." });
+  const handler = request.method === 'GET' ? read : (write || null);
+  if (!handler) {
+    return json({ status: 'error', message: 'Unknown action: ' + action,
+                  knownActions: Object.keys(request.method === 'GET' ? ROUTES_READ : ROUTES_WRITE) });
+  }
+  try {
+    return json(await handler(args, env));
+  } catch (err) {
+    console.error(action + ': ' + (err && err.stack ? err.stack : err));
+    return json({ status: 'error', message: (err && err.message) ? err.message : String(err) });
+  }
 }
 
 const json = (body, status = 200) =>
-  new Response(typeof body === "string" ? body : JSON.stringify(body),
-    { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  new Response(JSON.stringify(body), {
+    status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+  });
 
 async function sha256(s) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
