@@ -111,8 +111,9 @@ export async function getRecurring(args, env) {
   return { status: 'success', rows: rows.map((r) => ({
     Description: r.description || '',
     Currency: r.currency || '',
-    Amount: fromU(r.amount_u),
-    'Transaction Fee': fromU(r.fee_u),
+    // Blank sheet cells were '' in v1, and the Recurring rows are full of them.
+    Amount: r.amount_u == null ? '' : fromU(r.amount_u),
+    'Transaction Fee': r.fee_u == null ? '' : fromU(r.fee_u),
     'Months Left': r.months_left == null ? '' : r.months_left,
     Group: r.grp || ''
   })) };

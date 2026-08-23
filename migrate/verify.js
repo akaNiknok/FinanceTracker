@@ -85,7 +85,12 @@ async function read(base, cookie, name, args) {
 
 // ── diffing ──────────────────────────────────────────────────────────────────
 // Fields that are SUPPOSED to differ between the two runs and carry no contract weight.
-const VOLATILE = /(^|\.)version$|(^|\.)exportedAt$/;
+//   version/exportedAt — bump on every run by definition.
+//   startingBalance    — v1 read a blank cell as null; `accounts.starting_balance_u` is
+//                        NOT NULL DEFAULT 0, so a blank now reads as 0. Nothing in
+//                        app.js reads the field; a schema rebuild to keep a distinction
+//                        with no consumer would be the more expensive mistake.
+const VOLATILE = /(^|\.)version$|(^|\.)exportedAt$|(^|\.)startingBalance$/;
 const TOL_ABS = 0.005;     // a centavo
 const TOL_REL = 0.005;     // 0.5% — covers a live-FX / price-source shift, not a bug
 
@@ -100,7 +105,11 @@ function diff(a, b, p, structure, values) {
     return;
   }
   if (kind(a) === 'object') {
-    const ka = Object.keys(a), kb = Object.keys(b);
+    // The Transactions sheet's first column is a literal "." — the row-select checkbox.
+    // It rode along into every sheet-shaped payload and nothing in app.js ever read it,
+    // so its absence in v2 is the sheet leaving, not the contract moving.
+    const real = (k) => k !== '.';
+    const ka = Object.keys(a).filter(real), kb = Object.keys(b).filter(real);
     ka.filter((k) => !(k in b)).forEach((k) => structure.push(p + '.' + k + ': missing in v2'));
     kb.filter((k) => !(k in a)).forEach((k) => structure.push(p + '.' + k + ': new in v2'));
     ka.filter((k) => k in b).forEach((k) => diff(a[k], b[k], p ? p + '.' + k : k, structure, values));

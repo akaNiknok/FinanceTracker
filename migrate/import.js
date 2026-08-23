@@ -102,17 +102,11 @@ const accountTypes = sheet('AccountType').filter((r) => r.Subtype).map((r) => {
 insert('account_types', ['subtype', 'type'], accountTypes);
 
 // ── accounts ─────────────────────────────────────────────────────────────────
-// A Shares account's ticker exists only inside its GOOGLEFINANCE call, so it is dug
-// out of the exported formula rather than typed anywhere. NASDAQ:VOO -> VOO: IBKR
-// speaks bare symbols and the exchange prefix is a Google Finance artefact.
-function symbolOf(name) {
-  const cells = (data.accountFormulas || {})[name] || {};
-  for (const k of Object.keys(cells)) {
-    const m = /GOOGLEFINANCE\(\s*"([^"]+)"/i.exec(cells[k]);
-    if (m) return m[1].split(':').pop().trim();
-  }
-  return null;
-}
+// A Shares account's ticker IS its name: the sheet's PHP formula reads
+// GOOGLEFINANCE(A<row>), i.e. the name cell. (The only quoted GOOGLEFINANCE on the row is
+// "CURRENCY:USDPHP", which is the FX leg, not a ticker.) Same test as db.js isSharesAcct.
+const isShares = (r) =>
+  String(r.Currency).toUpperCase() === 'SHARES' || /share|stock/i.test(String(r.Subtype || ''));
 
 const acctId = {}, acctMeta = {};
 const accounts = sheet('Accounts').filter((r) => r.Name).map((r, i) => {
@@ -126,7 +120,7 @@ const accounts = sheet('Accounts').filter((r) => r.Name).map((r, i) => {
                      sheetPhp: numOrNull(r['Current Balance (PHP)']) };
   return {
     id: i + 1, name, currency: txt(r.Currency) || 'PHP', subtype,
-    symbol: symbolOf(name),
+    symbol: isShares(r) ? name : null,
     starting_balance_u: toU(r['Starting Balance']),
     interest_frequency: txt(r['Interest Frequency']),
     interest_rate: numOrNull(r['Interest Rate']),
@@ -155,6 +149,8 @@ const seenId = new Set();
 const transactions = [];
 sheet('Transactions').forEach((r, i) => {
   const where = 'Transactions row ' + (i + 2);
+  // Sheet row 2 is the ARRAYFORMULA anchor: setupMigration stamped an ID on it, nothing else.
+  if (blank(r.Date) && blank(r.Category) && blank(r.Account)) return;
   const id = txt(r.ID);
   if (!id) { fail(where + ': no ID (run the v1 setupMigration before exporting)'); return; }
   if (seenId.has(id)) { fail(where + ': duplicate ID ' + id); return; }

@@ -190,7 +190,9 @@ export function shapeAccounts(refs, net, prices, fx) {
     let php;
     if (shares) {
       const p = a.symbol ? prices[a.symbol] : null;
-      php = p ? q2(balanceNative * p.price * rate(p.currency)) : null;
+      // No price is only unknowable while shares are actually held: IBKR reports no
+      // open position for a closed holding, and zero shares are worth zero at any price.
+      php = p ? q2(balanceNative * p.price * rate(p.currency)) : (balanceNative ? null : 0);
     } else {
       const r = rate(a.currency);
       php = r ? q2(balanceNative * r) : null;
@@ -210,7 +212,7 @@ export function shapeAccounts(refs, net, prices, fx) {
       isShares: shares,
       isInvestment: isInvestmentAcct(a),
       interestFrequency: a.interest_frequency || null,
-      interestRate: a.interest_rate == null ? null : a.interest_rate,
+      interestRate: a.interest_rate || null,   // v1 was `|| null`: a 0% rate reads as blank
       creditLimit: limit,
       notes: a.notes || null,
       color: a.color || null
