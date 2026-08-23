@@ -80,7 +80,7 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runCron(env, event.cron));
+    ctx.waitUntil(runCron(env));
   }
 };
 

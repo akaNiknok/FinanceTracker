@@ -15,7 +15,7 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 - **Telegram bot.** Send "coffee 120 maya". The bot writes the row and answers with a receipt that has an **Undo** button. One message can hold more than one transaction. The bot also answers `/balance` and questions such as "how much on food this month".
 - **Progressive web app.** Seven screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
 - **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
-- **Three more parts.** A nightly job records the interest of each account. A second nightly job reads the share prices from Interactive Brokers. A Tax screen collects the data for the Philippine BIR 8 percent regime.
+- **Two more parts.** A nightly job reads the share prices from Interactive Brokers. A Tax screen collects the data for the Philippine BIR 8 percent regime.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ flowchart TB
     subgraph CF["Cloudflare Worker — free plan"]
         WK["/tg · /api · /login<br/>and the static app files"]
         SV["Handlers<br/>validation · one transactional batch"]
-        JB["Cron jobs<br/>daily interest · IBKR prices"]
+        JB["Cron job<br/>IBKR prices"]
         AI["Gemini<br/>structured output"]
     end
 
@@ -73,18 +73,18 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 
 **Infrastructure that the project removed.** The first client was an n8n workflow on a laptop, and a migration to a virtual machine started, then stopped. The bot moved into Apps Script, then into the Worker. The project has no virtual machine, no web server, no TLS certificates, no dynamic DNS name and no container stack.
 
-**A feature that the data removed.** A job calculated the daily interest. The bank gave 24.50 pesos, and the job gave 25.83 pesos, because the bank does not use the daily balance multiplied by the rate. The project stopped the job for that bank. A calculation that does not agree with the bank is worse than no calculation.
+**A feature that the data removed.** A job calculated the daily interest. The bank gave 24.50 pesos, and the job gave 25.83 pesos, because the bank does not use the daily balance multiplied by the rate. The project stopped the job for that bank, then removed the job completely in v2.0.1. A calculation that does not agree with the bank is worse than no calculation.
 
 ## Facts
 
 | Item | Value |
 | --- | --- |
-| Backend | approximately 2 060 lines of JavaScript in the Worker |
+| Backend | approximately 2 000 lines of JavaScript in the Worker |
 | Database schema | 156 lines of SQL, 11 tables and 1 view |
 | Frontend | approximately 3 020 lines, no framework and no bundler |
 | Apps Script | approximately 510 lines in 4 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 50 tests operate offline with `npm test`, and 26 of them use a real SQLite database |
+| Tests | 48 tests operate offline with `npm test`, and 25 of them use a real SQLite database |
 | Releases | 35 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
@@ -163,7 +163,6 @@ The `meta` table holds the settings that were script properties before. Change t
 | --- | --- | --- |
 | `gmail_ingest` | Apps Script, add it manually | Each 5 minutes |
 | `backup_run` | Apps Script, run `backup_install()` one time | Each day, approximately 03:00 |
-| Daily interest | Cloudflare cron, in `wrangler.toml` | 00:30 Manila time |
 | IBKR prices | Cloudflare cron, in `wrangler.toml` | 06:00 Manila time |
 
 Cloudflare does not do a job again after a failure. Thus each job sends a Telegram message if it fails. Apps Script disables a trigger after a number of failures.

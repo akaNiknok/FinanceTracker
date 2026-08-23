@@ -1,87 +1,20 @@
 /**
- * jobs.js — the two cron jobs.
+ * jobs.js — the cron job.
  *
- *   1. interest  (30 16 * * * UTC = 00:30 Manila) — port of Interest.gs.
- *   2. prices    (0 22 * * *  UTC = 06:00 Manila) — IBKR Flex Web Service, the
- *      replacement for the GOOGLEFINANCE cells that vanished with the Sheet.
+ *   prices (0 22 * * * UTC = 06:00 Manila) — IBKR Flex Web Service, the replacement
+ *   for the GOOGLEFINANCE cells that vanished with the Sheet.
  *
- * The free plan does NOT retry a failed cron, so both are wrapped and a failure is
- * reported to the owner in Telegram. A missed night is harmless either way: interest
- * re-prices itself seven days back on the next run, and prices just stay one day
- * staler (the read path never fetches, by design).
+ * The daily-interest job lived here until v2.0.1 and is gone: the bank's own interest
+ * never agreed with daily-balance x rate, so the figure it posted was wrong more often
+ * than it was useful. `git show v2.0.0:worker/src/jobs.js` if it is ever wanted back.
+ * The `interest-*` rows it already posted stay as history.
+ *
+ * The free plan does NOT retry a failed cron, so the job is wrapped and a failure is
+ * reported to the owner in Telegram. A missed night is harmless: prices just stay one
+ * day staler (the read path never fetches, by design).
  */
-import { refs, deltas, addDays, manilaToday, fromU } from './db.js';
-import { createTransaction, updateTransaction, deleteTransaction } from './api.js';
+import { manilaToday } from './db.js';
 import { notifyOwner, msgOf } from './telegram.js';
-
-// ── daily interest ───────────────────────────────────────────────────────────
-const WITHHOLDING = 0.20;
-const LOOKBACK_DAYS = 7;      // repair window; wider catches more late/backdated entries
-const CENT_U = 10000;         // 0.01 in micros — the "already correct" threshold
-
-/** Net interest on a day's closing balance: gross/365 less withholding, to the centavo. */
-export function interestNetU(balanceU, rate) {
-  return Math.round((balanceU * rate / 365) * (1 - WITHHOLDING) / CENT_U) * CENT_U;
-}
-
-/**
- * Credit one day of interest per Daily-interest account, for the last `lookbackDays`
- * CLOSED days. Every rule here is Interest.gs's, unchanged:
- *
- *   * the base is the day's CLOSING balance recomputed from the ledger, not the live
- *     balance at trigger time — so a transaction logged late still prices its own day;
- *   * today is never credited, so an evening entry lands before its day is priced;
- *   * the whole window is re-priced each run and the row is updated (or deleted) when
- *     the figure moved, with the previous amount subtracted from the base so a repair
- *     cannot compound on its own output;
- *   * oldest -> newest, so a repaired older day compounds forward. That is why each
- *     day's writes happen before the next day's deltas() call.
- *   * per-account try/catch: one bad account must not abort the run.
- *
- * Manual backfill after an outage: interestJob(env, 60).
- */
-export async function interestJob(env, lookbackDays) {
-  const days = Math.max(1, parseInt(lookbackDays, 10) || LOOKBACK_DAYS);
-  const r = await refs(env);
-  const accounts = r.accounts.filter((a) => String(a.interest_frequency) === 'Daily' && Number(a.interest_rate));
-  if (!accounts.length) return { changed: 0, errors: [], message: 'No daily-interest accounts.' };
-
-  // What we have already credited, by deterministic id — this is what tells a fresh
-  // credit from a repair.
-  const posted = Object.create(null);
-  (await env.DB.prepare("SELECT id, amount_u FROM transactions WHERE id LIKE 'interest-%'").all())
-    .results.forEach((x) => { posted[x.id] = x.amount_u; });
-
-  const today = manilaToday();
-  let changed = 0;
-  const errors = [];
-  for (let back = days; back >= 1; back--) {
-    const day = addDays(today, -back);
-    const net = await deltas(env, r, day);
-    for (const a of accounts) {
-      const id = 'interest-' + a.name + '-' + day;
-      const priorU = posted[id] || 0;
-      const balanceU = (a.starting_balance_u || 0) + (net[a.id] || 0) - priorU;
-      const netU = interestNetU(balanceU, a.interest_rate);
-      if (Math.abs(netU - priorU) < CENT_U / 2) continue;      // already correct (incl. both zero)
-      try {
-        if (!priorU) {
-          await createTransaction({ ID: id, Date: day, Category: 'Income: Interest',
-                                    Account: a.name, Amount: fromU(netU) }, env);
-        } else if (netU) {
-          await updateTransaction({ ID: id, Amount: fromU(netU) }, env);
-        } else {
-          await deleteTransaction({ ID: id }, env);            // balance went to zero -> the row is wrong
-        }
-        posted[id] = netU;
-        changed++;
-      } catch (err) {
-        errors.push(a.name + ' ' + day + ': ' + msgOf(err));
-      }
-    }
-  }
-  return { changed, errors };
-}
 
 // ── IBKR Flex: share prices ──────────────────────────────────────────────────
 // Two-step service: SendRequest hands back a ReferenceCode, GetStatement returns the
@@ -162,22 +95,17 @@ export async function pricesJob(env) {
 
 // ── cron dispatch ────────────────────────────────────────────────────────────
 /**
- * Both jobs, wrapped. The free plan does not retry a failed cron, so the only failure
+ * The job, wrapped. The free plan does not retry a failed cron, so the only failure
  * signal that exists is the Telegram message this sends.
  */
-export async function runCron(env, cron) {
-  const job = cron === '0 22 * * *' ? 'prices' : 'interest';
+export async function runCron(env) {
   try {
-    const res = job === 'prices' ? await pricesJob(env) : await interestJob(env);
-    if (res.errors && res.errors.length) {
-      await notifyOwner(env, '⛔ *Interest job: ' + res.errors.length + ' account(s) failed*\n› ' +
-        res.errors.join('\n› '));
-    }
-    console.log(job + ': ' + JSON.stringify(res));
+    const res = await pricesJob(env);
+    console.log('prices: ' + JSON.stringify(res));
     return res;
   } catch (err) {
-    console.error(job + ' failed: ' + (err && err.stack ? err.stack : err));
-    await notifyOwner(env, '⛔ *' + job + ' job failed*\n› ' + msgOf(err));
+    console.error('prices failed: ' + (err && err.stack ? err.stack : err));
+    await notifyOwner(env, '⛔ *prices job failed*\n› ' + msgOf(err));
     throw err;
   }
 }

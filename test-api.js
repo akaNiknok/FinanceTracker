@@ -58,7 +58,6 @@ function d1(db) {
 (async function () {
   const load = (p) => import(pathToFileURL(path.join(__dirname, 'worker', p)).href);
   const api = await load('src/api.js');
-  const jobs = await load('src/jobs.js');
   const dbm = await load('src/db.js');
 
   const sqlite = new DatabaseSync(':memory:');
@@ -293,7 +292,7 @@ function d1(db) {
     assert.ok(e.exportedAt);
   });
 
-  console.log('\nBulk and jobs:');
+  console.log('\nBulk:');
   await test('bulk update and delete report what they skipped', async () => {
     const u = await api.bulkUpdateTransactions(
       { ids: ['t1', 'nope'], patch: { Category: 'Expense: Food', Description: 'bulk' } }, env);
@@ -302,19 +301,6 @@ function d1(db) {
     const d = await api.bulkDeleteTransactions({ ids: ['t3', 'nope'] }, env);
     assert.strictEqual(d.deleted, 1);
     assert.deepStrictEqual(d.skipped, ['nope']);
-  });
-
-  await test('the interest job credits closed days only, and is idempotent', async () => {
-    const first = await jobs.interestJob(env, 3);
-    assert.strictEqual(first.errors.length, 0, first.errors.join('; '));
-    assert.ok(first.changed > 0, 'nothing was credited');
-    const today = dbm.manilaToday();
-    const rows = sqlite.prepare("SELECT id, date FROM transactions WHERE id LIKE 'interest-%' ORDER BY date").all();
-    assert.ok(rows.every((r) => r.date < today), 'today must never be credited');
-    // A second run at the same balances must be a no-op — otherwise every run would
-    // re-price and the repair loop would compound on its own output.
-    const second = await jobs.interestJob(env, 3);
-    assert.strictEqual(second.changed, 0, 'the re-price is not idempotent');
   });
 
   await test('the other whitelist shapes work too (composite and text primary keys)', async () => {

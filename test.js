@@ -96,8 +96,9 @@ console.log('\nApps Script (vm):');
 
   test('manilaToday is Manila, not UTC', () => {
     // 2026-08-23T17:00Z is already the 24th in Manila (UTC+8). A bare toISOString here
-    // is the bug the helper exists to prevent — the interest job would credit the
-    // wrong closed day for eight hours out of every twenty-four.
+    // is the bug the helper exists to prevent — a transaction with no Date would land
+    // on tomorrow's day, and a BIR quarter would end, for eight hours out of every
+    // twenty-four.
     assert.strictEqual(db.manilaToday(new Date('2026-08-23T17:00:00Z')), '2026-08-24');
     assert.strictEqual(db.manilaToday(new Date('2026-08-23T15:59:00Z')), '2026-08-23');
   });
@@ -164,12 +165,6 @@ console.log('\nApps Script (vm):');
     ['Period', 'Description', 'ExchangeRate', 'ToAccount', 'ToAmount', 'ToCurrency']
       .forEach((k) => assert.strictEqual(t[k], '', k + ' must be "" and not null'));
     assert.strictEqual(t.Type, 'Expense');
-  });
-
-  test('interestNetU: gross/365 less 20% withholding, to the centavo', () => {
-    // 100,000.00 at 4%: 100000*0.04/365 = 10.9589; x0.8 = 8.7671 -> 8.77
-    assert.strictEqual(jobs.interestNetU(100000e6, 0.04), 8.77e6);
-    assert.strictEqual(jobs.interestNetU(0, 0.04), 0);
   });
 
   test('parsePositions reads an IBKR Flex statement', () => {

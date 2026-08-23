@@ -42,9 +42,9 @@ migrations_dir = "migrations"
 binding = "FX_CACHE"
 id = "414311e8408f43679204a86377b6c414"
 
-# 2 of the 5 free cron triggers. UTC; Manila is UTC+8.
-#   30 16 * * *  = 00:30 Manila — daily interest (closed days only, 7-day reprice)
-#   0  22 * * *  = 06:00 Manila — IBKR Flex -> prices (after IBKR's overnight refresh)
+# 1 of the 5 free cron triggers. UTC; Manila is UTC+8.
+#   0 22 * * *  = 06:00 Manila — IBKR Flex -> prices (after IBKR's overnight refresh)
 # The free plan does NOT retry a failed cron; src/jobs.js reports failures to Telegram.
+# The daily-interest cron was removed in v2.0.1 — the bank's own figures never matched it.
 [triggers]
-crons = ["30 16 * * *", "0 22 * * *"]
+crons = ["0 22 * * *"]
