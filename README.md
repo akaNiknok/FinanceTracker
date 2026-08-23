@@ -142,7 +142,7 @@ For `npx wrangler dev`, put the same names in `worker/.dev.vars`. Git ignores th
 | --- | --- |
 | `WORKER_URL` | The address of the Worker. Do not add a path and do not add a final slash. |
 | `INGEST_TOKEN` | It must be the same as the Worker secret of the same name. |
-| `GMAIL_HINTS` | Text for the parser about facts that the email does not state. |
+| `GMAIL_HINTS` | Text for the parser about facts that the email does not state. Usually there is no such property, and the default text in `Gmail.gs` applies. |
 | `GMAIL_QUERY` | It replaces the Gmail search. Usually there is no such property, and a value here has more authority than the label. |
 | `GMAIL_LAST_TS`, `BACKUP_SHEET_ID` | The code writes these values. Do not change them manually. |
 
