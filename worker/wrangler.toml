@@ -32,7 +32,7 @@ run_worker_first = ["/api", "/login", "/tg"]
 [[d1_databases]]
 binding = "DB"
 database_name = "financetracker"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "0ebfbe8c-32db-434d-b59d-0b4e6ab549c3"
 migrations_dir = "migrations"
 
 # FX rates, cached 6h. This is the old API_CACHE namespace rebound: the edge read cache
