@@ -78,8 +78,11 @@ async function txById(env, r, id) {
 /** Accounts + the FX map they were priced with — the basis of four screens. */
 async function accountsList(env, r) {
   const [net, prices] = await Promise.all([deltas(env, r), latestPrices(env)]);
+  // USD is always resolved even when no account holds it: getDashboard reuses this map
+  // for the budget bars, and a USD-capped target must not go null there while the
+  // Budgets screen (which asks for USD explicitly) shows a figure.
   const fx = await fxMap(env, r.accounts.map((a) => a.currency)
-    .concat(Object.values(prices).map((p) => p.currency)));
+    .concat(Object.values(prices).map((p) => p.currency)).concat(['USD']));
   return { accounts: shapeAccounts(r, net, prices, fx), fx };
 }
 
