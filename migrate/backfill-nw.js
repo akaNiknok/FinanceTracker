@@ -45,6 +45,12 @@ catch (e) { console.error('backfill-nw needs Node 22+ (node:sqlite).'); process.
 const DUMP = process.argv.find((a) => a.endsWith('.sql')) ||
   path.join(__dirname, '..', 'worker', '.dev-data.sql');
 const SELFTEST = process.argv.includes('--self-test');
+// --force (alias --all): re-value EVERY past month even where a snapshot already
+// exists, and emit an upsert that OVERWRITES it (ON CONFLICT DO UPDATE) instead of
+// the default DO NOTHING. This is how you re-run history after a valuation rule
+// changes — e.g. reclassifying a near-cash ETF from invested to liquid — without
+// first deleting production rows: applying the file just overwrites in place.
+const FORCE = process.argv.includes('--force') || process.argv.includes('--all');
 
 // IBKR ticker -> Yahoo symbol, where they differ. US names are identical (omit
 // them); LSE-listed UCITS ETFs need the `.L` suffix. Quote currency is read from
@@ -159,7 +165,7 @@ async function main() {
   const months = [];
   for (let c = first; monthKey(c.y, c.m) !== liveKey; c = shiftMonth(c.y, c.m, 1)) {
     const key = monthKey(c.y, c.m);
-    if (!have.has(key)) months.push({ key, y: c.y, m: c.m });
+    if (FORCE || !have.has(key)) months.push({ key, y: c.y, m: c.m });
     if (months.length > 600) break;   // ~50 years, a sanity stop
   }
   if (!months.length) { log('Every past month already has a snapshot — nothing to do.'); process.exit(0); }
@@ -170,7 +176,8 @@ async function main() {
     .filter((a) => !isSharesAcct(a) && String(a.currency).toUpperCase() !== 'PHP')
     .map((a) => String(a.currency).toUpperCase()))];
 
-  log('Backfilling ' + months.length + ' month(s): ' + months[0].key + ' … ' + months[months.length - 1].key);
+  log('Backfilling ' + months.length + ' month(s): ' + months[0].key + ' … ' + months[months.length - 1].key +
+    (FORCE ? '  [--force: overwriting existing snapshots]' : ''));
   log('Share symbols: ' + (symbols.join(', ') || '(none)') + ' · currencies: ' + (currencies.join(', ') || '(none, PHP only)'));
 
   // Fetch each price/FX series once (bounded to the range we need), then read
@@ -206,15 +213,21 @@ async function main() {
     if (gap) { log('  SKIP ' + mo.key + ' — no ' + (gap.isShares ? 'price for ' + gap.name : 'FX for ' + gap.currency) + ' at ' + asOf); skipped++; continue; }
 
     const t = api.netWorthTotals(accts);
+    const conflict = FORCE
+      ? 'ON CONFLICT(month) DO UPDATE SET net_worth_u=excluded.net_worth_u, assets_u=excluded.assets_u, ' +
+        'liabilities_u=excluded.liabilities_u, shares_u=excluded.shares_u, taken_at=excluded.taken_at'
+      : 'ON CONFLICT(month) DO NOTHING';
     out.push("INSERT INTO nw_snapshots (month, net_worth_u, assets_u, liabilities_u, shares_u, taken_at) VALUES ('" +
       mo.key + "'," + toU(t.netWorth) + ',' + toU(t.assets) + ',' + toU(t.liabilities) + ',' + toU(t.sharesValue) +
-      ",'" + asOf + "T00:00:00.000Z') ON CONFLICT(month) DO NOTHING;");
+      ",'" + asOf + "T00:00:00.000Z') " + conflict + ";");
     log('  ' + mo.key + '  net worth ' + Math.round(t.netWorth).toLocaleString());
   }
 
   if (out.length) {
     process.stdout.write('-- backfill-nw.sql — reconstructed monthly net worth (Yahoo Finance prices + FX)\n');
-    process.stdout.write('-- Generated ' + new Date().toISOString() + '. Apply once; ON CONFLICT keeps real snapshots.\n');
+    process.stdout.write('-- Generated ' + new Date().toISOString() +
+      (FORCE ? '. --force: OVERWRITES every past month in place (ON CONFLICT DO UPDATE).\n'
+             : '. Apply once; ON CONFLICT keeps real snapshots.\n'));
     process.stdout.write(out.join('\n') + '\n');
   }
   if (failures.length) { log('\nData sources that failed (fix SYMBOL_MAP / repoint fetchDailySeries):'); failures.forEach((f) => log('  - ' + f)); }

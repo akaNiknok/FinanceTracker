@@ -237,9 +237,10 @@ function d1(db) {
     // A closed month's snapshot IS served (123 PHP = 123_000_000 micros).
     const past = now === '2026-Jul' ? '2026-Jun' : '2026-Jul';
     sqlite.exec("INSERT INTO nw_snapshots (month,net_worth_u,assets_u,liabilities_u,shares_u,taken_at) VALUES ('" +
-      past + "',123000000,123000000,0,0,'2026-01-01T00:00:00Z')");
+      past + "',123000000,123000000,0,45000000,'2026-01-01T00:00:00Z')");
     const d2 = await api.getDashboard({ month: '2026-Aug' }, env);
     assert.strictEqual(d2.netWorthHistory[past], 123, 'past snapshot appears in history');
+    assert.strictEqual(d2.sharesHistory[past], 45, 'the invested subset ships alongside for the liquid/stacked split');
   });
 
   await test('getBootstrap hydrates everything the app needs', async () => {

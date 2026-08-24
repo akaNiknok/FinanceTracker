@@ -9,6 +9,7 @@
   --accent:#5b8cff; --accent-2:#84a8ff;
   --pos:#3ecf8e; --neg:#ff7373; --warn:#ffb454;
   --chart-spend:#d95757; --chart-income:#27ad75; --chart-neg:#d95757;
+  --chart-invested:#a78bfa;   /* violet: distinct from accent-blue liquid, income-green, spend-red */
   --grid-line:#232834;
   --shadow:0 8px 28px rgba(0,0,0,.32);
   --shadow-sm:0 2px 10px rgba(0,0,0,.22);
