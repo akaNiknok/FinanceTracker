@@ -278,6 +278,13 @@ console.log('\nApps Script (vm):');
     vm.runInContext(fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8'), app, { filename: 'app.js' });
     assert.ok(app.SCREEN_FNS.admin, 'the Admin screen is not registered');
     app.S.dataVersion = 41; app.S._verAt = Date.now();
+    // Net worth rolls back from the current total through each month's savings:
+    // the last point IS the current total, and undoing a flow then re-adding it
+    // must round-trip.
+    const ns = app.netWorthSeries([{ month: '2026-Jul', income: 100, expense: 40 },
+                                    { month: '2026-Aug', income: 200, expense: 50 }], 1000);
+    assert.strictEqual(ns[1].nw, 1000);            // last point = current net worth
+    assert.strictEqual(ns[0].nw, 1000 - (200 - 50)); // undo August's +150 savings
     return app.gs('api_getDashboard', {}).then(() => {
       assert.ok(!/_v=/.test(seen), 'gs() still stamps _v: ' + seen);
       assert.ok(/action=getDashboard/.test(seen), seen);

@@ -614,43 +614,76 @@ function deltaEl(cur,prev,upIsGood,vsLabel){
   s.style.marginTop='8px';
   return s;
 }
-// Paired-column cash-flow chart (income vs spending per month) + tooltip.
+// Net worth per month, rolled BACKWARD from the current total through each
+// month's savings (income − expense). out[last]=current; earlier months undo
+// that month's flow. ponytail: this attributes today's FX/share valuation to
+// every past month — no historical FX is stored, so the line tracks savings
+// flow, not market moves. Store a monthly net-worth snapshot if that's wanted.
+function netWorthSeries(cf,current){
+  var out=new Array(cf.length), nw=current;
+  for(var i=cf.length-1;i>=0;i--){ out[i]={month:cf[i].month,nw:nw}; nw-=(cf[i].income-cf[i].expense); }
+  return out;
+}
+// Cash-flow columns (income vs spending) + an optional net-worth line overlaid
+// on a SECOND axis (right). Two axes because net worth dwarfs the monthly flows
+// by ~10× — one shared scale would flatten whichever series it isn't zeroed for.
+// `ns` (netWorthSeries output) omitted → plain cash-flow chart, no right axis.
 // `width` = the host's real pixel width, so SVG text renders at 1:1 scale
 // (a fixed viewBox scaled down would shrink labels below legibility).
-function cashflowChart(cf,width){
+function cashflowChart(cf,width,ns){
   var wrap=el('div','chart-wrap');
   var legend=el('div','chart-legend');
   legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-income)"></span>Income</span>'+
-    '<span class="lg"><span class="lg-key" style="background:var(--chart-spend)"></span>Spending</span>';
+    '<span class="lg"><span class="lg-key" style="background:var(--chart-spend)"></span>Spending</span>'+
+    (ns?'<span class="lg"><span class="lg-key" style="background:var(--accent);border-radius:1px;height:3px"></span>Net worth</span>':'');
   wrap.appendChild(legend);
-  var W=Math.max(300,width||640),H=200,L=48,R=6,T=10,B=26,pw=W-L-R,ph=H-T-B;
+  var W=Math.max(300,width||640),H=200,L=48,R=ns?52:6,T=10,B=26,pw=W-L-R,ph=H-T-B;
   var max=0; cf.forEach(function(m){max=Math.max(max,m.income,m.expense);});
   max=niceCeil(max);
-  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':'Cash flow — income vs spending, last '+cf.length+' months'});
+  // Right axis spans the net-worth data range (not 0) so the trend is visible.
+  var lo=0,hi=1;
+  if(ns){ var v=ns.map(function(p){return p.nw;}); hi=Math.max.apply(null,v); lo=Math.min.apply(null,v);
+    if(hi===lo) hi=lo+1; var pad=(hi-lo)*0.12; hi+=pad; lo-=pad; }
+  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':(ns?'Cash flow and net worth':'Cash flow — income vs spending')+', last '+cf.length+' months'});
   [0,.5,1].forEach(function(f){
     var y=T+ph-f*ph;
     if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
     var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
+    if(ns){ var rt=svgEl('text',{x:W-R+8,y:y+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
+      rt.textContent=compactPhp(lo+(hi-lo)*f); svg.appendChild(rt); }
   });
   var band=pw/cf.length, bw=Math.min(20,band*0.26);
+  var cx=cf.map(function(m,i){ return L+band*i+band/2; });
   var tip=el('div','chart-tip'); tip.hidden=true;
   cf.forEach(function(m,i){
-    var cx=L+band*i+band/2;
     var hI=m.income/max*ph, hS=m.expense/max*ph;
-    var topY=T+ph-Math.max(hI,hS);
-    if(hI>=1) svg.appendChild(svgEl('path',{d:barPath(cx-bw-1,T+ph-hI,bw,hI),fill:'var(--chart-income)'}));
-    if(hS>=1) svg.appendChild(svgEl('path',{d:barPath(cx+1,T+ph-hS,bw,hS),fill:'var(--chart-spend)'}));
-    var lbl=svgEl('text',{x:cx,y:H-8,'text-anchor':'middle'});
+    if(hI>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]-bw-1,T+ph-hI,bw,hI),fill:'var(--chart-income)'}));
+    if(hS>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]+1,T+ph-hS,bw,hS),fill:'var(--chart-spend)'}));
+    var lbl=svgEl('text',{x:cx[i],y:H-8,'text-anchor':'middle'});
     if(i===cf.length-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
     lbl.textContent=String(m.month).split('-')[1]||m.month;
     svg.appendChild(lbl);
+  });
+  // Net-worth line + dots on top of the bars.
+  var ly=ns?ns.map(function(p){ return T+ph-(p.nw-lo)/(hi-lo)*ph; }):null;
+  if(ns){
+    svg.appendChild(svgEl('polyline',{points:cx.map(function(x,i){return x+','+ly[i];}).join(' '),
+      fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
+    ns.forEach(function(p,i){
+      svg.appendChild(svgEl('circle',{cx:cx[i],cy:ly[i],r:i===ns.length-1?4:2.5,fill:'var(--accent)',stroke:'var(--surface)','stroke-width':2}));
+    });
+  }
+  cf.forEach(function(m,i){
+    var topY=T+ph-Math.max(m.income,m.expense)/max*ph;
+    if(ns) topY=Math.min(topY,ly[i]);
     var hit=svgEl('rect',{x:L+band*i,y:T,width:band,height:ph,fill:'transparent'});
     function show(){
       tip.innerHTML='<b>'+esc(monthLabel(m.month))+'</b><br>'+
         '<span class="lg-key" style="background:var(--chart-income)"></span>Income <b>'+money(m.income,true)+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-spend)"></span>Spending <b>'+money(m.expense,true)+'</b>';
+        '<span class="lg-key" style="background:var(--chart-spend)"></span>Spending <b>'+money(m.expense,true)+'</b>'+
+        (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Net worth <b>'+money(ns[i].nw,true)+'</b>':'');
       var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
-      var x=sr.left-wr.left+cx/W*sr.width;
+      var x=sr.left-wr.left+cx[i]/W*sr.width;
       x=Math.max(78,Math.min(x,wr.width-78));
       tip.style.left=x+'px';
       tip.style.top=(sr.top-wr.top+topY/H*sr.height)+'px';
@@ -822,14 +855,17 @@ function renderDashboard(){
     stats.appendChild(tInv);
     w.appendChild(stats);
 
-    // ── cash flow (last 6 months) — drawn after paint at the host's real width ──
+    // ── cash flow + net worth (last 6 months) — drawn after paint at the host's
+    // real width. The net-worth line only rides along on the live month, where
+    // d.netWorth ("now") is the correct anchor for rolling the flows backward. ──
     if(cf.length>=2){
+      var ns=isLive?netWorthSeries(cf, d.netWorth||0):null;
       var cc=el('div','card');
-      cc.appendChild(el('div','card-h','Cash flow · last 6 months'));
+      cc.appendChild(el('div','card-h',(ns?'Cash flow & net worth':'Cash flow')+' · last 6 months'));
       var cfHost=el('div'); cc.appendChild(cfHost);
       w.appendChild(cc);
       requestAnimationFrame(function(){
-        if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth));
+        if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, ns));
       });
     }
 

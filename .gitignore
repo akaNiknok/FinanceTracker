@@ -22,6 +22,9 @@ worker/.wrangler/
 # Local `wrangler dev` secrets (APP_PASS, the bot/Gemini/IBKR tokens)
 worker/.dev.vars
 
+# Prod D1 dump pulled by `npm run dev:pull` — real financial data, never committed
+worker/.dev-data.sql
+
 # v2 migration artefacts — real financial data, never committed
 migrate/fixtures/
 seed.sql
