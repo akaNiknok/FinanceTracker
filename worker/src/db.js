@@ -166,9 +166,17 @@ export async function latestPrices(env) {
 
 export const isSharesAcct = (a) =>
   String(a.currency).toUpperCase() === 'SHARES' || /share|stock/i.test(String(a.subtype || ''));
-/** "Counts as an investment" — the Dashboard tile and the Holdings card must agree. */
+/** "Counts as an investment" — drives the Holdings card. Broad: any share-priced
+ * account is a position you hold and price, even one parked as near-cash. */
 export const isInvestmentAcct = (a) =>
   String(a.currency).toUpperCase() === 'SHARES' || /share|stock|invest|etf/i.test(String(a.subtype || ''));
+/** "Counts as invested for the liquid-vs-invested net-worth split" — NARROWER than
+ * isInvestmentAcct: keyed on SUBTYPE only, so a share-priced holding filed under a
+ * liquid subtype (e.g. a short-term treasury ETF held as an emergency fund, subtype
+ * EF) is priced as a share but sits with LIQUID, not invested. Deliberately not the
+ * same as isInvestmentAcct: the Holdings card still shows such a holding as a
+ * position, while the net-worth chart and the Invested tile treat it as liquid. */
+export const isInvestedNetWorth = (a) => /share|stock|invest|etf/i.test(String(a.subtype || ''));
 
 /**
  * The api_getAccounts row shape, byte for byte as v1 emitted it. `fx` is a

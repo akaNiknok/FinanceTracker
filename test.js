@@ -154,6 +154,15 @@ console.log('\nApps Script (vm):');
     assert.ok(by.IBKR.isShares && by.IBKR.isInvestment && !by.Cash.isInvestment);
   });
 
+  test('isInvestedNetWorth: a share-priced EF holding is liquid but stays a holding', () => {
+    // IB01: a treasury ETF (currency Shares) parked as an emergency fund (subtype EF).
+    const ib01 = { currency: 'Shares', subtype: 'EF' };
+    const voo = { currency: 'Shares', subtype: 'Stocks' };
+    assert.ok(db.isInvestmentAcct(ib01), 'IB01 still counts as a Holdings position');
+    assert.ok(!db.isInvestedNetWorth(ib01), 'but it sits with LIQUID in the net-worth split');
+    assert.ok(db.isInvestmentAcct(voo) && db.isInvestedNetWorth(voo), 'a real stock is invested in both');
+  });
+
   test('shapeTx blanks are the sheet blanks the SPA expects', () => {
     const refs = { acctById: { 1: { name: 'Cash', currency: 'PHP' } },
                    catById: { 9: { name: 'Food', type: 'Expense', segment: 'Essentials' } } };

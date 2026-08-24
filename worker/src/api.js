@@ -25,7 +25,7 @@
 import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
   dataVersion, bumpStmt, toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
-  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, BASE_CURRENCY
+  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, BASE_CURRENCY, isInvestedNetWorth
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
 
@@ -235,12 +235,15 @@ export async function getBudgets(args, env) {
 
 /** The net-worth fold over shaped accounts, in raw PHP (q2 at the boundary).
  * Signs match the API: liabilities positive, netWorth signed, shares a subset of
- * assets. Shared by getDashboard and snapshotNetWorth so both agree exactly. */
+ * assets. sharesValue uses isInvestedNetWorth (subtype-based, NARROWER than the
+ * Holdings card's isInvestment) so a near-cash share holding — a treasury ETF held
+ * as an EF, say — sits with liquid here while still showing in Holdings. Shared by
+ * getDashboard and snapshotNetWorth so the tile, chart and snapshot agree exactly. */
 export function netWorthTotals(accounts) {
   let netWorth = 0, assets = 0, liabilities = 0, sharesValue = 0;
   accounts.forEach((a) => {
     const php = a.netWorthPhp == null ? 0 : a.netWorthPhp;
-    if (a.isInvestment) sharesValue += a.balancePhp || 0;
+    if (isInvestedNetWorth(a)) sharesValue += a.balancePhp || 0;
     netWorth += php;
     if (a.isLiability) liabilities += php; else assets += php;
   });
