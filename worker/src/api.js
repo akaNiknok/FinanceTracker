@@ -737,7 +737,11 @@ const TABLES = {
   prices: { pk: 'rowid', edit: [], add: ['symbol', 'priced_at', 'price', 'currency'] },
   meta: { pk: 'key', edit: ['value'], add: ['key', 'value'] },
   email_quotes: { pk: 'message_id', edit: [] },
-  transactions: { pk: 'id', edit: [], money: ['amount_u', 'to_amount_u', 'amount_php_u'] }
+  transactions: { pk: 'id', edit: [], money: ['amount_u', 'to_amount_u', 'amount_php_u'] },
+  // Cron-owned history: fully read-only (nodelete) so the grid can't corrupt or
+  // hole the net-worth line. money cols render as PHP, not micros.
+  nw_snapshots: { pk: 'month', edit: [], nodelete: true,
+                  money: ['net_worth_u', 'assets_u', 'liabilities_u', 'shares_u'] }
 };
 
 function tableSpec(name) {
@@ -767,6 +771,7 @@ export async function listTable(args, env) {
   return {
     status: 'success', version: await dataVersion(env),
     table: name, pk: t.pk, editable: t.edit, addable: addCols(t), money: moneyCols(t),
+    deletable: !t.nodelete,
     cols: rows.length ? Object.keys(rows[0]) : addCols(t),
     total: cnt.results[0].n, offset, limit, rows
   };
@@ -817,6 +822,7 @@ export async function insertTableRow(args, env) {
 export async function deleteTableRow(args, env) {
   const name = String(args.table || '');
   const t = tableSpec(name);
+  if (t.nodelete) throw new Error(name + ' is read-only in the admin grid.');
   if (args.pk === undefined || args.pk === null || args.pk === '') throw new Error('deleteTableRow requires pk.');
   const [res] = await env.DB.batch([
     env.DB.prepare('DELETE FROM ' + name + ' WHERE ' + t.pk + ' = ?').bind(args.pk),

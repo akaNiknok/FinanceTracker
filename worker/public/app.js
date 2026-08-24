@@ -1744,7 +1744,7 @@ function exCalc(){
  *  way around them.
  * ════════════════════════════════════════════════════════════════════════ */
 var ADMIN_TABLES=['accounts','categories','account_types','budgets','recurring',
-                  'ledger','prices','meta','transactions','email_quotes'];
+                  'ledger','prices','nw_snapshots','meta','transactions','email_quotes'];
 function adminTable(){ return S.admin.table||ADMIN_TABLES[0]; }
 
 function renderAdmin(){
@@ -1806,9 +1806,12 @@ function adminRowTr(row,res,editable){
     tr.appendChild(td);
   });
   var del=el('td');
-  var b=el('button','btn sm ghost','✕'); b.title='Delete row';
-  b.onclick=function(e){ e.stopPropagation(); adminDeleteRow(res,row[res.pk]); };
-  del.appendChild(b); tr.appendChild(del);
+  if(res.deletable!==false){                            // read-only tables (nodelete) show no ✕
+    var b=el('button','btn sm ghost','✕'); b.title='Delete row';
+    b.onclick=function(e){ e.stopPropagation(); adminDeleteRow(res,row[res.pk]); };
+    del.appendChild(b);
+  }
+  tr.appendChild(del);
   return tr;
 }
 

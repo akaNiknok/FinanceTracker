@@ -293,6 +293,12 @@ function d1(db) {
     await assert.rejects(() => api.updateTableCell(
       { table: 'transactions', pk: 't1', column: 'amount_u', value: 1 }, env), /not editable/);
     await assert.rejects(() => api.insertTableRow({ table: 'transactions', row: { id: 'z' } }, env), /read-only/);
+    // nw_snapshots is fully read-only: no insert, no delete, money cols reported as PHP.
+    const nw = await api.listTable({ table: 'nw_snapshots' }, env);
+    assert.strictEqual(nw.deletable, false);
+    assert.deepStrictEqual(nw.editable, []);
+    await assert.rejects(() => api.insertTableRow({ table: 'nw_snapshots', row: { month: 'x' } }, env), /read-only/);
+    await assert.rejects(() => api.deleteTableRow({ table: 'nw_snapshots', pk: '2026-Aug' }, env), /read-only/);
   });
 
   await test('updateTableCell and insertTableRow round-trip through micros', async () => {
