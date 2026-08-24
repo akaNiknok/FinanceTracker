@@ -708,38 +708,45 @@ function cashflowChart(cf,width,ns){
   wrap.appendChild(svg); wrap.appendChild(tip);
   return wrap;
 }
-// Net worth as a stacked area: liquid (cash) at the bottom, invested (shares) on
-// top, so the TOP edge is total net worth and the two bands show composition —
-// part-to-whole, which is why the Y axis anchors at 0 (band areas stay honest).
-// `liq`/`stk` are netWorthSeries outputs (same month order); `real` on the total
-// point marks a real snapshot vs an estimate (hollow ring).
+// Net worth as an area chart: INVESTED (always ≥0) is the base band 0→shares,
+// LIQUID is a signed ribbon shares→total on top, so the TOP edge is always the
+// true net worth (liquid + invested). Invested-at-the-bottom is what keeps this
+// honest when liquid is negative — carrying more debt than non-invested cash —
+// because then the ribbon dips BELOW the shares line down to the real net worth,
+// instead of a stacked bottom band that can't go under the axis. Y anchors at 0.
+// `liq`/`stk` are netWorthSeries outputs; `real` marks a snapshot vs estimate.
+// ponytail: axis floor is 0 — a month with NEGATIVE net worth would clip below
+// the baseline. Never happens in the data (net worth stays positive); revisit
+// the domain to min(0, …) if that changes.
 function netWorthAreaChart(liq,stk,width){
   var wrap=el('div','chart-wrap');
   var legend=el('div','chart-legend');
-  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--accent)"></span>Liquid</span>'+
-    '<span class="lg"><span class="lg-key" style="background:var(--chart-invested)"></span>Invested</span>';
+  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-invested)"></span>Invested</span>'+
+    '<span class="lg"><span class="lg-key" style="background:var(--accent)"></span>Liquid</span>';
   wrap.appendChild(legend);
   var W=Math.max(300,width||640),H=200,L=48,R=6,T=10,B=26,pw=W-L-R,ph=H-T-B,n=liq.length;
-  var tot=liq.map(function(p,i){return Math.max(0,p.nw)+Math.max(0,stk[i].nw);});
-  var max=niceCeil(Math.max.apply(null,tot.concat([1])));
+  var shr=stk.map(function(p){return Math.max(0,p.nw);});
+  var tot=liq.map(function(p,i){return p.nw+shr[i];});
+  // Axis must clear both the total line and the shares top (shares > total when liquid<0).
+  var max=niceCeil(Math.max.apply(null,tot.concat(shr).concat([1])));
   var xf=function(i){ return n<2?L+pw/2:L+pw*i/(n-1); };
   var yf=function(v){ return T+ph-v/max*ph; };
   var x=liq.map(function(p,i){return xf(i);});
-  var yLiq=liq.map(function(p){return yf(Math.max(0,p.nw));});
+  var yShr=shr.map(function(v){return yf(v);});
   var yTot=tot.map(function(v){return yf(v);});
   var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img',
-    'aria-label':'Net worth by month — liquid and invested, last '+n+' months'});
+    'aria-label':'Net worth by month — invested and liquid, last '+n+' months'});
   [0,.5,1].forEach(function(f){
     var y=T+ph-f*ph;
     if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
     var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
   });
   var base=T+ph;
-  // Invested band (liquid top → total top), then liquid band (baseline → liquid top).
-  svg.appendChild(svgEl('polygon',{points:x.map(function(xi,i){return xi+','+yLiq[i];}).join(' ')+' '+
-    x.slice().reverse().map(function(xi,i){var j=n-1-i;return xi+','+yTot[j];}).join(' '),
+  // Invested base band (baseline → shares), then the signed liquid ribbon (shares → total).
+  svg.appendChild(svgEl('polygon',{points:L+','+base+' '+x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+(x[n-1])+','+base,
     fill:'var(--chart-invested)','fill-opacity':0.35}));
-  svg.appendChild(svgEl('polygon',{points:L+','+base+' '+x.map(function(xi,i){return xi+','+yLiq[i];}).join(' ')+' '+(x[n-1])+','+base,
+  svg.appendChild(svgEl('polygon',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+
+    x.slice().reverse().map(function(xi,i){var j=n-1-i;return xi+','+yTot[j];}).join(' '),
     fill:'var(--accent)','fill-opacity':0.32}));
   // Total (top-edge) line + real/estimate dots.
   svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yTot[i];}).join(' '),
@@ -758,8 +765,8 @@ function netWorthAreaChart(liq,stk,width){
     var hit=svgEl('rect',{x:i===0?L:x[i]-band/2,y:T,width:i===0||i===n-1?band/2:band,height:ph,fill:'transparent'});
     function show(){
       tip.innerHTML='<b>'+esc(monthLabel(p.month))+'</b><br>'+
-        '<span class="lg-key" style="background:var(--accent)"></span>Liquid <b>'+money(Math.max(0,p.nw),true)+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-invested)"></span>Invested <b>'+money(Math.max(0,stk[i].nw),true)+'</b><br>'+
+        '<span class="lg-key" style="background:var(--chart-invested)"></span>Invested <b>'+money(shr[i],true)+'</b><br>'+
+        '<span class="lg-key" style="background:var(--accent)"></span>Liquid <b>'+money(p.nw,true)+'</b><br>'+
         'Net worth <b>'+money(tot[i],true)+'</b>'+(p.real?'':' <span style="opacity:.6">est.</span>');
       var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
       var px=sr.left-wr.left+x[i]/W*sr.width; px=Math.max(78,Math.min(px,wr.width-78));
