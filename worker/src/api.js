@@ -25,7 +25,7 @@
 import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
   dataVersion, bumpStmt, toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
-  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, BASE_CURRENCY
+  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, BASE_CURRENCY, isInvestedNetWorth
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
 
@@ -235,12 +235,15 @@ export async function getBudgets(args, env) {
 
 /** The net-worth fold over shaped accounts, in raw PHP (q2 at the boundary).
  * Signs match the API: liabilities positive, netWorth signed, shares a subset of
- * assets. Shared by getDashboard and snapshotNetWorth so both agree exactly. */
+ * assets. sharesValue uses isInvestedNetWorth (subtype-based, NARROWER than the
+ * Holdings card's isInvestment) so a near-cash share holding — a treasury ETF held
+ * as an EF, say — sits with liquid here while still showing in Holdings. Shared by
+ * getDashboard and snapshotNetWorth so the tile, chart and snapshot agree exactly. */
 export function netWorthTotals(accounts) {
   let netWorth = 0, assets = 0, liabilities = 0, sharesValue = 0;
   accounts.forEach((a) => {
     const php = a.netWorthPhp == null ? 0 : a.netWorthPhp;
-    if (a.isInvestment) sharesValue += a.balancePhp || 0;
+    if (isInvestedNetWorth(a)) sharesValue += a.balancePhp || 0;
     netWorth += php;
     if (a.isLiability) liabilities += php; else assets += php;
   });
@@ -291,7 +294,7 @@ export async function getDashboard(args, env) {
       "WHERE t.month IN (" + list(flowKeys.length) + ") AND c.type IN ('Income','Expense') " +
       'GROUP BY m, type').bind(...flowKeys),
     env.DB.prepare('SELECT * FROM transactions ORDER BY date DESC, rowid DESC LIMIT 10'),
-    env.DB.prepare('SELECT month, net_worth_u FROM nw_snapshots WHERE month IN (' + list(flowKeys.length) + ')').bind(...flowKeys)
+    env.DB.prepare('SELECT month, net_worth_u, shares_u FROM nw_snapshots WHERE month IN (' + list(flowKeys.length) + ')').bind(...flowKeys)
   ]);
 
   const spendBySegment = {}, spendByCategory = {};
@@ -307,8 +310,16 @@ export async function getDashboard(args, env) {
   // Real historical net worth per month (nulls where no snapshot exists yet — the
   // client falls back to rolling cash flow backward for those). The live month is
   // omitted deliberately: the chart uses `netWorth` (now) for it, always fresher.
-  const netWorthHistory = {};
-  snaps.results.forEach((s) => { if (s.month !== manilaMonth()) netWorthHistory[s.month] = q2(fromU(s.net_worth_u)); });
+  // netWorthHistory = total; sharesHistory = the invested subset. The client
+  // derives the liquid (non-shares) line as total − shares, so the cash-flow
+  // bars and their overlaid line move together, and stacks the two into the
+  // Net worth chart. Both omit the live month (chart uses live figures there).
+  const netWorthHistory = {}, sharesHistory = {};
+  snaps.results.forEach((s) => {
+    if (s.month === manilaMonth()) return;
+    netWorthHistory[s.month] = q2(fromU(s.net_worth_u));
+    sharesHistory[s.month] = q2(fromU(s.shares_u));
+  });
 
   return {
     status: 'success', version: await dataVersion(env), month,
@@ -316,7 +327,7 @@ export async function getDashboard(args, env) {
     sharesValue: q2(totals.sharesValue),
     spendBySegment, spendByCategory,
     cashflow: flowKeys.map((k) => byMonth[k]),
-    netWorthHistory,
+    netWorthHistory, sharesHistory,
     budgets: (await budgetsPayload(env, month, fx)).budgets,
     recentTransactions: recent.results.map((row) => shapeTx(row, r))
   };
