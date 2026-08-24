@@ -278,13 +278,21 @@ console.log('\nApps Script (vm):');
     vm.runInContext(fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8'), app, { filename: 'app.js' });
     assert.ok(app.SCREEN_FNS.admin, 'the Admin screen is not registered');
     app.S.dataVersion = 41; app.S._verAt = Date.now();
-    // Net worth rolls back from the current total through each month's savings:
-    // the last point IS the current total, and undoing a flow then re-adding it
-    // must round-trip.
-    const ns = app.netWorthSeries([{ month: '2026-Jul', income: 100, expense: 40 },
-                                    { month: '2026-Aug', income: 200, expense: 50 }], 1000);
-    assert.strictEqual(ns[1].nw, 1000);            // last point = current net worth
-    assert.strictEqual(ns[0].nw, 1000 - (200 - 50)); // undo August's +150 savings
+    // Net worth: last point = current total; earlier months roll back through
+    // that month's savings UNLESS a real snapshot pins them.
+    const cf = [{ month: '2026-Jun', income: 80, expense: 30 },
+                { month: '2026-Jul', income: 100, expense: 40 },
+                { month: '2026-Aug', income: 200, expense: 50 }];
+    const est = app.netWorthSeries(cf, 1000);
+    assert.strictEqual(est[2].nw, 1000);               // last point = current net worth
+    assert.strictEqual(est[2].real, true);             // live point is real
+    assert.strictEqual(est[1].nw, 1000 - (200 - 50));  // undo August's +150 savings
+    assert.strictEqual(est[1].real, false);            // no snapshot → estimated
+    // A snapshot pins that month and re-anchors the roll-back for earlier ones.
+    const real = app.netWorthSeries(cf, 1000, { '2026-Jul': 900 });
+    assert.strictEqual(real[1].nw, 900);
+    assert.strictEqual(real[1].real, true);
+    assert.strictEqual(real[0].nw, 900 - (100 - 40));  // rolls back from the snapshot, not the live total
     return app.gs('api_getDashboard', {}).then(() => {
       assert.ok(!/_v=/.test(seen), 'gs() still stamps _v: ' + seen);
       assert.ok(/action=getDashboard/.test(seen), seen);

@@ -70,8 +70,10 @@ function d1(db) {
   };
 
   console.log('\nSchema:');
-  await test('0001_init.sql creates cleanly (generated columns and the view included)', () => {
-    sqlite.exec(fs.readFileSync(path.join(__dirname, 'worker', 'migrations', '0001_init.sql'), 'utf8'));
+  await test('every migration applies cleanly, in order (generated columns, view, snapshots)', () => {
+    const dir = path.join(__dirname, 'worker', 'migrations');
+    fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+      .forEach((f) => sqlite.exec(fs.readFileSync(path.join(dir, f), 'utf8')));
   });
   if (failed) { console.error('\nschema failed — nothing else can run'); process.exit(1); }
 
@@ -222,6 +224,22 @@ function d1(db) {
     assert.strictEqual(d.spendBySegment.Essentials, 250.5 + 1200);
     assert.ok(d.recentTransactions.length > 0);
     assert.ok(Math.abs(d.netWorth - (d.assets + d.liabilities)) < 0.01, 'liabilities are already negative');
+  });
+
+  await test('snapshotNetWorth records this month; getDashboard serves the history', async () => {
+    const snap = await api.snapshotNetWorth(env);
+    const now = dbm.manilaMonth();
+    assert.strictEqual(snap.month, now);
+    const dash = await api.getDashboard({}, env);
+    assert.ok(Math.abs(snap.netWorth - dash.netWorth) < 0.01, 'snapshot equals the live net worth');
+    // The live month is deliberately absent — the chart uses live netWorth there.
+    assert.ok(!(now in dash.netWorthHistory), 'live month is excluded from netWorthHistory');
+    // A closed month's snapshot IS served (123 PHP = 123_000_000 micros).
+    const past = now === '2026-Jul' ? '2026-Jun' : '2026-Jul';
+    sqlite.exec("INSERT INTO nw_snapshots (month,net_worth_u,assets_u,liabilities_u,shares_u,taken_at) VALUES ('" +
+      past + "',123000000,123000000,0,0,'2026-01-01T00:00:00Z')");
+    const d2 = await api.getDashboard({ month: '2026-Aug' }, env);
+    assert.strictEqual(d2.netWorthHistory[past], 123, 'past snapshot appears in history');
   });
 
   await test('getBootstrap hydrates everything the app needs', async () => {

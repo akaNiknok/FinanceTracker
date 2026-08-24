@@ -15,6 +15,7 @@
  */
 import { manilaToday } from './db.js';
 import { notifyOwner, msgOf } from './telegram.js';
+import { snapshotNetWorth } from './api.js';
 
 // ── IBKR Flex: share prices ──────────────────────────────────────────────────
 // Two-step service: SendRequest hands back a ReferenceCode, GetStatement returns the
@@ -99,13 +100,24 @@ export async function pricesJob(env) {
  * signal that exists is the Telegram message this sends.
  */
 export async function runCron(env) {
+  const out = {};
   try {
-    const res = await pricesJob(env);
-    console.log('prices: ' + JSON.stringify(res));
-    return res;
+    out.prices = await pricesJob(env);
+    console.log('prices: ' + JSON.stringify(out.prices));
   } catch (err) {
     console.error('prices failed: ' + (err && err.stack ? err.stack : err));
     await notifyOwner(env, '⛔ *prices job failed*\n› ' + msgOf(err));
     throw err;
   }
+  // Snapshot AFTER prices so this month's net worth is stamped with fresh quotes.
+  // Non-fatal on its own: prices (the critical job) already committed, a missed
+  // snapshot just leaves this month's history to fill on the next daily run.
+  try {
+    out.snapshot = await snapshotNetWorth(env);
+    console.log('nw snapshot: ' + JSON.stringify(out.snapshot));
+  } catch (err) {
+    console.error('nw snapshot failed: ' + (err && err.stack ? err.stack : err));
+    await notifyOwner(env, '⛔ *net-worth snapshot failed*\n› ' + msgOf(err));
+  }
+  return out;
 }

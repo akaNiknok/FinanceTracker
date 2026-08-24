@@ -15,6 +15,7 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 - **Telegram bot.** Send "coffee 120 maya". The bot writes the row and answers with a receipt that has an **Undo** button. One message can hold more than one transaction. The bot also answers `/balance` and questions such as "how much on food this month".
 - **Progressive web app.** Seven screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
 - **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
+- **Net worth history.** Each day the app records the total net worth for the month. The Dashboard shows the history as a line on the cash-flow chart.
 - **Two more parts.** A nightly job reads the share prices from Interactive Brokers. A Tax screen collects the data for the Philippine BIR 8 percent regime.
 
 ## Architecture
@@ -28,7 +29,7 @@ flowchart TB
     subgraph CF["Cloudflare Worker — free plan"]
         WK["/tg · /api · /login<br/>and the static app files"]
         SV["Handlers<br/>validation · one transactional batch"]
-        JB["Cron job<br/>IBKR prices"]
+        JB["Cron job<br/>IBKR prices · net worth"]
         AI["Gemini<br/>structured output"]
     end
 
@@ -164,6 +165,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | `gmail_ingest` | Apps Script, add it manually | Each 5 minutes |
 | `backup_run` | Apps Script, run `backup_install()` one time | Each day, approximately 03:00 |
 | IBKR prices | Cloudflare cron, in `wrangler.toml` | 06:00 Manila time |
+| Net worth snapshot | The same Cloudflare cron, after the prices | 06:00 Manila time |
 
 Cloudflare does not do a job again after a failure. Thus each job sends a Telegram message if it fails. Apps Script disables a trigger after a number of failures.
 

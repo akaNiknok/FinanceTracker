@@ -233,12 +233,10 @@ export async function getBudgets(args, env) {
     await budgetsPayload(env, args.month, fx));
 }
 
-export async function getDashboard(args, env) {
-  const month = args.month ? String(args.month) : manilaMonth();
-  const ref = parseMonthKey(month) || parseMonthKey(manilaMonth());
-  const r = await refs(env);
-  const { accounts, fx } = await accountsList(env, r);
-
+/** The net-worth fold over shaped accounts, in raw PHP (q2 at the boundary).
+ * Signs match the API: liabilities positive, netWorth signed, shares a subset of
+ * assets. Shared by getDashboard and snapshotNetWorth so both agree exactly. */
+export function netWorthTotals(accounts) {
   let netWorth = 0, assets = 0, liabilities = 0, sharesValue = 0;
   accounts.forEach((a) => {
     const php = a.netWorthPhp == null ? 0 : a.netWorthPhp;
@@ -246,13 +244,42 @@ export async function getDashboard(args, env) {
     netWorth += php;
     if (a.isLiability) liabilities += php; else assets += php;
   });
+  return { netWorth, assets, liabilities, sharesValue };
+}
+
+/** Cron: record this month's net worth (jobs.js runs it after prices, so it uses
+ * fresh quotes). Upsert by month — the last write of a month is its close. Not an
+ * /api write and not user data the SPA caches, so it deliberately does NOT bump
+ * the data version: the current-month point on the chart uses live netWorth, and
+ * a closed month's snapshot never changes. */
+export async function snapshotNetWorth(env) {
+  const r = await refs(env);
+  const { accounts } = await accountsList(env, r);
+  const t = netWorthTotals(accounts);
+  const month = manilaMonth();
+  await env.DB.prepare(
+    'INSERT INTO nw_snapshots (month, net_worth_u, assets_u, liabilities_u, shares_u, taken_at) ' +
+    'VALUES (?,?,?,?,?,?) ON CONFLICT(month) DO UPDATE SET net_worth_u = excluded.net_worth_u, ' +
+    'assets_u = excluded.assets_u, liabilities_u = excluded.liabilities_u, ' +
+    'shares_u = excluded.shares_u, taken_at = excluded.taken_at')
+    .bind(month, toU(t.netWorth), toU(t.assets), toU(t.liabilities), toU(t.sharesValue), new Date().toISOString())
+    .run();
+  return { month, netWorth: q2(t.netWorth) };
+}
+
+export async function getDashboard(args, env) {
+  const month = args.month ? String(args.month) : manilaMonth();
+  const ref = parseMonthKey(month) || parseMonthKey(manilaMonth());
+  const r = await refs(env);
+  const { accounts, fx } = await accountsList(env, r);
+  const totals = netWorthTotals(accounts);
 
   const flowKeys = [];
   for (let i = 5; i >= 0; i--) { const s = shiftMonth(ref.y, ref.m, -i); flowKeys.push(monthKey(s.y, s.m)); }
 
   // Aggregation in SQL, not JS: the 10ms CPU budget is the one real constraint on
   // this handler, and a full-table scan in JS is what would break it.
-  const [spend, flow, recent] = await env.DB.batch([
+  const [spend, flow, recent, snaps] = await env.DB.batch([
     env.DB.prepare(
       // Single quotes only: SQLite reads "" as an identifier, not an empty string.
       "SELECT COALESCE(NULLIF(TRIM(c.segment), ''), 'Unsegmented') AS seg, c.name AS cat, " +
@@ -263,7 +290,8 @@ export async function getDashboard(args, env) {
       'JOIN categories c ON c.id = t.category_id ' +
       "WHERE t.month IN (" + list(flowKeys.length) + ") AND c.type IN ('Income','Expense') " +
       'GROUP BY m, type').bind(...flowKeys),
-    env.DB.prepare('SELECT * FROM transactions ORDER BY date DESC, rowid DESC LIMIT 10')
+    env.DB.prepare('SELECT * FROM transactions ORDER BY date DESC, rowid DESC LIMIT 10'),
+    env.DB.prepare('SELECT month, net_worth_u FROM nw_snapshots WHERE month IN (' + list(flowKeys.length) + ')').bind(...flowKeys)
   ]);
 
   const spendBySegment = {}, spendByCategory = {};
@@ -276,13 +304,19 @@ export async function getDashboard(args, env) {
   flow.results.forEach((x) => {
     if (byMonth[x.m]) byMonth[x.m][x.type === 'Income' ? 'income' : 'expense'] = q2(fromU(x.s));
   });
+  // Real historical net worth per month (nulls where no snapshot exists yet — the
+  // client falls back to rolling cash flow backward for those). The live month is
+  // omitted deliberately: the chart uses `netWorth` (now) for it, always fresher.
+  const netWorthHistory = {};
+  snaps.results.forEach((s) => { if (s.month !== manilaMonth()) netWorthHistory[s.month] = q2(fromU(s.net_worth_u)); });
 
   return {
     status: 'success', version: await dataVersion(env), month,
-    netWorth: q2(netWorth), assets: q2(assets), liabilities: q2(liabilities),
-    sharesValue: q2(sharesValue),
+    netWorth: q2(totals.netWorth), assets: q2(totals.assets), liabilities: q2(totals.liabilities),
+    sharesValue: q2(totals.sharesValue),
     spendBySegment, spendByCategory,
     cashflow: flowKeys.map((k) => byMonth[k]),
+    netWorthHistory,
     budgets: (await budgetsPayload(env, month, fx)).budgets,
     recentTransactions: recent.results.map((row) => shapeTx(row, r))
   };

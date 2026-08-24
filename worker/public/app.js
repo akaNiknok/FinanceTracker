@@ -225,7 +225,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 2;   // 2 = the D1 cutover; forces one clean start
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 3;   // 2 = D1 cutover; 3 = dashboard netWorthHistory
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -614,14 +614,19 @@ function deltaEl(cur,prev,upIsGood,vsLabel){
   s.style.marginTop='8px';
   return s;
 }
-// Net worth per month, rolled BACKWARD from the current total through each
-// month's savings (income − expense). out[last]=current; earlier months undo
-// that month's flow. ponytail: this attributes today's FX/share valuation to
-// every past month — no historical FX is stored, so the line tracks savings
-// flow, not market moves. Store a monthly net-worth snapshot if that's wanted.
-function netWorthSeries(cf,current){
+// Net worth per month. Prefers the REAL monthly snapshot (`snaps[month]`, from
+// nw_snapshots — captures FX/market moves); where a month has none yet, estimates
+// it by rolling the current total backward through that month's savings
+// (income − expense) and flags it `real:false`. Live month always uses `current`.
+function netWorthSeries(cf,current,snaps){
+  snaps=snaps||{};
   var out=new Array(cf.length), nw=current;
-  for(var i=cf.length-1;i>=0;i--){ out[i]={month:cf[i].month,nw:nw}; nw-=(cf[i].income-cf[i].expense); }
+  for(var i=cf.length-1;i>=0;i--){
+    var real=i<cf.length-1 && snaps[cf[i].month]!=null;
+    if(real) nw=snaps[cf[i].month];
+    out[i]={month:cf[i].month,nw:nw,real:real||i===cf.length-1};
+    nw-=(cf[i].income-cf[i].expense);
+  }
   return out;
 }
 // Cash-flow columns (income vs spending) + an optional net-worth line overlaid
@@ -670,7 +675,9 @@ function cashflowChart(cf,width,ns){
     svg.appendChild(svgEl('polyline',{points:cx.map(function(x,i){return x+','+ly[i];}).join(' '),
       fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
     ns.forEach(function(p,i){
-      svg.appendChild(svgEl('circle',{cx:cx[i],cy:ly[i],r:i===ns.length-1?4:2.5,fill:'var(--accent)',stroke:'var(--surface)','stroke-width':2}));
+      // Real snapshot / live point → filled dot; estimated (rolled-back) → hollow ring.
+      svg.appendChild(svgEl('circle',{cx:cx[i],cy:ly[i],r:i===ns.length-1?4:2.5,
+        fill:p.real?'var(--accent)':'var(--surface)',stroke:p.real?'var(--surface)':'var(--accent)','stroke-width':2}));
     });
   }
   cf.forEach(function(m,i){
@@ -681,7 +688,7 @@ function cashflowChart(cf,width,ns){
       tip.innerHTML='<b>'+esc(monthLabel(m.month))+'</b><br>'+
         '<span class="lg-key" style="background:var(--chart-income)"></span>Income <b>'+money(m.income,true)+'</b><br>'+
         '<span class="lg-key" style="background:var(--chart-spend)"></span>Spending <b>'+money(m.expense,true)+'</b>'+
-        (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Net worth <b>'+money(ns[i].nw,true)+'</b>':'');
+        (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Net worth <b>'+money(ns[i].nw,true)+'</b>'+(ns[i].real?'':' <span style="opacity:.6">est.</span>'):'');
       var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
       var x=sr.left-wr.left+cx[i]/W*sr.width;
       x=Math.max(78,Math.min(x,wr.width-78));
@@ -859,7 +866,7 @@ function renderDashboard(){
     // real width. The net-worth line only rides along on the live month, where
     // d.netWorth ("now") is the correct anchor for rolling the flows backward. ──
     if(cf.length>=2){
-      var ns=isLive?netWorthSeries(cf, d.netWorth||0):null;
+      var ns=isLive?netWorthSeries(cf, d.netWorth||0, d.netWorthHistory):null;
       var cc=el('div','card');
       cc.appendChild(el('div','card-h',(ns?'Cash flow & net worth':'Cash flow')+' · last 6 months'));
       var cfHost=el('div'); cc.appendChild(cfHost);
