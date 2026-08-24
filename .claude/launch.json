@@ -4,9 +4,9 @@
     {
       "name": "worker",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["wrangler", "dev", "--port", "8788", "--local", "--show-interactive-dev-session=false"],
+      "runtimeArgs": ["wrangler", "dev", "--port", "8123", "--local", "--show-interactive-dev-session=false"],
       "cwd": "worker",
-      "port": 8788
+      "port": 8123
     }
   ]
 }

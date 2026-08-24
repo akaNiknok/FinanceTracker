@@ -724,7 +724,7 @@ function netWorthAreaChart(liq,stk,width){
   legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-invested)"></span>Invested</span>'+
     '<span class="lg"><span class="lg-key" style="background:var(--accent)"></span>Liquid</span>';
   wrap.appendChild(legend);
-  var W=Math.max(300,width||640),H=200,L=48,R=6,T=10,B=26,pw=W-L-R,ph=H-T-B,n=liq.length;
+  var W=Math.max(300,width||640),H=200,L=48,R=14,T=10,B=26,pw=W-L-R,ph=H-T-B,n=liq.length;
   var shr=stk.map(function(p){return Math.max(0,p.nw);});
   var tot=liq.map(function(p,i){return p.nw+shr[i];});
   // Axis must clear both the total line and the shares top (shares > total when liquid<0).
@@ -736,6 +736,17 @@ function netWorthAreaChart(liq,stk,width){
   var yTot=tot.map(function(v){return yf(v);});
   var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img',
     'aria-label':'Net worth by month — invested and liquid, last '+n+' months'});
+  // Vertical fades: a flat translucent slab over a dark card reads as mud, and
+  // two flat slabs read as one. ponytail: fixed gradient ids — one instance of
+  // this chart exists per page, and a duplicate would resolve to an identical def.
+  var defs=svgEl('defs',{});
+  [['nwInvGrad','var(--chart-invested)',0.55,0.14],['nwLiqGrad','var(--accent)',0.45,0.10]].forEach(function(g){
+    var lg=svgEl('linearGradient',{id:g[0],x1:0,y1:0,x2:0,y2:1});
+    lg.appendChild(svgEl('stop',{offset:'0%','stop-color':g[1],'stop-opacity':g[2]}));
+    lg.appendChild(svgEl('stop',{offset:'100%','stop-color':g[1],'stop-opacity':g[3]}));
+    defs.appendChild(lg);
+  });
+  svg.appendChild(defs);
   [0,.5,1].forEach(function(f){
     var y=T+ph-f*ph;
     if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
@@ -744,10 +755,14 @@ function netWorthAreaChart(liq,stk,width){
   var base=T+ph;
   // Invested base band (baseline → shares), then the signed liquid ribbon (shares → total).
   svg.appendChild(svgEl('polygon',{points:L+','+base+' '+x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+(x[n-1])+','+base,
-    fill:'var(--chart-invested)','fill-opacity':0.35}));
+    fill:'url(#nwInvGrad)'}));
   svg.appendChild(svgEl('polygon',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+
     x.slice().reverse().map(function(xi,i){var j=n-1-i;return xi+','+yTot[j];}).join(' '),
-    fill:'var(--accent)','fill-opacity':0.32}));
+    fill:'url(#nwLiqGrad)'}));
+  // Invested top edge: without a line of its own the two bands share a soft
+  // colour change and read as one smear.
+  svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' '),
+    fill:'none',stroke:'var(--chart-invested)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
   // Total (top-edge) line + real/estimate dots.
   svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yTot[i];}).join(' '),
     fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
@@ -758,7 +773,9 @@ function netWorthAreaChart(liq,stk,width){
   var tip=el('div','chart-tip'); tip.hidden=true;
   var band=pw/Math.max(1,n-1);
   liq.forEach(function(p,i){
-    var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':'middle'});
+    // First/last labels sit ON the axis ends — centred they collide with the
+    // y-axis labels and overflow the right edge.
+    var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':i===0?'start':(i===n-1?'end':'middle')});
     if(i===n-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
     lbl.textContent=String(p.month).split('-')[1]||p.month;
     svg.appendChild(lbl);
