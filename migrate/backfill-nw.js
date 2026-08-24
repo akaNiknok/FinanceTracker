@@ -13,21 +13,21 @@
  * own deltas / shapeAccounts / netWorthTotals, so a backfilled figure is computed
  * exactly like a live one — only the price/FX inputs are historical.
  *
- * DATA SOURCE (fetchDailySeries) is the one thing you must supply. Prices and
- * USD/PHP need a daily historical series per symbol. IBKR is NOT usable — the
- * Flex Web Service references one saved query whose period is fixed in the portal
- * (SendRequest takes no date), it only prices currently-held symbols, retention
- * is short, and it has no PHP FX. Stooq (the keyless default below) now sits
- * behind a JavaScript proof-of-work wall and its CSV endpoint no longer answers a
- * script. So point fetchDailySeries at a provider you have a key for — e.g. Alpha
- * Vantage TIME_SERIES_DAILY_ADJUSTED (prices) + FX_DAILY (USD/PHP), free key, 25
- * calls/day is enough for one call per symbol. NOTE: LSE-listed UCITS ETFs
- * (VWRA, IWVL, IB01, DFNS…) are thinly covered by cheap providers — confirm yours
- * carries them, and map ticker -> the provider's symbol in SYMBOL_MAP.
+ * DATA SOURCE: Yahoo Finance's v8 chart endpoint (keyless, needs a browser
+ * User-Agent). It covers everything this portfolio holds, incl. the LSE-listed
+ * UCITS ETFs (VWRA.L, IWVL.L, IB01.L, DFNS.L — all USD-quoted) and USD/PHP via
+ * `USDPHP=X`, and it returns the quote currency in the response so nothing is
+ * guessed. It is UNOFFICIAL — if Yahoo starts refusing, repoint `fetchDailySeries`
+ * at a keyed provider. IBKR is NOT usable — Flex references one saved query whose
+ * period is fixed in the portal (SendRequest takes no date), it only prices
+ * currently-held symbols, and it has no PHP FX. Stooq's keyless CSV is now behind
+ * a JavaScript proof-of-work wall.
  *
- * A source that fails for a symbol/currency is not fatal: that series is marked
- * unavailable and every month that needs it is SKIPPED and reported, so you get
- * the months you CAN value and a clear list of the ones you cannot.
+ * SYMBOL_MAP maps an IBKR ticker to its Yahoo symbol where they differ (the LSE
+ * ETFs need a `.L` suffix; US names are identical and need no entry). A source
+ * that fails for a symbol/currency is not fatal: that series is marked unavailable
+ * and every month that needs it is SKIPPED and reported, so you get the months you
+ * CAN value and a clear list of the ones you cannot.
  *
  * Output on stdout is SQL (ON CONFLICT DO NOTHING — never clobbers a real
  * snapshot); the report goes to stderr, so `> backfill-nw.sql` keeps them apart.
@@ -46,12 +46,14 @@ const DUMP = process.argv.find((a) => a.endsWith('.sql')) ||
   path.join(__dirname, '..', 'worker', '.dev-data.sql');
 const SELFTEST = process.argv.includes('--self-test');
 
-// IBKR ticker -> Stooq listing + quote currency. Default: US listing in USD.
-// Add an entry here for any holding that is not a US-listed, USD-quoted symbol.
-const SYMBOL_MAP = { /* e.g. 'VUSA': { stooq: 'vusa.uk', currency: 'GBP' } */ };
-const stooqForSymbol = (sym) => SYMBOL_MAP[sym] || { stooq: sym.toLowerCase() + '.us', currency: 'USD' };
-// Stooq FX symbol for a currency quoted in PHP, e.g. USD -> 'usdphp'.
-const stooqForFx = (ccy) => ccy.toLowerCase() + 'php';
+// IBKR ticker -> Yahoo symbol, where they differ. US names are identical (omit
+// them); LSE-listed UCITS ETFs need the `.L` suffix. Quote currency is read from
+// Yahoo's response, so it is not configured here.
+const SYMBOL_MAP = { VWRA: 'VWRA.L', IWVL: 'IWVL.L', IB01: 'IB01.L', DFNS: 'DFNS.L' };
+const yahooForSymbol = (sym) => SYMBOL_MAP[sym] || sym;
+// Yahoo FX symbol for a currency quoted in PHP, e.g. USD -> 'USDPHP=X'.
+const yahooForFx = (ccy) => ccy + 'PHP=X';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 
 const M = 1e6;
 const toU = (v) => Math.round(Number(v || 0) * M);
@@ -74,21 +76,25 @@ function d1(db) {
   return { prepare: (sql) => wrap(sql), batch: async (stmts) => stmts.map((s) => s._exec()) };
 }
 
-// ── daily history — THE SWAP POINT ────────────────────────────────────────────
-// Return an ascending [{date:'yyyy-MM-dd', close:Number}] series for a provider
-// symbol, or throw. Default target is Stooq's CSV endpoint (keyless) — which is
-// now behind a JS proof-of-work wall, so this throws until you repoint it at a
-// provider you hold a key for. See the header for the recommended one.
-async function fetchDailySeries(sym) {
-  const res = await fetch('https://stooq.com/q/d/l/?s=' + encodeURIComponent(sym) + '&i=d');
-  const text = await res.text();
-  if (!/^Date,/.test(text)) throw new Error(sym + ': not CSV (source blocked or unknown symbol): ' + text.slice(0, 60).replace(/\s+/g, ' '));
-  const rows = text.trim().split('\n').slice(1).map((l) => {
-    const c = l.split(','); return { date: c[0], close: parseFloat(c[4]) };
-  }).filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && isFinite(r.close));
-  rows.sort((a, b) => (a.date < b.date ? -1 : 1));
-  if (!rows.length) throw new Error(sym + ': no rows');
-  return rows;
+// ── daily history — THE SWAP POINT (Yahoo Finance v8 chart, keyless) ──────────
+// Returns { series:[{date:'yyyy-MM-dd', close:Number}] ascending, currency }, or
+// throws. `sinceISO` bounds the fetch to the range we need (plus a buffer so the
+// first month's as-of can still carry back to a prior trading day).
+async function fetchDailySeries(yahooSym, sinceISO) {
+  const p1 = Math.floor(Date.parse((sinceISO || '2000-01-01') + 'T00:00:00Z') / 1000) - 15 * 86400;
+  const p2 = Math.floor(Date.now() / 1000);
+  const url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(yahooSym) +
+    '?period1=' + p1 + '&period2=' + p2 + '&interval=1d';
+  const text = await (await fetch(url, { headers: { 'User-Agent': UA } })).text();
+  let j; try { j = JSON.parse(text); } catch (e) { throw new Error(yahooSym + ': not JSON (blocked?): ' + text.slice(0, 60).replace(/\s+/g, ' ')); }
+  const r = j.chart && j.chart.result && j.chart.result[0];
+  if (!r || !r.timestamp) throw new Error(yahooSym + ': ' + ((j.chart && j.chart.error && j.chart.error.description) || 'no data'));
+  const closes = r.indicators.quote[0].close;
+  const series = r.timestamp.map((ts, i) => ({ date: new Date(ts * 1000).toISOString().slice(0, 10), close: closes[i] }))
+    .filter((x) => isFinite(x.close));
+  series.sort((a, b) => (a.date < b.date ? -1 : 1));
+  if (!series.length) throw new Error(yahooSym + ': no closes');
+  return { series, currency: (r.meta && r.meta.currency) || null };
 }
 /** Latest close on or before asOf; null if the series does not reach that far back. */
 function closeAsOf(series, asOf) {
@@ -167,19 +173,22 @@ async function main() {
   log('Backfilling ' + months.length + ' month(s): ' + months[0].key + ' … ' + months[months.length - 1].key);
   log('Share symbols: ' + (symbols.join(', ') || '(none)') + ' · currencies: ' + (currencies.join(', ') || '(none, PHP only)'));
 
-  // Fetch each price/FX series once (full history), then read as-of per month.
-  // A failure is recorded, not thrown: the honesty gate skips the months it hits.
+  // Fetch each price/FX series once (bounded to the range we need), then read
+  // as-of per month. A failure is recorded, not thrown: the honesty gate skips
+  // the months it hits. Share currency comes from Yahoo's own response.
+  const since = monthEnd(months[0].y, months[0].m);
   const priceSeries = {}, fxSeries = {}, failures = [];
   for (const sym of symbols) {
-    const s = stooqForSymbol(sym);
-    try { priceSeries[sym] = { series: await fetchDailySeries(s.stooq), currency: s.currency };
-      log('  price ' + sym + ' <- ' + s.stooq + ' (' + priceSeries[sym].series.length + ' days, ' + s.currency + ')'); }
-    catch (e) { priceSeries[sym] = { series: [], currency: s.currency }; failures.push('price ' + sym + ' (' + s.stooq + '): ' + e.message); log('  price ' + sym + ' — FAILED: ' + e.message); }
+    const ysym = yahooForSymbol(sym);
+    try { const d = await fetchDailySeries(ysym, since); priceSeries[sym] = d;
+      log('  price ' + sym + ' <- ' + ysym + ' (' + d.series.length + ' days, ' + d.currency + ')'); }
+    catch (e) { priceSeries[sym] = { series: [], currency: null }; failures.push('price ' + sym + ' (' + ysym + '): ' + e.message); log('  price ' + sym + ' — FAILED: ' + e.message); }
   }
   for (const ccy of currencies) {
-    try { fxSeries[ccy] = await fetchDailySeries(stooqForFx(ccy));
-      log('  fx ' + ccy + '/PHP <- ' + stooqForFx(ccy) + ' (' + fxSeries[ccy].length + ' days)'); }
-    catch (e) { fxSeries[ccy] = []; failures.push('fx ' + ccy + '/PHP (' + stooqForFx(ccy) + '): ' + e.message); log('  fx ' + ccy + '/PHP — FAILED: ' + e.message); }
+    const ysym = yahooForFx(ccy);
+    try { fxSeries[ccy] = (await fetchDailySeries(ysym, since)).series;
+      log('  fx ' + ccy + '/PHP <- ' + ysym + ' (' + fxSeries[ccy].length + ' days)'); }
+    catch (e) { fxSeries[ccy] = []; failures.push('fx ' + ccy + '/PHP (' + ysym + '): ' + e.message); log('  fx ' + ccy + '/PHP — FAILED: ' + e.message); }
   }
 
   const out = [];
@@ -204,7 +213,7 @@ async function main() {
   }
 
   if (out.length) {
-    process.stdout.write('-- backfill-nw.sql — reconstructed monthly net worth (Stooq prices + FX)\n');
+    process.stdout.write('-- backfill-nw.sql — reconstructed monthly net worth (Yahoo Finance prices + FX)\n');
     process.stdout.write('-- Generated ' + new Date().toISOString() + '. Apply once; ON CONFLICT keeps real snapshots.\n');
     process.stdout.write(out.join('\n') + '\n');
   }
