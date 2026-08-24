@@ -225,7 +225,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 3;   // 2 = D1 cutover; 3 = dashboard netWorthHistory
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 4;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -614,18 +614,21 @@ function deltaEl(cur,prev,upIsGood,vsLabel){
   s.style.marginTop='8px';
   return s;
 }
-// Net worth per month. Prefers the REAL monthly snapshot (`snaps[month]`, from
-// nw_snapshots — captures FX/market moves); where a month has none yet, estimates
-// it by rolling the current total backward through that month's savings
-// (income − expense) and flags it `real:false`. Live month always uses `current`.
-function netWorthSeries(cf,current,snaps){
-  snaps=snaps||{};
+// A per-month net-worth series. Prefers the REAL monthly snapshot (`snaps[month]`,
+// from nw_snapshots — captures FX/market moves); where a month has none yet it
+// estimates and flags `real:false`. Live month always uses `current`.
+//   roll=true  (liquid/cash): estimate a gap by rolling the value backward through
+//              that month's savings (income − expense) — cash flow is what moves it.
+//   roll=false (invested):    hold the nearest known value flat — the market moves
+//              it, and cash flow does not, so a savings roll-back would be wrong.
+function netWorthSeries(cf,current,snaps,roll){
+  snaps=snaps||{}; if(roll===undefined)roll=true;
   var out=new Array(cf.length), nw=current;
   for(var i=cf.length-1;i>=0;i--){
     var real=i<cf.length-1 && snaps[cf[i].month]!=null;
     if(real) nw=snaps[cf[i].month];
     out[i]={month:cf[i].month,nw:nw,real:real||i===cf.length-1};
-    nw-=(cf[i].income-cf[i].expense);
+    if(roll) nw-=(cf[i].income-cf[i].expense);
   }
   return out;
 }
@@ -640,7 +643,7 @@ function cashflowChart(cf,width,ns){
   var legend=el('div','chart-legend');
   legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-income)"></span>Income</span>'+
     '<span class="lg"><span class="lg-key" style="background:var(--chart-spend)"></span>Spending</span>'+
-    (ns?'<span class="lg"><span class="lg-key" style="background:var(--accent);border-radius:1px;height:3px"></span>Net worth</span>':'');
+    (ns?'<span class="lg"><span class="lg-key" style="background:var(--accent);border-radius:1px;height:3px"></span>Liquid net worth</span>':'');
   wrap.appendChild(legend);
   var W=Math.max(300,width||640),H=200,L=48,R=ns?52:6,T=10,B=26,pw=W-L-R,ph=H-T-B;
   var max=0; cf.forEach(function(m){max=Math.max(max,m.income,m.expense);});
@@ -649,7 +652,7 @@ function cashflowChart(cf,width,ns){
   var lo=0,hi=1;
   if(ns){ var v=ns.map(function(p){return p.nw;}); hi=Math.max.apply(null,v); lo=Math.min.apply(null,v);
     if(hi===lo) hi=lo+1; var pad=(hi-lo)*0.12; hi+=pad; lo-=pad; }
-  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':(ns?'Cash flow and net worth':'Cash flow — income vs spending')+', last '+cf.length+' months'});
+  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':(ns?'Cash flow and liquid net worth':'Cash flow — income vs spending')+', last '+cf.length+' months'});
   [0,.5,1].forEach(function(f){
     var y=T+ph-f*ph;
     if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
@@ -688,7 +691,7 @@ function cashflowChart(cf,width,ns){
       tip.innerHTML='<b>'+esc(monthLabel(m.month))+'</b><br>'+
         '<span class="lg-key" style="background:var(--chart-income)"></span>Income <b>'+money(m.income,true)+'</b><br>'+
         '<span class="lg-key" style="background:var(--chart-spend)"></span>Spending <b>'+money(m.expense,true)+'</b>'+
-        (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Net worth <b>'+money(ns[i].nw,true)+'</b>'+(ns[i].real?'':' <span style="opacity:.6">est.</span>'):'');
+        (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Liquid net worth <b>'+money(ns[i].nw,true)+'</b>'+(ns[i].real?'':' <span style="opacity:.6">est.</span>'):'');
       var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
       var x=sr.left-wr.left+cx[i]/W*sr.width;
       x=Math.max(78,Math.min(x,wr.width-78));
@@ -702,6 +705,73 @@ function cashflowChart(cf,width,ns){
     svg.appendChild(hit);
   });
   svg.appendChild(svgEl('line',{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:'var(--border-2)','stroke-width':1}));
+  wrap.appendChild(svg); wrap.appendChild(tip);
+  return wrap;
+}
+// Net worth as a stacked area: liquid (cash) at the bottom, invested (shares) on
+// top, so the TOP edge is total net worth and the two bands show composition —
+// part-to-whole, which is why the Y axis anchors at 0 (band areas stay honest).
+// `liq`/`stk` are netWorthSeries outputs (same month order); `real` on the total
+// point marks a real snapshot vs an estimate (hollow ring).
+function netWorthAreaChart(liq,stk,width){
+  var wrap=el('div','chart-wrap');
+  var legend=el('div','chart-legend');
+  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--accent)"></span>Liquid</span>'+
+    '<span class="lg"><span class="lg-key" style="background:var(--chart-invested)"></span>Invested</span>';
+  wrap.appendChild(legend);
+  var W=Math.max(300,width||640),H=200,L=48,R=6,T=10,B=26,pw=W-L-R,ph=H-T-B,n=liq.length;
+  var tot=liq.map(function(p,i){return Math.max(0,p.nw)+Math.max(0,stk[i].nw);});
+  var max=niceCeil(Math.max.apply(null,tot.concat([1])));
+  var xf=function(i){ return n<2?L+pw/2:L+pw*i/(n-1); };
+  var yf=function(v){ return T+ph-v/max*ph; };
+  var x=liq.map(function(p,i){return xf(i);});
+  var yLiq=liq.map(function(p){return yf(Math.max(0,p.nw));});
+  var yTot=tot.map(function(v){return yf(v);});
+  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img',
+    'aria-label':'Net worth by month — liquid and invested, last '+n+' months'});
+  [0,.5,1].forEach(function(f){
+    var y=T+ph-f*ph;
+    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
+    var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
+  });
+  var base=T+ph;
+  // Invested band (liquid top → total top), then liquid band (baseline → liquid top).
+  svg.appendChild(svgEl('polygon',{points:x.map(function(xi,i){return xi+','+yLiq[i];}).join(' ')+' '+
+    x.slice().reverse().map(function(xi,i){var j=n-1-i;return xi+','+yTot[j];}).join(' '),
+    fill:'var(--chart-invested)','fill-opacity':0.35}));
+  svg.appendChild(svgEl('polygon',{points:L+','+base+' '+x.map(function(xi,i){return xi+','+yLiq[i];}).join(' ')+' '+(x[n-1])+','+base,
+    fill:'var(--accent)','fill-opacity':0.32}));
+  // Total (top-edge) line + real/estimate dots.
+  svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yTot[i];}).join(' '),
+    fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
+  liq.forEach(function(p,i){
+    svg.appendChild(svgEl('circle',{cx:x[i],cy:yTot[i],r:i===n-1?4:2.5,
+      fill:p.real?'var(--accent)':'var(--surface)',stroke:p.real?'var(--surface)':'var(--accent)','stroke-width':2}));
+  });
+  var tip=el('div','chart-tip'); tip.hidden=true;
+  var band=pw/Math.max(1,n-1);
+  liq.forEach(function(p,i){
+    var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':'middle'});
+    if(i===n-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
+    lbl.textContent=String(p.month).split('-')[1]||p.month;
+    svg.appendChild(lbl);
+    var hit=svgEl('rect',{x:i===0?L:x[i]-band/2,y:T,width:i===0||i===n-1?band/2:band,height:ph,fill:'transparent'});
+    function show(){
+      tip.innerHTML='<b>'+esc(monthLabel(p.month))+'</b><br>'+
+        '<span class="lg-key" style="background:var(--accent)"></span>Liquid <b>'+money(Math.max(0,p.nw),true)+'</b><br>'+
+        '<span class="lg-key" style="background:var(--chart-invested)"></span>Invested <b>'+money(Math.max(0,stk[i].nw),true)+'</b><br>'+
+        'Net worth <b>'+money(tot[i],true)+'</b>'+(p.real?'':' <span style="opacity:.6">est.</span>');
+      var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
+      var px=sr.left-wr.left+x[i]/W*sr.width; px=Math.max(78,Math.min(px,wr.width-78));
+      tip.style.left=px+'px'; tip.style.top=(sr.top-wr.top+yTot[i]/H*sr.height)+'px';
+      tip.hidden=false;
+    }
+    hit.addEventListener('mouseenter',show);
+    hit.addEventListener('click',show);
+    hit.addEventListener('mouseleave',function(){ tip.hidden=true; });
+    svg.appendChild(hit);
+  });
+  svg.appendChild(svgEl('line',{x1:L,y1:base,x2:W-R,y2:base,stroke:'var(--border-2)','stroke-width':1}));
   wrap.appendChild(svg); wrap.appendChild(tip);
   return wrap;
 }
@@ -865,14 +935,33 @@ function renderDashboard(){
     // ── cash flow + net worth (last 6 months) — drawn after paint at the host's
     // real width. The net-worth line only rides along on the live month, where
     // d.netWorth ("now") is the correct anchor for rolling the flows backward. ──
+    // Split net worth into liquid (cash, driven by the flow bars) and invested
+    // (shares, market-driven). The cash-flow line rides the LIQUID series so bars
+    // and line move together; the invested part gets its own stacked-area chart.
+    // Both only ride the live month, where d.netWorth ("now") anchors the roll-back.
+    var liq=null, stk=null;
+    if(isLive && cf.length>=2){
+      var nwh=d.netWorthHistory||{}, sh=d.sharesHistory||{}, liqHist={};
+      Object.keys(nwh).forEach(function(m){ liqHist[m]=nwh[m]-(sh[m]||0); });
+      liq=netWorthSeries(cf, (d.netWorth||0)-(d.sharesValue||0), liqHist, true);
+      stk=netWorthSeries(cf, d.sharesValue||0, sh, false);
+    }
     if(cf.length>=2){
-      var ns=isLive?netWorthSeries(cf, d.netWorth||0, d.netWorthHistory):null;
       var cc=el('div','card');
-      cc.appendChild(el('div','card-h',(ns?'Cash flow & net worth':'Cash flow')+' · last 6 months'));
+      cc.appendChild(el('div','card-h',(liq?'Cash flow & liquid net worth':'Cash flow')+' · last 6 months'));
       var cfHost=el('div'); cc.appendChild(cfHost);
       w.appendChild(cc);
       requestAnimationFrame(function(){
-        if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, ns));
+        if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, liq));
+      });
+    }
+    if(liq){
+      var nc=el('div','card');
+      nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last 6 months'));
+      var nwHost=el('div'); nc.appendChild(nwHost);
+      w.appendChild(nc);
+      requestAnimationFrame(function(){
+        if(nwHost.isConnected) nwHost.appendChild(netWorthAreaChart(liq, stk, nwHost.clientWidth));
       });
     }
 

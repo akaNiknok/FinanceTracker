@@ -291,7 +291,7 @@ export async function getDashboard(args, env) {
       "WHERE t.month IN (" + list(flowKeys.length) + ") AND c.type IN ('Income','Expense') " +
       'GROUP BY m, type').bind(...flowKeys),
     env.DB.prepare('SELECT * FROM transactions ORDER BY date DESC, rowid DESC LIMIT 10'),
-    env.DB.prepare('SELECT month, net_worth_u FROM nw_snapshots WHERE month IN (' + list(flowKeys.length) + ')').bind(...flowKeys)
+    env.DB.prepare('SELECT month, net_worth_u, shares_u FROM nw_snapshots WHERE month IN (' + list(flowKeys.length) + ')').bind(...flowKeys)
   ]);
 
   const spendBySegment = {}, spendByCategory = {};
@@ -307,8 +307,16 @@ export async function getDashboard(args, env) {
   // Real historical net worth per month (nulls where no snapshot exists yet — the
   // client falls back to rolling cash flow backward for those). The live month is
   // omitted deliberately: the chart uses `netWorth` (now) for it, always fresher.
-  const netWorthHistory = {};
-  snaps.results.forEach((s) => { if (s.month !== manilaMonth()) netWorthHistory[s.month] = q2(fromU(s.net_worth_u)); });
+  // netWorthHistory = total; sharesHistory = the invested subset. The client
+  // derives the liquid (non-shares) line as total − shares, so the cash-flow
+  // bars and their overlaid line move together, and stacks the two into the
+  // Net worth chart. Both omit the live month (chart uses live figures there).
+  const netWorthHistory = {}, sharesHistory = {};
+  snaps.results.forEach((s) => {
+    if (s.month === manilaMonth()) return;
+    netWorthHistory[s.month] = q2(fromU(s.net_worth_u));
+    sharesHistory[s.month] = q2(fromU(s.shares_u));
+  });
 
   return {
     status: 'success', version: await dataVersion(env), month,
@@ -316,7 +324,7 @@ export async function getDashboard(args, env) {
     sharesValue: q2(totals.sharesValue),
     spendBySegment, spendByCategory,
     cashflow: flowKeys.map((k) => byMonth[k]),
-    netWorthHistory,
+    netWorthHistory, sharesHistory,
     budgets: (await budgetsPayload(env, month, fx)).budgets,
     recentTransactions: recent.results.map((row) => shapeTx(row, r))
   };

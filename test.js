@@ -293,6 +293,11 @@ console.log('\nApps Script (vm):');
     assert.strictEqual(real[1].nw, 900);
     assert.strictEqual(real[1].real, true);
     assert.strictEqual(real[0].nw, 900 - (100 - 40));  // rolls back from the snapshot, not the live total
+    // roll=false (the invested series): no snapshot → hold the current value flat,
+    // never roll it back through savings (the market moves it, cash flow does not).
+    const held = app.netWorthSeries(cf, 500, {}, false);
+    assert.strictEqual(held[2].nw, 500);
+    assert.strictEqual(held[0].nw, 500, 'invested holds flat, does not roll back through cash flow');
     return app.gs('api_getDashboard', {}).then(() => {
       assert.ok(!/_v=/.test(seen), 'gs() still stamps _v: ' + seen);
       assert.ok(/action=getDashboard/.test(seen), seen);
