@@ -13,6 +13,9 @@ npm-debug.log*
 # Session handoff notes (per-session artifact, not history)
 HANDOFF.md
 
+# Personal financial-system docs — real PII, lives in the private Personal-API repo
+docs/
+
 # Copy of the n8n container's /home/node/.n8n — holds encryptionKey + credentials
 n8n-data/
 
