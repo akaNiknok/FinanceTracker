@@ -52,11 +52,6 @@ export function periodMonths(period, ref) {
   const start = Math.floor(ref.m / 3) * 3;
   return [0, 1, 2].map((i) => monthKey(ref.y, start + i));
 }
-/** Day arithmetic on ISO strings, via UTC so no local/DST slip can creep in. */
-export function addDays(iso, n) {
-  const t = Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) + n * 86400000;
-  return new Date(t).toISOString().slice(0, 10);
-}
 
 // ── input coercion (ports of tx_parseDate_ / tx_parsePeriod_) ────────────────
 /** Client date -> 'yyyy-MM-dd'. Blank means today (Manila). Rejects nothing else. */
@@ -257,6 +252,3 @@ export function shapeTx(r, refs) {
     ToCurrency: to ? to.currency : ''
   };
 }
-
-/** The SELECT every transaction read uses — shapeTx expects exactly these columns. */
-export const TX_SELECT = 'SELECT t.* FROM transactions t';

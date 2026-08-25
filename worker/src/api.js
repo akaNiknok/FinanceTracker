@@ -6,8 +6,8 @@
  * names, same argument names (the sheet's header casing — `Category`, `Amount`,
  * `Amount (PHP)`), same response keys, same {status:'error'|'duplicate'} semantics,
  * same DATA_VERSION protocol. worker/public/app.js is untouched by the platform
- * swap except for the new admin screen, and migrate/verify.js proves it against
- * fixtures captured from v1.
+ * swap except for the new admin screen. The v1 fixture diff that proved it
+ * (migrate/verify.js) retired with the cutover; test-api.js is the standing check.
  *
  * What DID change, and why it is less code rather than more:
  *   * su_lock_() + cache_bumpVersion_() are gone. D1 batch() is transactional, so
@@ -17,7 +17,7 @@
  *     generated columns; Type/Segment/Currency are JOINs. There is no "never write a
  *     derived column" rule left to break.
  *   * balances are computed here (db.js shapeAccounts) instead of read out of sheet
- *     formulas. Same numbers — migrate/verify.js reconciles them to the centavo.
+ *     formulas. Same numbers — reconciled to the centavo at the v2.0.0 cutover.
  *
  * Handler signature is (args, env) and handlers THROW on rejection; worker.js turns
  * a throw into {status:'error', message}, exactly as Router.gs's try/catch did.
@@ -96,15 +96,6 @@ export async function getAccounts(args, env) {
   const r = await refs(env);
   const { accounts } = await accountsList(env, r);
   return { status: 'success', version: await dataVersion(env), accounts };
-}
-
-export async function getCategories(args, env) {
-  const r = await refs(env);
-  const map = {};
-  r.categories.forEach((c) => {
-    map[c.name] = { Type: c.type || null, Segment: c.segment || null, Description: c.description || null };
-  });
-  return map;   // deliberately unwrapped, exactly as api_getCategories was
 }
 
 export async function getRecurring(args, env) {

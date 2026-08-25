@@ -30,8 +30,3 @@ worker/.dev-data.sql
 # Reconstructed net-worth SQL from `npm run backfill:nw` — real financial data
 backfill-nw.sql
 worker/.dev-backfill.sql
-
-# v2 migration artefacts — real financial data, never committed
-migrate/fixtures/
-seed.sql
-financetracker-export-*.json

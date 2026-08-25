@@ -32,7 +32,7 @@
  */
 import {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
-  getLedger, getCategories, getDataVersion, listTransactions, listTable, getExportAll,
+  getLedger, getDataVersion, listTransactions, listTable, getExportAll,
   createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
   bulkUpdateTransactions, bulkDeleteTransactions, updateLedgerCell, appendLedgerRow,
   deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
@@ -49,7 +49,7 @@ const COOKIE = 'ft_auth';
  */
 export const ROUTES_READ = {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
-  getLedger, getCategories, getDataVersion, listTransactions,
+  getLedger, getDataVersion, listTransactions,
   listTable,        // admin grid
   getExportAll      // backup puller + the admin screen's CSV
 };
