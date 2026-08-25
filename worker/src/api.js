@@ -25,7 +25,8 @@
 import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
   dataVersion, bumpStmt, toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
-  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, BASE_CURRENCY, isInvestedNetWorth
+  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, BASE_CURRENCY,
+  isInvestedNetWorth, isSharesAcct
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
 
@@ -333,6 +334,9 @@ export async function getDashboard(args, env) {
   };
 }
 
+/** 'yyyy-MM-dd' -> 'yyyy-Qn' (calendar quarter, same as the investment pulse). */
+const quarterOf = (d) => d.slice(0, 4) + '-Q' + Math.ceil(+d.slice(5, 7) / 3);
+
 export async function getInvestments(args, env) {
   const r = await refs(env);
   const { accounts } = await accountsList(env, r);
@@ -343,11 +347,64 @@ export async function getInvestments(args, env) {
   }));
   const total = positions.reduce((s, p) => s + (p.valuePhp || 0), 0);
   positions.forEach((p) => { p.weightPct = total ? Math.round((p.valuePhp || 0) / total * 1000) / 10 : 0; });
+
+  // Quarterly pulse: the buy legs ARE transfers into share-priced accounts, so the
+  // history needs no category discipline — it is derived from account subtypes and
+  // works retroactively. Funding legs (Wise→IBKR) never appear here: IBKR itself is
+  // not share-priced. Newest quarter first; the SPA flags the current quarter when
+  // it has no buys yet.
+  const shareIds = r.accounts.filter(isSharesAcct).map((a) => a.id);
+  const monthKeys = [];   // last 3 CLOSED months, for the runway's average spend
+  const ref = parseMonthKey(manilaMonth());
+  for (let i = 3; i >= 1; i--) { const s = shiftMonth(ref.y, ref.m, -i); monthKeys.push(monthKey(s.y, s.m)); }
+  const [buysQ, spendQ] = await env.DB.batch([
+    env.DB.prepare(
+      'SELECT t.date AS d, t.amount_u AS amt, t.to_amount_u AS qty, b.name AS symbol, ' +
+      "COALESCE(a.currency, 'USD') AS cur FROM transactions t " +
+      'JOIN accounts b ON b.id = t.to_account_id LEFT JOIN accounts a ON a.id = t.account_id ' +
+      'WHERE t.to_account_id IN (' + (shareIds.length ? list(shareIds.length) : 'NULL') + ') ' +
+      'ORDER BY t.date DESC').bind(...shareIds),
+    env.DB.prepare(
+      'SELECT SUM(ABS(t.amount_php_u)) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
+      "WHERE c.type = 'Expense' AND t.month IN (" + list(monthKeys.length) + ')').bind(...monthKeys)
+  ]);
+  const quarters = [];
+  buysQ.results.forEach((x) => {
+    const q = quarterOf(x.d);
+    let row = quarters[quarters.length - 1];
+    if (!row || row.quarter !== q) { row = { quarter: q, totalUsd: 0, buys: [] }; quarters.push(row); }
+    const amt = q2(fromU(x.amt));
+    row.buys.push({ date: x.d, symbol: x.symbol, amount: amt, currency: x.cur, quantity: fromU(x.qty) });
+    if (x.cur === 'USD') row.totalUsd = q2(row.totalUsd + amt);
+  });
+
+  // Emergency runway: EF pesos are commingled with spending money (no dedicated EF
+  // account), so the honest figure is the whole cash-like pool, expressed in months
+  // of average spend. "Cash-like" reuses the net-worth liquid/invested split
+  // (isInvestedNetWorth: IB01-as-EF counts, growth tickers don't) minus receivables
+  // (money lent is not reachable in an emergency) minus credit balances.
+  // ponytail: targetMonths is the doc's fixed 4-month rule; make it a meta key if it ever moves.
+  const efPhp = accounts.reduce((s, a) => {
+    if (a.isLiability) return s - (a.balancePhp || 0);
+    if (isInvestedNetWorth(a) || /receivable/i.test(a.subtype || '')) return s;
+    return s + (a.balancePhp || 0);
+  }, 0);
+  const avg = spendQ.results[0] && spendQ.results[0].s ? fromU(spendQ.results[0].s) / monthKeys.length : 0;
+  const runway = {
+    efPhp: q2(efPhp),
+    avgMonthlyExpensePhp: q2(avg),
+    months: avg ? Math.round(efPhp / avg * 10) / 10 : null,
+    targetMonths: 4,
+    targetPhp: avg ? q2(avg * 4) : null
+  };
+
   return {
     status: 'success', version: await dataVersion(env),
     totalValuePhp: q2(total), positions,
+    pulse: { currentQuarter: quarterOf(manilaToday()), quarters },
+    runway,
     coreTargets: { 60: 'Core', 25: 'Growth', 15: 'Speculative' },
-    segmentTargets: { Needs: 50, Wants: 30, Savings: 20 }
+    segmentTargets: { Essentials: 50, Rewards: 10, Stability: 15, Growth: 25 }
   };
 }
 

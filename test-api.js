@@ -253,6 +253,34 @@ function d1(db) {
     assert.strictEqual(b.categories['Expense: Food'].Segment, 'Essentials');
   });
 
+  await test('getInvestments: quarterly pulse groups buys, runway is the cash-like pool', async () => {
+    // A USD buy in an older quarter, next to fixture x1 (2026-08-10 Maya->IBKR).
+    await api.createTransfer({ ID: 'x3', Date: '2026-04-05', Category: 'Investment: Growth',
+                               Account: 'Wise', ToAccount: 'IBKR', Amount: 100, ToAmount: 0.05 }, env);
+    // An expense in the last closed month, so the runway average is deterministic.
+    const now = dbm.parseMonthKey(dbm.manilaMonth());
+    const prev = dbm.shiftMonth(now.y, now.m, -1);
+    await api.createTransaction({ ID: 't-rw', Date: prev.y + '-' + String(prev.m).padStart(2, '0') + '-15',
+                                  Category: 'Expense: Food', Account: 'Maya', Amount: 300 }, env);
+
+    const inv = await api.getInvestments({}, env);
+    assert.match(inv.pulse.currentQuarter, /^\d{4}-Q[1-4]$/);
+    const q = Object.fromEntries(inv.pulse.quarters.map((x) => [x.quarter, x]));
+    assert.ok(q['2026-Q3'] && q['2026-Q3'].buys.some((b) => b.symbol === 'IBKR' && b.amount === 5000 && b.currency === 'PHP'));
+    assert.strictEqual(q['2026-Q2'].totalUsd, 100, 'USD buys total per quarter');
+    assert.strictEqual(q['2026-Q2'].buys[0].quantity, 0.05);
+    assert.ok(inv.pulse.quarters[0].quarter > inv.pulse.quarters[inv.pulse.quarters.length - 1].quarter, 'newest first');
+
+    // Runway: Maya + Wise count, IBKR (invested) is excluded, Card is subtracted.
+    const by = Object.fromEntries((await api.getAccounts({}, env)).accounts.map((a) => [a.name, a]));
+    const expected = Math.round((by.Maya.balancePhp + by.Wise.balancePhp - by.Card.balancePhp) * 100) / 100;
+    assert.strictEqual(inv.runway.efPhp, expected);
+    assert.strictEqual(inv.runway.avgMonthlyExpensePhp, 100);   // 300 over 3 closed months
+    assert.strictEqual(inv.runway.targetPhp, 400);
+    assert.strictEqual(inv.runway.months, Math.round(expected / 100 * 10) / 10);
+    assert.deepStrictEqual(inv.segmentTargets, { Essentials: 50, Rewards: 10, Stability: 15, Growth: 25 });
+  });
+
   console.log('\nLedger (Tax screen):');
   await test('the ledger view derives from the linked transaction', async () => {
     const added = await api.appendLedgerRow({ 'Transaction ID': 't2' }, env);

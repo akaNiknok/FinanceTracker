@@ -225,7 +225,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 4;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 5;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -1441,6 +1441,55 @@ function loadInvestments(){
       l.appendChild(r);
     });
     card.appendChild(l); host.appendChild(card);
+
+    // Quarterly pulse: buys per quarter (transfers into share-priced accounts,
+    // derived server-side — no category discipline needed). Current quarter with
+    // no buys yet gets a nudge row.
+    var pl=inv.pulse;
+    if(pl){
+      var qc=el('div','card');
+      qc.appendChild(el('div','card-h','Quarterly pulse'));
+      var ql=el('div','list');
+      var qs=pl.quarters||[];
+      if(!qs.length||qs[0].quarter!==pl.currentQuarter){
+        var nr=el('div','litem');
+        nr.innerHTML='<div class="ic" style="color:var(--warn,#ffb454)">◌</div>'+
+          '<div class="grow"><div class="t1">'+esc(pl.currentQuarter)+'</div>'+
+          '<div class="t2">Not invested yet this quarter</div></div>';
+        ql.appendChild(nr);
+      }
+      qs.forEach(function(q){
+        var r=el('div','litem');
+        var det=q.buys.map(function(b){return esc(b.symbol)+' '+moneyCur(b.amount,b.currency);}).join(' · ');
+        r.innerHTML='<div class="ic">◈</div>'+
+          '<div class="grow"><div class="t1">'+esc(q.quarter)+'</div><div class="t2">'+det+'</div></div>'+
+          '<div class="amt">'+moneyCur(q.totalUsd,'USD')+'</div>';
+        ql.appendChild(r);
+      });
+      qc.appendChild(ql); host.appendChild(qc);
+    }
+
+    // Emergency runway: the whole cash-like pool (Liquid + EF − credit) vs the
+    // 4-months-of-expenses rule — EF is commingled, so the pool IS the fund.
+    var rw=inv.runway;
+    if(rw&&rw.efPhp!=null){
+      var rc=el('div','card');
+      var rh=el('div','row-between'); rh.style.marginBottom='8px';
+      var rt=el('div','card-h','Emergency runway'); rt.style.margin='0';
+      rh.appendChild(rt);
+      if(rw.targetPhp!=null) rh.appendChild(el('div','dim','target '+money(rw.targetPhp,true)));
+      rc.appendChild(rh);
+      rc.appendChild(el('div','stat-value',money(rw.efPhp)));
+      if(rw.targetPhp){
+        var m=el('div','meter');
+        m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,Math.round(100*rw.efPhp/rw.targetPhp))+'%"></div>';
+        rc.appendChild(m);
+      }
+      if(rw.months!=null)
+        rc.appendChild(el('div','dim','≈ '+rw.months+' months of expenses · target '+rw.targetMonths+
+          ' mo · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo'));
+      host.appendChild(rc);
+    }
 
     // targets reference
     var tc=el('div','card');
