@@ -1443,51 +1443,87 @@ function loadInvestments(){
     card.appendChild(l); host.appendChild(card);
 
     // Quarterly pulse: buys per quarter (transfers into share-priced accounts,
-    // derived server-side — no category discipline needed). Current quarter with
-    // no buys yet gets a nudge row.
+    // derived server-side — no category discipline needed). One stacked bar per
+    // quarter on a COMMON scale (width = share of the biggest quarter), segments
+    // colored per ticker with the SAME posColor as Holdings, so identity carries
+    // across the two cards. Identity is never color-alone: the detail line names
+    // each ticker with its amount. Current quarter with no buys is an empty
+    // dashed track — the absence is the message.
     var pl=inv.pulse;
     if(pl){
       var qc=el('div','card');
       qc.appendChild(el('div','card-h','Quarterly pulse'));
-      var ql=el('div','list');
       var qs=pl.quarters||[];
+      var maxT=Math.max.apply(null,[1].concat(qs.map(function(q){return q.totalUsd||0;})));
+      var qhost=el('div'); qhost.style.cssText='display:flex;flex-direction:column;gap:14px';
+      function qlabel(k){ var m=/^(\d{4})-(Q\d)$/.exec(k); return m?(m[2]+' '+m[1]):k; }
+      function qrow(label,right){
+        var w=el('div');
+        w.innerHTML='<div class="row-between"><div style="font-weight:600">'+esc(label)+'</div>'+
+          '<div class="mono" style="font-weight:700">'+right+'</div></div>';
+        return w;
+      }
       if(!qs.length||qs[0].quarter!==pl.currentQuarter){
-        var nr=el('div','litem');
-        nr.innerHTML='<div class="ic" style="color:var(--warn,#ffb454)">◌</div>'+
-          '<div class="grow"><div class="t1">'+esc(pl.currentQuarter)+'</div>'+
-          '<div class="t2">Not invested yet this quarter</div></div>';
-        ql.appendChild(nr);
+        var w0=qrow(qlabel(pl.currentQuarter),'<span class="warn" style="font-size:12px;font-weight:600">not invested yet</span>');
+        var tr=el('div'); tr.style.cssText='height:14px;border-radius:4px;margin-top:6px;border:1px dashed var(--warn);opacity:.6';
+        w0.appendChild(tr);
+        qhost.appendChild(w0);
       }
       qs.forEach(function(q){
-        var r=el('div','litem');
-        var det=q.buys.map(function(b){return esc(b.symbol)+' '+moneyCur(b.amount,b.currency);}).join(' · ');
-        r.innerHTML='<div class="ic">◈</div>'+
-          '<div class="grow"><div class="t1">'+esc(q.quarter)+'</div><div class="t2">'+det+'</div></div>'+
-          '<div class="amt">'+moneyCur(q.totalUsd,'USD')+'</div>';
-        ql.appendChild(r);
+        // merge buys per ticker (a quarter can buy the same one twice)
+        var order=[],agg={};
+        q.buys.forEach(function(b){
+          if(!agg[b.symbol]){agg[b.symbol]={symbol:b.symbol,currency:b.currency,amount:0,quantity:0};order.push(b.symbol);}
+          agg[b.symbol].amount+=b.amount||0; agg[b.symbol].quantity+=b.quantity||0;
+        });
+        var w=qrow(qlabel(q.quarter),moneyCur(q.totalUsd,'USD'));
+        var bar=el('div');
+        bar.style.cssText='display:flex;gap:2px;height:14px;margin-top:6px;width:'+
+          Math.max(6,Math.round(100*(q.totalUsd||0)/maxT))+'%';
+        order.forEach(function(sym){
+          var b=agg[sym], seg=el('div');
+          seg.title=sym+' · '+moneyCur(b.amount,b.currency)+' · '+num(b.quantity)+' sh';
+          seg.style.cssText='flex:'+Math.max(b.amount,1)+';background:'+posColor({name:sym})+';border-radius:4px;min-width:5px';
+          bar.appendChild(seg);
+        });
+        w.appendChild(bar);
+        var det=order.map(function(sym){return esc(sym)+' '+moneyCur(agg[sym].amount,agg[sym].currency);}).join(' · ');
+        var dl=el('div','',det);
+        dl.style.cssText='font-size:12px;color:var(--text-faint);margin-top:4px';
+        w.appendChild(dl);
+        qhost.appendChild(w);
       });
-      qc.appendChild(ql); host.appendChild(qc);
+      qc.appendChild(qhost); host.appendChild(qc);
     }
 
     // Emergency runway: the whole cash-like pool (Liquid + EF − credit) vs the
     // 4-months-of-expenses rule — EF is commingled, so the pool IS the fund.
+    // Stat-tile shape: peso pool as the value (the "how much EF do I have"
+    // answer), months-of-runway as the pill, a severity meter against the target
+    // (fill + same-ramp track, like the budget meters). The months figure and the
+    // support line restate the state, so color is never the only channel.
     var rw=inv.runway;
     if(rw&&rw.efPhp!=null){
       var rc=el('div','card');
-      var rh=el('div','row-between'); rh.style.marginBottom='8px';
+      var rh=el('div','row-between'); rh.style.marginBottom='2px';
       var rt=el('div','card-h','Emergency runway'); rt.style.margin='0';
       rh.appendChild(rt);
       if(rw.targetPhp!=null) rh.appendChild(el('div','dim','target '+money(rw.targetPhp,true)));
       rc.appendChild(rh);
-      rc.appendChild(el('div','stat-value',money(rw.efPhp)));
+      var sev=rw.months==null?'':(rw.months>=rw.targetMonths?'pos':(rw.months>=rw.targetMonths/2?'warn':'neg'));
+      var vr=el('div','row-between');
+      vr.innerHTML='<div class="stat-value" style="font-size:26px">'+money(rw.efPhp,true)+'</div>'+
+        (rw.months!=null?('<span class="pill '+sev+'">'+rw.months+' / '+rw.targetMonths+' mo</span>'):'');
+      rc.appendChild(vr);
       if(rw.targetPhp){
-        var m=el('div','meter');
+        var m=el('div','meter '+(sev==='neg'?'over':(sev==='warn'?'warn':'')));
         m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,Math.round(100*rw.efPhp/rw.targetPhp))+'%"></div>';
         rc.appendChild(m);
       }
-      if(rw.months!=null)
-        rc.appendChild(el('div','dim','≈ '+rw.months+' months of expenses · target '+rw.targetMonths+
-          ' mo · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo'));
+      var sub=el('div','dim','Liquid accounts + IB01 − credit'+
+        (rw.avgMonthlyExpensePhp?' · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo':''));
+      sub.style.cssText='font-size:12px;margin-top:8px';
+      rc.appendChild(sub);
       host.appendChild(rc);
     }
 
