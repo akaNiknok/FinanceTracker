@@ -268,6 +268,15 @@ console.log('\nApps Script (vm):');
     ['↻', '⌕', '✎'].forEach((good) => assert.ok(src.includes(good), 'lost the ' + good + ' button glyph'));
   });
 
+  test('the topbar version matches package.json', () => {
+    // The header badge is hardcoded (no build step stamps the SPA), so this is the
+    // only thing that stops it drifting a release behind.
+    const ver = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
+    const html = fs.readFileSync(path.join(__dirname, 'worker', 'public', 'index.html'), 'utf8');
+    assert.ok(html.includes('<span class="brand-ver">v' + ver + '</span>'),
+      'index.html brand-ver is not v' + ver + ' — bump it with the version');
+  });
+
   test('the SPA loads and no longer stamps a _v cache bucket', () => {
     // The Worker's KV read cache went away with Apps Script; a `_v` on the URL would now
     // be a cache-buster on nothing. Running app.js here also proves it still parses.
