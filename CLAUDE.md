@@ -77,7 +77,7 @@ Tables: `account_types · accounts · categories · transactions · budgets · r
 ## Git workflow (gitflow + releases)
 - **`main`** = released/live code only. **`develop`** = integration branch; day-to-day commits and merges land here.
 - **Features:** `feature/<name>` off `develop`, merge back to `develop`.
-- **Release:** merge `develop` → `main`, then `npm run release` — the ONLY way code reaches live. It verifies on-main+clean, applies D1 migrations, `wrangler deploy`s, tags `v<package.json version>`, pushes, creates the GitHub Release. Bump the version **before** merging (`npm version patch|minor --no-git-tag-version` on `develop`, commit).
+- **Release:** merge `develop` → `main`, then `npm run release` — the ONLY way code reaches live. It verifies on-main+clean, applies D1 migrations, `wrangler deploy`s, tags `v<package.json version>`, pushes, creates the GitHub Release. Bump the version **before** merging (`npm version patch|minor --no-git-tag-version` on `develop`, commit) — **and hand-edit `worker/public/index.html`'s `brand-ver` span to match in the same commit**: `npm version` does not stamp it, and `test.js` fails when the two disagree. **Re-run `npm test` AFTER the bump**, or the mismatch ships (it did in v2.3.0, costing a v2.3.1 hotfix).
 - **Hotfix:** `hotfix/<name>` off `main` → merge to `main`, bump patch, `npm run release`, then **back-merge `main` → `develop`**.
 - **Tags/Releases invariant:** every tag is `vX.Y.Z`, on `main`, created only by `release.js`, with a matching GitHub Release. Never hand-create tags or Releases.
 - Push `develop` freely; never push directly to `main`.
