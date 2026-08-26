@@ -2400,6 +2400,43 @@ function openTxById(id){
   }).catch(function(e){ toast(e.message||e,'err'); });
 }
 
+/* The optimistic write, shared by the transaction and transfer modals — it is the
+   only place money leaves this screen, so it lives once. Close the modal now and
+   paint the row as pending; the request finishes in the background and afterMutation
+   reloads in place. On failure the pending state is dropped and the modal REOPENS
+   with the values intact, because a lost entry is the one outcome worth avoiding.
+   A queued (offline) create returns early: the row is backed by the queue now, and
+   afterMutation would drop the cache we are about to render it from.
+   o = {t, payload, isEdit, create, addedMsg, failMsg, reopen} — the two callers
+   differ in nothing else. */
+function commitTx(o){
+  if(o.isEdit){
+    var patch=Object.assign({ID:o.t.ID},o.payload);
+    S.tx.pendingEdits[o.t.ID]=patch;
+    closeModal(); toast('Updated','ok'); repaintTxList();
+    gs('api_updateTransaction', patch)
+      .then(function(){ delete S.tx.pendingEdits[o.t.ID]; afterMutation(); })
+      .catch(function(e){ delete S.tx.pendingEdits[o.t.ID]; repaintTxList();
+        toast('Update failed — reopening: '+(e.message||e),'err');
+        o.reopen(Object.assign({},o.t,o.payload)); });
+    return;
+  }
+  closeModal(); toast(o.addedMsg,'ok');
+  var tmp=pushPendingAdd(o.payload);
+  gs(o.create, o.payload)
+    .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
+    .catch(function(e){ dropPendingAdd(tmp); repaintTxList();
+      toast(o.failMsg+' — reopening: '+(e.message||e),'err'); o.reopen(o.payload); });
+}
+
+/* Modal footer: Save on the right, Delete pushed to the far left when editing. */
+function modalFoot(save, isEdit, t){
+  if(!isEdit) return [save];
+  var del=el('button','btn danger','Delete'); del.style.marginRight='auto';
+  del.onclick=function(){ confirmDelete(t); };
+  return [del, save];
+}
+
 /* —— add / edit a normal transaction —— */
 function openTxModal(t){
   if(!S.boot){ withBoot(function(){ openTxModal(t); }); return; }
@@ -2453,38 +2490,11 @@ function openTxModal(t){
     if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
     else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
-    if(isEdit){
-      // Optimistic, same as a create: close now, the row shows the new values as a
-      // loading row until the server confirms; on failure the modal comes back.
-      var patch=Object.assign({ID:t.ID},payload);
-      S.tx.pendingEdits[t.ID]=patch; prefSet('lastAcct',payload.Account);
-      closeModal(); toast('Updated','ok'); repaintTxList();
-      gs('api_updateTransaction', patch)
-        .then(function(){ delete S.tx.pendingEdits[t.ID]; afterMutation(); })
-        .catch(function(e){ delete S.tx.pendingEdits[t.ID]; repaintTxList();
-          toast('Update failed — reopening: '+(e.message||e),'err'); openTxModal(Object.assign({},t,payload)); });
-      return;
-    }
-    // New tx: optimistic — close instantly and show the row as "loading" right away
-    // so you can start the next entry without waiting on the (slow) Apps Script
-    // round-trip. The write runs in the background; when it lands the row becomes a
-    // normal entry (afterMutation reloads in place). On failure the placeholder is
-    // dropped and the modal reopens with the values intact so nothing is lost.
-    prefSet('lastAcct',payload.Account); closeModal(); toast('Added','ok');
-    var tmp=pushPendingAdd(payload);
-    gs('api_createTransaction', payload)
-      // Queued offline: the row stays exactly as it is (it's now backed by the queue,
-      // and afterMutation would drop the cache we're about to need to render from).
-      .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
-      .catch(function(e){ dropPendingAdd(tmp); repaintTxList(); toast('Add failed — reopening: '+(e.message||e),'err'); openTxModal(payload); });
+    prefSet('lastAcct',payload.Account);   // the next add defaults to this account
+    commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransaction',
+              addedMsg:'Added', failMsg:'Add failed', reopen:openTxModal});
   };
-  var foot=[save];
-  if(isEdit){
-    var del=el('button','btn danger','Delete'); del.style.marginRight='auto';
-    del.onclick=function(){ confirmDelete(t); };
-    foot.unshift(del);
-  }
-  openModal(modalShell(isEdit?'Edit transaction':'Add transaction', body, foot));
+  openModal(modalShell(isEdit?'Edit transaction':'Add transaction', body, modalFoot(save, isEdit, t)));
   // Jump straight into Category so you can type/filter without a click — but only when
   // it's empty, which also skips the reopen-after-failure path (that one keeps its value).
   if(!isEdit&&!fCat.value) focusCombo(fCat);
@@ -2536,30 +2546,13 @@ function openTransferModal(t){
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
     if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
     if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
-    if(isEdit){
-      var patch=Object.assign({ID:t.ID},payload);              // optimistic — see openTxModal
-      S.tx.pendingEdits[t.ID]=patch;
-      closeModal(); toast('Updated','ok'); repaintTxList();
-      gs('api_updateTransaction', patch)
-        .then(function(){ delete S.tx.pendingEdits[t.ID]; afterMutation(); })
-        .catch(function(e){ delete S.tx.pendingEdits[t.ID]; repaintTxList();
-          toast('Update failed — reopening: '+(e.message||e),'err'); openTransferModal(Object.assign({},t,payload)); });
-      return;
-    }
-    // New transfer: optimistic close + loading row (see openTxModal) — background write, reopen on failure.
-    closeModal(); toast('Transfer added','ok');
-    var tmp=pushPendingAdd(payload);
-    gs('api_createTransfer', payload)
-      .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
-      .catch(function(e){ dropPendingAdd(tmp); repaintTxList(); toast('Transfer failed — reopening: '+(e.message||e),'err'); openTransferModal(payload); });
+    // No prefSet here: 'lastAcct' defaults the tx modal's Account, and a transfer's
+    // From is not that — it would make the next expense default to wherever you last
+    // moved money out of.
+    commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransfer',
+              addedMsg:'Transfer added', failMsg:'Transfer failed', reopen:openTransferModal});
   };
-  var foot=[save];
-  if(isEdit){
-    var del=el('button','btn danger','Delete'); del.style.marginRight='auto';
-    del.onclick=function(){ confirmDelete(t); };
-    foot.unshift(del);
-  }
-  openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, foot));
+  openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, modalFoot(save, isEdit, t)));
   // Category is prefilled (default or carried over) → start at From; only focus Category if it's empty.
   if(!isEdit) focusCombo(fCat.value?fFrom:fCat);
 }

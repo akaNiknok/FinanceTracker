@@ -395,7 +395,11 @@ export async function getInvestments(args, env) {
     pulse: { currentQuarter: quarterOf(manilaToday()), quarters },
     runway,
     coreTargets: { 60: 'Core', 25: 'Growth', 15: 'Speculative' },
-    segmentTargets: { Essentials: 50, Rewards: 10, Stability: 15, Growth: 25 }
+    // Reference figures for the Accounts card, not a computed thing. These SUM TO 85
+    // ON PURPOSE: Stability was removed in v2.3.0 (the EF accrues as unspent residue,
+    // which no monthly meter can track — the runway card is its only measure), and the
+    // missing 15 IS that residue. Do not "correct" it back to 100.
+    segmentTargets: { Essentials: 50, Rewards: 10, Growth: 25 }
   };
 }
 

@@ -278,7 +278,10 @@ function d1(db) {
     assert.strictEqual(inv.runway.avgMonthlyExpensePhp, 100);   // 300 over 3 closed months
     assert.strictEqual(inv.runway.targetPhp, 400);
     assert.strictEqual(inv.runway.months, Math.round(expected / 100 * 10) / 10);
-    assert.deepStrictEqual(inv.segmentTargets, { Essentials: 50, Rewards: 10, Stability: 15, Growth: 25 });
+    // Sums to 85, not 100: Stability came out in v2.3.0 and the missing 15 is the EF
+    // residue the runway card measures instead. The assertion is the guard against it
+    // being "fixed" back to 100 or the dead segment creeping in again.
+    assert.deepStrictEqual(inv.segmentTargets, { Essentials: 50, Rewards: 10, Growth: 25 });
   });
 
   console.log('\nLedger (Tax screen):');

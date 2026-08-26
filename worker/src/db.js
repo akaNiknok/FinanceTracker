@@ -214,6 +214,9 @@ export function shapeAccounts(refs, net, prices, fx) {
       isLiability: isLiability,
       isShares: shares,
       isInvestment: isInvestmentAcct(a),
+      // REFERENCE NOTES, deliberately: nothing computes with these since the daily
+      // interest job was deleted in v2.0.1. They are the owner's own record of what a
+      // bank pays, editable on the account modal. Not dead code — kept on purpose.
       interestFrequency: a.interest_frequency || null,
       interestRate: a.interest_rate || null,   // v1 was `|| null`: a 0% rate reads as blank
       creditLimit: limit,
