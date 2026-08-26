@@ -225,7 +225,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 5;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 6;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -1941,9 +1941,11 @@ function exCalc(){
  *  with validation, FX stamping and version bumping, and this grid must not be a
  *  way around them.
  * ════════════════════════════════════════════════════════════════════════ */
-var ADMIN_TABLES=['accounts','categories','account_types','budgets','recurring',
-                  'ledger','prices','nw_snapshots','meta','transactions','email_quotes'];
-function adminTable(){ return S.admin.table||ADMIN_TABLES[0]; }
+/* Which tables exist is the server's fact, not ours: listTable ships `tables` (TABLES
+   order) and the picker below is drawn from it, so adding one server-side makes its
+   button appear and removing one takes the button with it. 'accounts' is only the
+   landing table — the one name we need before we can ask the first question. */
+function adminTable(){ return S.admin.table||'accounts'; }
 
 function renderAdmin(){
   var t=adminTable();
@@ -1967,7 +1969,7 @@ function renderAdmin(){
       ' · tap an editable cell to change it'+((res.editable||[]).length?'':' (this table is read-only)')));
 
     var picker=el('div','btn-row'); picker.style.marginBottom='14px';
-    ADMIN_TABLES.forEach(function(name){
+    (res.tables||[]).forEach(function(name){
       var b=el('button','btn sm'+(name===t?' primary':''),esc(name));
       b.onclick=function(){ S.admin.table=name; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
       picker.appendChild(b);

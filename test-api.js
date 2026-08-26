@@ -317,6 +317,18 @@ function d1(db) {
     assert.ok(t.money.includes('starting_balance_u'));
   });
 
+  // The Admin picker draws its buttons from this list, so it is the whole set or the
+  // screen loses a table. Every name must survive a round trip back through listTable —
+  // a typo here would ship a button that answers "Unknown table" when pressed.
+  await test('listTable ships the table list the Admin picker is drawn from', async () => {
+    const t = await api.listTable({ table: 'accounts' }, env);
+    assert.ok(Array.isArray(t.tables) && t.tables.length > 1);
+    assert.strictEqual(t.tables[0], 'accounts', 'the landing table must be first');
+    for (const name of t.tables) {
+      assert.strictEqual((await api.listTable({ table: name }, env)).table, name);
+    }
+  });
+
   await test('the whitelist is a real boundary', async () => {
     await assert.rejects(() => api.listTable({ table: 'sqlite_master' }, env), /Unknown table/);
     await assert.rejects(() => api.updateTableCell(

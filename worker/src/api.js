@@ -776,9 +776,12 @@ export async function updateAccount(args, env) {
  * `transactions` is read + delete only: it has real handlers with validation, FX
  * stamping and version bumping, and the grid must not be a way around them. Delete
  * stays for surgery on a row the UI cannot reach.
+ *
+ * KEY ORDER IS THE ADMIN PICKER'S BUTTON ORDER — listTable ships `tables` and the
+ * screen draws its row of buttons from that, so this is the only place the set of
+ * tables (and the order they are offered in) is written down. Most-used first.
  */
 const TABLES = {
-  account_types: { pk: 'subtype', edit: ['type'], add: ['subtype', 'type'] },
   accounts: {
     pk: 'id',
     edit: ['name', 'currency', 'subtype', 'symbol', 'starting_balance_u', 'interest_frequency',
@@ -786,6 +789,7 @@ const TABLES = {
     money: ['starting_balance_u', 'credit_limit_u']
   },
   categories: { pk: 'id', edit: ['name', 'type', 'segment', 'description'] },
+  account_types: { pk: 'subtype', edit: ['type'], add: ['subtype', 'type'] },
   budgets: { pk: 'id', edit: ['segment', 'period', 'target_type', 'target', 'currency', 'notes'] },
   recurring: {
     pk: 'id', edit: ['description', 'currency', 'amount_u', 'fee_u', 'months_left', 'grp'],
@@ -794,13 +798,13 @@ const TABLES = {
   ledger: { pk: 'id', edit: ['tx_id', 'bsp_rate', 'filed', 'date_received', 'wise_amount_u'],
             money: ['wise_amount_u'] },
   prices: { pk: 'rowid', edit: [], add: ['symbol', 'priced_at', 'price', 'currency'] },
-  meta: { pk: 'key', edit: ['value'], add: ['key', 'value'] },
-  email_quotes: { pk: 'message_id', edit: [] },
-  transactions: { pk: 'id', edit: [], money: ['amount_u', 'to_amount_u', 'amount_php_u'] },
   // Cron-owned history: fully read-only (nodelete) so the grid can't corrupt or
   // hole the net-worth line. money cols render as PHP, not micros.
   nw_snapshots: { pk: 'month', edit: [], nodelete: true,
-                  money: ['net_worth_u', 'assets_u', 'liabilities_u', 'shares_u'] }
+                  money: ['net_worth_u', 'assets_u', 'liabilities_u', 'shares_u'] },
+  meta: { pk: 'key', edit: ['value'], add: ['key', 'value'] },
+  transactions: { pk: 'id', edit: [], money: ['amount_u', 'to_amount_u', 'amount_php_u'] },
+  email_quotes: { pk: 'message_id', edit: [] }
 };
 
 function tableSpec(name) {
@@ -831,6 +835,7 @@ export async function listTable(args, env) {
     status: 'success', version: await dataVersion(env),
     table: name, pk: t.pk, editable: t.edit, addable: addCols(t), money: moneyCols(t),
     deletable: !t.nodelete,
+    tables: Object.keys(TABLES),   // the Admin screen's picker buttons, in TABLES order
     cols: rows.length ? Object.keys(rows[0]) : addCols(t),
     total: cnt.results[0].n, offset, limit, rows
   };
