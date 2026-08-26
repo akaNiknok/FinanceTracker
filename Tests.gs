@@ -6,7 +6,7 @@
  * before, kept only because these three helpers live in the GAS flat namespace.
  *
  * Sheet-bound tests are gone with the sheet. The end-to-end reconciliation they used
- * to provide is now migrate/verify.js, run against the real database.
+ * to provide is now test-api.js, against a real in-memory SQLite.
  */
 var PURE_TESTS = ["test_gmailScope", "test_gmailQuote", "test_gmailPayload"];
 

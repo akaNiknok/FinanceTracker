@@ -6,8 +6,8 @@
  * names, same argument names (the sheet's header casing — `Category`, `Amount`,
  * `Amount (PHP)`), same response keys, same {status:'error'|'duplicate'} semantics,
  * same DATA_VERSION protocol. worker/public/app.js is untouched by the platform
- * swap except for the new admin screen, and migrate/verify.js proves it against
- * fixtures captured from v1.
+ * swap except for the new admin screen. The v1 fixture diff that proved it
+ * (migrate/verify.js) retired with the cutover; test-api.js is the standing check.
  *
  * What DID change, and why it is less code rather than more:
  *   * su_lock_() + cache_bumpVersion_() are gone. D1 batch() is transactional, so
@@ -17,7 +17,7 @@
  *     generated columns; Type/Segment/Currency are JOINs. There is no "never write a
  *     derived column" rule left to break.
  *   * balances are computed here (db.js shapeAccounts) instead of read out of sheet
- *     formulas. Same numbers — migrate/verify.js reconciles them to the centavo.
+ *     formulas. Same numbers — reconciled to the centavo at the v2.0.0 cutover.
  *
  * Handler signature is (args, env) and handlers THROW on rejection; worker.js turns
  * a throw into {status:'error', message}, exactly as Router.gs's try/catch did.
@@ -96,15 +96,6 @@ export async function getAccounts(args, env) {
   const r = await refs(env);
   const { accounts } = await accountsList(env, r);
   return { status: 'success', version: await dataVersion(env), accounts };
-}
-
-export async function getCategories(args, env) {
-  const r = await refs(env);
-  const map = {};
-  r.categories.forEach((c) => {
-    map[c.name] = { Type: c.type || null, Segment: c.segment || null, Description: c.description || null };
-  });
-  return map;   // deliberately unwrapped, exactly as api_getCategories was
 }
 
 export async function getRecurring(args, env) {
@@ -404,7 +395,11 @@ export async function getInvestments(args, env) {
     pulse: { currentQuarter: quarterOf(manilaToday()), quarters },
     runway,
     coreTargets: { 60: 'Core', 25: 'Growth', 15: 'Speculative' },
-    segmentTargets: { Essentials: 50, Rewards: 10, Stability: 15, Growth: 25 }
+    // Reference figures for the Accounts card, not a computed thing. These SUM TO 85
+    // ON PURPOSE: Stability was removed in v2.3.0 (the EF accrues as unspent residue,
+    // which no monthly meter can track — the runway card is its only measure), and the
+    // missing 15 IS that residue. Do not "correct" it back to 100.
+    segmentTargets: { Essentials: 50, Rewards: 10, Growth: 25 }
   };
 }
 
@@ -785,9 +780,12 @@ export async function updateAccount(args, env) {
  * `transactions` is read + delete only: it has real handlers with validation, FX
  * stamping and version bumping, and the grid must not be a way around them. Delete
  * stays for surgery on a row the UI cannot reach.
+ *
+ * KEY ORDER IS THE ADMIN PICKER'S BUTTON ORDER — listTable ships `tables` and the
+ * screen draws its row of buttons from that, so this is the only place the set of
+ * tables (and the order they are offered in) is written down. Most-used first.
  */
 const TABLES = {
-  account_types: { pk: 'subtype', edit: ['type'], add: ['subtype', 'type'] },
   accounts: {
     pk: 'id',
     edit: ['name', 'currency', 'subtype', 'symbol', 'starting_balance_u', 'interest_frequency',
@@ -795,6 +793,7 @@ const TABLES = {
     money: ['starting_balance_u', 'credit_limit_u']
   },
   categories: { pk: 'id', edit: ['name', 'type', 'segment', 'description'] },
+  account_types: { pk: 'subtype', edit: ['type'], add: ['subtype', 'type'] },
   budgets: { pk: 'id', edit: ['segment', 'period', 'target_type', 'target', 'currency', 'notes'] },
   recurring: {
     pk: 'id', edit: ['description', 'currency', 'amount_u', 'fee_u', 'months_left', 'grp'],
@@ -803,13 +802,13 @@ const TABLES = {
   ledger: { pk: 'id', edit: ['tx_id', 'bsp_rate', 'filed', 'date_received', 'wise_amount_u'],
             money: ['wise_amount_u'] },
   prices: { pk: 'rowid', edit: [], add: ['symbol', 'priced_at', 'price', 'currency'] },
-  meta: { pk: 'key', edit: ['value'], add: ['key', 'value'] },
-  email_quotes: { pk: 'message_id', edit: [] },
-  transactions: { pk: 'id', edit: [], money: ['amount_u', 'to_amount_u', 'amount_php_u'] },
   // Cron-owned history: fully read-only (nodelete) so the grid can't corrupt or
   // hole the net-worth line. money cols render as PHP, not micros.
   nw_snapshots: { pk: 'month', edit: [], nodelete: true,
-                  money: ['net_worth_u', 'assets_u', 'liabilities_u', 'shares_u'] }
+                  money: ['net_worth_u', 'assets_u', 'liabilities_u', 'shares_u'] },
+  meta: { pk: 'key', edit: ['value'], add: ['key', 'value'] },
+  transactions: { pk: 'id', edit: [], money: ['amount_u', 'to_amount_u', 'amount_php_u'] },
+  email_quotes: { pk: 'message_id', edit: [] }
 };
 
 function tableSpec(name) {
@@ -840,6 +839,7 @@ export async function listTable(args, env) {
     status: 'success', version: await dataVersion(env),
     table: name, pk: t.pk, editable: t.edit, addable: addCols(t), money: moneyCols(t),
     deletable: !t.nodelete,
+    tables: Object.keys(TABLES),   // the Admin screen's picker buttons, in TABLES order
     cols: rows.length ? Object.keys(rows[0]) : addCols(t),
     total: cnt.results[0].n, offset, limit, rows
   };

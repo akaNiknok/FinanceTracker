@@ -278,7 +278,10 @@ function d1(db) {
     assert.strictEqual(inv.runway.avgMonthlyExpensePhp, 100);   // 300 over 3 closed months
     assert.strictEqual(inv.runway.targetPhp, 400);
     assert.strictEqual(inv.runway.months, Math.round(expected / 100 * 10) / 10);
-    assert.deepStrictEqual(inv.segmentTargets, { Essentials: 50, Rewards: 10, Stability: 15, Growth: 25 });
+    // Sums to 85, not 100: Stability came out in v2.3.0 and the missing 15 is the EF
+    // residue the runway card measures instead. The assertion is the guard against it
+    // being "fixed" back to 100 or the dead segment creeping in again.
+    assert.deepStrictEqual(inv.segmentTargets, { Essentials: 50, Rewards: 10, Growth: 25 });
   });
 
   console.log('\nLedger (Tax screen):');
@@ -315,6 +318,18 @@ function d1(db) {
     assert.strictEqual(t.rows.find((r) => r.name === 'Card').credit_limit_u, 60000);
     assert.ok(t.editable.includes('color'));
     assert.ok(t.money.includes('starting_balance_u'));
+  });
+
+  // The Admin picker draws its buttons from this list, so it is the whole set or the
+  // screen loses a table. Every name must survive a round trip back through listTable —
+  // a typo here would ship a button that answers "Unknown table" when pressed.
+  await test('listTable ships the table list the Admin picker is drawn from', async () => {
+    const t = await api.listTable({ table: 'accounts' }, env);
+    assert.ok(Array.isArray(t.tables) && t.tables.length > 1);
+    assert.strictEqual(t.tables[0], 'accounts', 'the landing table must be first');
+    for (const name of t.tables) {
+      assert.strictEqual((await api.listTable({ table: name }, env)).table, name);
+    }
   });
 
   await test('the whitelist is a real boundary', async () => {

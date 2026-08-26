@@ -52,11 +52,6 @@ export function periodMonths(period, ref) {
   const start = Math.floor(ref.m / 3) * 3;
   return [0, 1, 2].map((i) => monthKey(ref.y, start + i));
 }
-/** Day arithmetic on ISO strings, via UTC so no local/DST slip can creep in. */
-export function addDays(iso, n) {
-  const t = Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) + n * 86400000;
-  return new Date(t).toISOString().slice(0, 10);
-}
 
 // ── input coercion (ports of tx_parseDate_ / tx_parsePeriod_) ────────────────
 /** Client date -> 'yyyy-MM-dd'. Blank means today (Manila). Rejects nothing else. */
@@ -219,6 +214,9 @@ export function shapeAccounts(refs, net, prices, fx) {
       isLiability: isLiability,
       isShares: shares,
       isInvestment: isInvestmentAcct(a),
+      // REFERENCE NOTES, deliberately: nothing computes with these since the daily
+      // interest job was deleted in v2.0.1. They are the owner's own record of what a
+      // bank pays, editable on the account modal. Not dead code — kept on purpose.
       interestFrequency: a.interest_frequency || null,
       interestRate: a.interest_rate || null,   // v1 was `|| null`: a 0% rate reads as blank
       creditLimit: limit,
@@ -257,6 +255,3 @@ export function shapeTx(r, refs) {
     ToCurrency: to ? to.currency : ''
   };
 }
-
-/** The SELECT every transaction read uses — shapeTx expects exactly these columns. */
-export const TX_SELECT = 'SELECT t.* FROM transactions t';

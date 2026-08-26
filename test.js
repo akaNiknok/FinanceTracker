@@ -12,9 +12,9 @@
  *      idempotency clause, a read route named so the SPA would POST it. Each of these
  *      breaks something far away from the edit that caused it.
  *
- * What is NOT here: anything needing a real database. The end-to-end check is
- * migrate/verify.js against the deployed Worker, and the balance reconciliation is
- * migrate/import.js against the frozen sheet.
+ * What is NOT here: anything needing a real database — that is test-api.js, which runs
+ * the handlers against node:sqlite. The v1 cutover tools that used to sit behind this
+ * line (migrate/import.js, migrate/verify.js) are gone; `git show v2.3.1:` for them.
  */
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
 const { pathToFileURL } = require('url');
@@ -86,12 +86,6 @@ console.log('\nApps Script (vm):');
     assert.deepStrictEqual(db.periodMonths('Monthly', { y: 2026, m: 7 }), ['2026-Aug']);
     assert.deepStrictEqual(db.periodMonths('Quarterly', { y: 2026, m: 7 }), ['2026-Jul', '2026-Aug', '2026-Sep']);
     assert.deepStrictEqual(db.periodMonths('Quarterly', { y: 2026, m: 0 }), ['2026-Jan', '2026-Feb', '2026-Mar']);
-  });
-
-  test('addDays crosses months and years without a timezone slip', () => {
-    assert.strictEqual(db.addDays('2026-03-01', -1), '2026-02-28');
-    assert.strictEqual(db.addDays('2026-01-01', -1), '2025-12-31');
-    assert.strictEqual(db.addDays('2024-02-28', 1), '2024-02-29');   // leap year
   });
 
   test('manilaToday is Manila, not UTC', () => {
