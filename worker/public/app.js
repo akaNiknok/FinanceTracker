@@ -225,7 +225,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 6;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 7;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -870,18 +870,18 @@ function donutChart(entries){
 // Budget meter: track is a lighter step of the fill's own ramp; the pace notch
 // marks how much of the period has elapsed (spend "should" sit near it).
 function meterRow(b,paceFrac){
-  // A budget priced in USD (Growth is a $200/month parking target) reads in USD:
-  // the PHP figure is an artefact of today's rate, so the meter would drift with FX
-  // while the plan did not move. PHP stays the fallback until boot lands.
-  var rate=(b.currency==='USD'&&S.boot&&S.boot.fxUsdPhp)?S.boot.fxUsdPhp:0;
-  var fmt=rate?function(n){return n==null?'—':moneyCur(n/rate,'USD');}
-              :function(n){return money(n,true);};
+  // The server measures a budget in the currency it is planned in (Growth is a
+  // $200/month parking target) and names that currency, so the meter never converts
+  // and never drifts with FX. Pesos keep the whole-number format.
+  var cur=b.currency||'PHP';
+  var fmt=cur==='PHP'?function(n){return money(n,true);}
+                     :function(n){return n==null?'—':moneyCur(n,cur);};
   var r=el('div'); r.style.marginBottom='18px';
   var p=b.pctUsed==null?0:b.pctUsed;
   var state=b.isOver?'over':(p>=85?'warn':'');
   var head=el('div','row-between');
   head.innerHTML='<div><strong>'+esc(b.segment)+'</strong> <span class="pill">'+esc(b.period)+'</span></div>'+
-    '<div class="mono" style="font-size:13px">'+fmt(b.actualPhp)+' <span class="faint">/ '+fmt(b.targetPhp)+'</span></div>';
+    '<div class="mono" style="font-size:13px">'+fmt(b.actualNative)+' <span class="faint">/ '+fmt(b.targetNative)+'</span></div>';
   r.appendChild(head);
   var m=el('div','meter '+state);
   m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,p)+'%"></div>';
@@ -891,11 +891,11 @@ function meterRow(b,paceFrac){
     m.appendChild(pm);
   }
   r.appendChild(m);
-  var over=b.isOver&&b.remainingPhp!=null;
+  var over=b.isOver&&b.remainingNative!=null;
   var sub=el('div','row-between'); sub.style.cssText='margin-top:6px;font-size:12px';
   sub.innerHTML='<span class="dim">'+pct(b.pctUsed)+' used</span>'+
-    '<span class="'+(b.isOver?'neg':'dim')+'">'+(b.remainingPhp==null?'':
-      (over?fmt(Math.abs(b.remainingPhp))+' over':fmt(b.remainingPhp)+' left'))+'</span>';
+    '<span class="'+(b.isOver?'neg':'dim')+'">'+(b.remainingNative==null?'':
+      (over?fmt(Math.abs(b.remainingNative))+' over':fmt(b.remainingNative)+' left'))+'</span>';
   r.appendChild(sub);
   return r;
 }

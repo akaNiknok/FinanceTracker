@@ -214,6 +214,51 @@ function d1(db) {
       assert.ok(b.essentialsRewards, 'the roll-up is missing');
     });
 
+    test('getBudgets: a USD budget is measured in dollars, not round-tripped through PHP', async () => {
+      const by = Object.fromEntries((await api.getBudgets({ month: '2026-Aug' }, env))
+        .budgets.map((x) => [x.segment, x]));
+      // The dollar row counts its own $100; the peso row in the same segment is the
+      // only part the live rate touches (PHP 150 / 50).
+      assert.strictEqual(by.Growth.currency, 'USD');
+      assert.strictEqual(by.Growth.targetNative, 100);
+      assert.strictEqual(by.Growth.actualNative, 103);
+      assert.strictEqual(by.Growth.remainingNative, -3);
+      assert.strictEqual(by.Growth.isOver, true);
+      assert.strictEqual(by.Growth.pctUsed, 103);
+      // A Percent target is a share of PHP income, so it stays in pesos.
+      assert.strictEqual(by.Essentials.currency, 'PHP');
+      assert.strictEqual(by.Essentials.targetNative, by.Essentials.targetPhp);
+      assert.strictEqual(by.Essentials.actualNative, by.Essentials.actualPhp);
+    });
+
+    test('a dollar-funded row holds still in a USD budget when the peso moves', async () => {
+      // The fixture's Growth rows are all peso-sourced, so add the case this is
+      // about: the real Growth budget is funded by a USD->USD transfer.
+      await api.createTransfer({ ID: 'usd-growth', Date: '2026-08-12', Category: 'Investment: Growth',
+                                 Account: 'Wise', ToAccount: 'IBKR', Amount: 100, ToAmount: 0.2 }, env);
+      try {
+        const at = async (rate) => {
+          const e = Object.assign({}, env, { FX_CACHE: { get: async () => String(rate), put: async () => {} } });
+          return Object.fromEntries((await api.getBudgets({ month: '2026-Aug' }, e))
+            .budgets.map((x) => [x.segment, x])).Growth;
+        };
+        const [a, b2] = [await at(50), await at(70)];
+        assert.strictEqual(a.targetNative, 100);
+        assert.strictEqual(b2.targetNative, 100, 'the plan is $100 at any rate');
+        // The $100 leg counts as $100 at both rates. Only the peso rows reprice:
+        // 5150/50 = 103 vs 5150/70 = 73.57.
+        assert.strictEqual(a.actualNative, 203);
+        assert.ok(Math.abs(b2.actualNative - 173.57) < 0.01, 'got ' + b2.actualNative);
+        // The PHP view is unchanged: fx_rate is stamped at write time, so the dollar
+        // leg stays at the 50 it was written with whatever the read rate is.
+        assert.strictEqual(a.actualPhp, b2.actualPhp);
+        assert.strictEqual(a.actualPhp, 5150 + 100 * 50);
+        assert.ok(a.targetPhp !== b2.targetPhp, 'the PHP view of the target still follows the rate');
+      } finally {
+        await api.deleteTransaction({ ID: 'usd-growth' }, env);
+      }
+    });
+
     test('getDashboard: aggregates, cash flow window, recent rows', async () => {
       const d = await api.getDashboard({ month: '2026-Aug' }, env);
       assert.strictEqual(d.month, '2026-Aug');
