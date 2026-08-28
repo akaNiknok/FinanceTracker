@@ -163,33 +163,62 @@ async function budgetsPayload(env, monthArg, fx) {
   const keys = [...needed];
   const actual = Object.create(null);
   if (keys.length) {
+    // Three sums per segment-month, because a budget is measured in the currency it
+    // is planned in: `s` is the PHP total every other read speaks, `usd_s` is the
+    // dollar total of the rows already denominated in dollars, and `rest_s` is the
+    // PHP total of everything else (converted at the live rate when a USD budget
+    // needs it). Summing dollars natively keeps a USD meter still while the peso
+    // moves — the round trip through amount_php_u and back reprices every past row.
     const q = await env.DB.prepare(
-      'SELECT TRIM(c.segment) AS seg, t.month AS m, SUM(ABS(t.amount_php_u)) AS s FROM transactions t ' +
-      'JOIN categories c ON c.id = t.category_id ' +
+      'SELECT TRIM(c.segment) AS seg, t.month AS m, SUM(ABS(t.amount_php_u)) AS s, ' +
+      "SUM(CASE WHEN a.currency = 'USD' THEN ABS(t.amount_u) ELSE 0 END) AS usd_s, " +
+      "SUM(CASE WHEN a.currency = 'USD' THEN 0 ELSE ABS(t.amount_php_u) END) AS rest_s " +
+      'FROM transactions t JOIN categories c ON c.id = t.category_id ' +
+      'JOIN accounts a ON a.id = t.account_id ' +
       "WHERE c.type IN ('Expense','Transfer') AND t.month IN (" + list(keys.length) + ') ' +
       'GROUP BY seg, m').bind(...keys).all();
-    q.results.forEach((x) => { actual[x.seg + '|' + x.m] = x.s; });
+    q.results.forEach((x) => { actual[x.seg + '|' + x.m] = x; });
   }
 
   const budgets = rows.map((b) => {
     const months = periodMonths(b.period, ref);
     const seg = String(b.segment).trim();
-    const actualPhp = q2(fromU(months.reduce((s, m) => s + (actual[seg + '|' + m] || 0), 0)));
+    const sum = (col) => months.reduce((s, m) => {
+      const x = actual[seg + '|' + m];
+      return s + (x ? (x[col] || 0) : 0);
+    }, 0);
+    const actualPhp = q2(fromU(sum('s')));
+    // A Percent target is a share of PHP income, so it is planned in pesos whatever
+    // the currency column says.
+    const isUsd = b.target_type !== 'Percent' &&
+                  String(b.currency || BASE_CURRENCY).toUpperCase() === 'USD';
     let targetPhp;
     if (b.target_type === 'Percent') {
       targetPhp = incomePhp ? q2((b.period === 'Quarterly' ? incomePhp * 3 : incomePhp) * b.target / 100) : null;
-    } else if (String(b.currency || BASE_CURRENCY).toUpperCase() === 'USD') {
+    } else if (isUsd) {
       targetPhp = usd ? q2(b.target * usd) : null;
     } else {
       targetPhp = q2(b.target);
     }
     const remaining = targetPhp === null ? null : q2(targetPhp - actualPhp);
+    // The figures the meter reads, in `currency`. Dollar rows count as dollars; a
+    // peso row inside a dollar budget is converted at the live rate, which is the
+    // only rate that can express it (nothing stamps a PHP->USD rate at write time).
+    const targetNative = isUsd ? q2(b.target) : targetPhp;
+    const actualNative = isUsd
+      ? q2(fromU(sum('usd_s')) + (usd ? fromU(sum('rest_s')) / usd : 0))
+      : actualPhp;
+    const remainingNative = targetNative === null ? null : q2(targetNative - actualNative);
     return {
       segment: b.segment, period: b.period, targetType: b.target_type,
-      targetValue: b.target, currency: b.currency || null,
+      targetValue: b.target,
+      // The currency the *Native figures are in — always a real code, so the client
+      // formats them without knowing the plan's rules.
+      currency: isUsd ? 'USD' : BASE_CURRENCY,
       targetPhp, actualPhp, remainingPhp: remaining,
-      pctUsed: (targetPhp === null || targetPhp === 0) ? null : Math.round(actualPhp / targetPhp * 1000) / 10,
-      isOver: remaining !== null && remaining < 0,
+      targetNative, actualNative, remainingNative,
+      pctUsed: (targetNative === null || targetNative === 0) ? null : Math.round(actualNative / targetNative * 1000) / 10,
+      isOver: remainingNative !== null && remainingNative < 0,
       window: months, notes: b.notes || null
     };
   });

@@ -29,4 +29,6 @@ worker/.dev.vars
 worker/.dev-data.sql
 # Reconstructed net-worth SQL from `npm run backfill:nw` — real financial data
 backfill-nw.sql
+# One-shot FX-rate repair for the seven blank-rate v1 rows
+fix-fx-rates.sql
 worker/.dev-backfill.sql
