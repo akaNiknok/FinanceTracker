@@ -234,7 +234,7 @@ Put each schema change in a new file in `worker/migrations/`, with a higher numb
 3. Set each Worker secret, then run `npm run deploy`.
 4. Make the bot with BotFather, then set the webhook to `<worker>/tg`.
 5. Make the Gmail label and the Gmail filter.
-6. Make an Apps Script project. Run `clasp login`, put the script id in `.clasp.json`, then run `npm run push`. Set the script properties. Add the `gmail_ingest` trigger, then run `backup_install()`.
+6. Make an Apps Script project. Run `clasp login`, then put the script id in `.clasp.json`. Enable the Apps Script API one time at script.google.com/home/usersettings. The first push fails without it. Run `npm run push`. Set the script properties. Add the `gmail_ingest` trigger, then run `backup_install()`.
 7. Make the IBKR Flex query and token.
 8. Open the app, then put the accounts, the categories and the budgets in the **Admin** screen.
 
