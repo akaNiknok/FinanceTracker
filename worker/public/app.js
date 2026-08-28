@@ -297,6 +297,9 @@ function moneyCur(n,cur){
   catch(e){ return cur+' '+Number(n).toLocaleString('en-PH',{maximumFractionDigits:2}); }
 }
 function num(n){return n==null?'—':Number(n).toLocaleString('en-PH',{maximumFractionDigits:4});}
+// USD equivalent of a PHP figure, at bootstrap's live rate. '' while the rate is
+// not loaded yet — the re-render after boot lands fills it in.
+function usdOf(php){var r=S.boot&&S.boot.fxUsdPhp;return (php==null||!r)?'':moneyCur(php/r,'USD');}
 function pct(n){return n==null?'—':(Math.round(n*10)/10)+'%';}
 
 /* ── account color helpers (color-coding across screens) ─────────────────── */
@@ -460,7 +463,7 @@ function boot(){
   // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
   if(p.get('tx')) openTxById(p.get('tx'));
   (warm ? revalidateBoot() : ensureBoot().then(function(){
-    if(S.screen==='dashboard'||S.screen==='budgets') render();
+    if(S.screen==='dashboard'||S.screen==='budgets'||S.screen==='accounts') render();
   })).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
   // Launching IS a reconnect signal: the 'online' event doesn't fire for an app that
   // was closed while offline and reopened with a connection.
@@ -867,12 +870,18 @@ function donutChart(entries){
 // Budget meter: track is a lighter step of the fill's own ramp; the pace notch
 // marks how much of the period has elapsed (spend "should" sit near it).
 function meterRow(b,paceFrac){
+  // A budget priced in USD (Growth is a $200/month parking target) reads in USD:
+  // the PHP figure is an artefact of today's rate, so the meter would drift with FX
+  // while the plan did not move. PHP stays the fallback until boot lands.
+  var rate=(b.currency==='USD'&&S.boot&&S.boot.fxUsdPhp)?S.boot.fxUsdPhp:0;
+  var fmt=rate?function(n){return n==null?'—':moneyCur(n/rate,'USD');}
+              :function(n){return money(n,true);};
   var r=el('div'); r.style.marginBottom='18px';
   var p=b.pctUsed==null?0:b.pctUsed;
   var state=b.isOver?'over':(p>=85?'warn':'');
   var head=el('div','row-between');
   head.innerHTML='<div><strong>'+esc(b.segment)+'</strong> <span class="pill">'+esc(b.period)+'</span></div>'+
-    '<div class="mono" style="font-size:13px">'+money(b.actualPhp,true)+' <span class="faint">/ '+money(b.targetPhp,true)+'</span></div>';
+    '<div class="mono" style="font-size:13px">'+fmt(b.actualPhp)+' <span class="faint">/ '+fmt(b.targetPhp)+'</span></div>';
   r.appendChild(head);
   var m=el('div','meter '+state);
   m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,p)+'%"></div>';
@@ -886,7 +895,7 @@ function meterRow(b,paceFrac){
   var sub=el('div','row-between'); sub.style.cssText='margin-top:6px;font-size:12px';
   sub.innerHTML='<span class="dim">'+pct(b.pctUsed)+' used</span>'+
     '<span class="'+(b.isOver?'neg':'dim')+'">'+(b.remainingPhp==null?'':
-      (over?money(Math.abs(b.remainingPhp),true)+' over':money(b.remainingPhp,true)+' left'))+'</span>';
+      (over?fmt(Math.abs(b.remainingPhp))+' over':fmt(b.remainingPhp)+' left'))+'</span>';
   r.appendChild(sub);
   return r;
 }
@@ -1412,7 +1421,8 @@ function loadInvestments(){
     var card=el('div','card');
     var h=el('div','row-between'); h.style.marginBottom='12px';
     var ttl=el('div','card-h','Holdings <span style="opacity:.55">· '+positions.length+'</span>'); ttl.style.margin='0';
-    h.appendChild(ttl); h.appendChild(el('div','dim mono',money(inv.totalValuePhp)));
+    var tot=usdOf(inv.totalValuePhp);
+    h.appendChild(ttl); h.appendChild(el('div','dim mono',money(inv.totalValuePhp)+(tot?' · '+tot:'')));
     card.appendChild(h);
 
     // Color follows the entity: the account's own color when set, else a stable
@@ -1437,7 +1447,8 @@ function loadInvestments(){
       r.innerHTML='<div class="ic" style="color:'+pc+';background:'+pc+'22">▲</div>'+
         '<div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
         '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of portfolio</div></div>'+
-        '<div class="amt">'+money(p.valuePhp)+'</div>';
+        '<div class="amt">'+money(p.valuePhp)+
+        (usdOf(p.valuePhp)?'<span class="amt-sub">'+usdOf(p.valuePhp)+'</span>':'')+'</div>';
       l.appendChild(r);
     });
     card.appendChild(l); host.appendChild(card);
@@ -1549,8 +1560,11 @@ function acctMain(a){
 }
 function acctAmtHtml(a){
   var foreign=a.isShares||(a.currency&&a.currency!=='PHP');
+  // Shares carry no currency of their own (the headline is a quantity), so the sub
+  // line carries both: what it is worth here, and what it is worth in USD.
+  var usd=a.isShares?usdOf(a.balancePhp):'';
   return '<div class="amt '+(a.isLiability?'neg':'')+'">'+acctMain(a)+
-    (foreign?'<span class="amt-sub">'+money(a.balancePhp)+'</span>':'')+'</div>';
+    (foreign?'<span class="amt-sub">'+money(a.balancePhp)+(usd?' · '+usd:'')+'</span>':'')+'</div>';
 }
 
 function accountRow(a){
