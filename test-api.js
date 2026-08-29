@@ -275,7 +275,9 @@ function d1(db) {
     test('snapshotNetWorth records this month; getDashboard serves the history', async () => {
       const snap = await api.snapshotNetWorth(env);
       const now = dbm.manilaMonth();
-      assert.strictEqual(snap.month, now);
+      // Yesterday's month, not today's: a 06:00 run on the last day of a month would
+      // otherwise close that month without its last day in it. Same month except on the 1st.
+      assert.strictEqual(snap.month, dbm.monthOf(dbm.manilaYesterday()));
       const dash = await api.getDashboard({}, env);
       assert.ok(Math.abs(snap.netWorth - dash.netWorth) < 0.01, 'snapshot equals the live net worth');
       // The live month is deliberately absent — the chart uses live netWorth there.
@@ -444,6 +446,119 @@ function d1(db) {
     const res = await worker.fetch(new Request('https://x' + url, init), wenv, ctx);
     return { status: res.status, body: await res.json().catch(() => null) };
   };
+
+  // ── the accounting-soundness release (v2.5.0) ──────────────────────────────
+  // Appended last on purpose: these tests add accounts and rows, and every figure
+  // asserted above is exact.
+  await describe('Accounting conventions', () => {
+    test('a refund is a negative expense and NETS its category down', async () => {
+      // Was the worst of the reporting bugs: ABS() made a refund ADD to spending, so
+      // the one real refund had to be mis-logged as income, overstating both sides.
+      await api.createTransaction({ ID: 'rf-1', Date: '2026-02-10', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: 500 }, env);
+      await api.createTransaction({ ID: 'rf-2', Date: '2026-02-12', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: -200, Description: 'refund' }, env);
+      const d = await api.getDashboard({ month: '2026-Feb' }, env);
+      assert.strictEqual(d.spendByCategory['Expense: Food'], 300);
+      assert.strictEqual(d.spendBySegment.Essentials, 300);
+      assert.strictEqual(d.cashflow[5].expense, 300);
+      const b = await api.getBudgets({ month: '2026-Feb' }, env);
+      assert.strictEqual(b.budgets.find((x) => x.segment === 'Essentials').actualPhp, 300);
+    });
+
+    test('a zero amount is refused on every write path', async () => {
+      const base = { Date: '2026-02-14', Category: 'Expense: Food', Account: 'Maya' };
+      await assert.rejects(api.createTransaction(Object.assign({ ID: 'z1', Amount: 0 }, base), env), /must not be zero/);
+      // Rounds to zero in micros — the same test the DB CHECK will make in Release 2.
+      await assert.rejects(api.createTransaction(Object.assign({ ID: 'z2', Amount: 0.0000001 }, base), env), /must not be zero/);
+      await assert.rejects(api.createTransfer({ ID: 'z3', Date: '2026-02-14', Category: 'Investment: Growth',
+                                                Account: 'Maya', ToAccount: 'IBKR', Amount: 100, ToAmount: 0 }, env),
+                           /ToAmount must not be zero/);
+      await assert.rejects(api.updateTransaction({ ID: 'rf-1', Amount: 0 }, env), /must not be zero/);
+      await assert.rejects(api.bulkUpdateTransactions({ ids: ['rf-1'], patch: { Amount: 0 } }, env), /must not be zero/);
+    });
+
+    test('a transfer that lands in pesos stamps the rate it actually realised', async () => {
+      // 100 USD out, 5600 PHP in = 56.00, whatever the live rate says (the shim's is 50).
+      // Stamping the live rate is what made the conversion spread disappear.
+      const r = await api.createTransfer({ ID: 'fx-1', Date: '2026-02-20', Category: 'Investment: Growth',
+                                           Account: 'Wise', ToAccount: 'Maya', Amount: 100, ToAmount: 5600 }, env);
+      assert.strictEqual(r.transaction.ExchangeRate, 56);
+      assert.strictEqual(r.transaction['Amount (PHP)'], 5600, 'the source leg is valued at what arrived');
+      // An explicit override still wins.
+      const r2 = await api.createTransfer({ ID: 'fx-2', Date: '2026-02-21', Category: 'Investment: Growth',
+                                            Account: 'Wise', ToAccount: 'Maya', Amount: 100, ToAmount: 5600,
+                                            ExchangeRate: 57 }, env);
+      assert.strictEqual(r2.transaction.ExchangeRate, 57);
+      // A Shares destination is a QUANTITY, not money: it must keep the live rate.
+      const r3 = await api.createTransfer({ ID: 'fx-3', Date: '2026-02-22', Category: 'Investment: Growth',
+                                            Account: 'Wise', ToAccount: 'IBKR', Amount: 100, ToAmount: 0.05 }, env);
+      assert.strictEqual(r3.transaction['Amount (PHP)'], 5000, 'live rate, not quantity/amount');
+      // A PHP SOURCE needs no rate whatever the destination is: fx_rate converts the
+      // source leg, and pesos are already pesos. Implied would be nonsense here.
+      const r4 = await api.createTransfer({ ID: 'fx-4', Date: '2026-02-23', Category: 'Investment: Growth',
+                                            Account: 'Maya', ToAccount: 'Wise', Amount: 100, ToAmount: 1.8 }, env);
+      assert.strictEqual(r4.transaction['Amount (PHP)'], 100);
+      assert.strictEqual(r4.transaction.ExchangeRate, '');
+    });
+
+    test('a same-day, same-amount twin warns instead of blocking', async () => {
+      await api.createTransaction({ ID: 'dup-1', Date: '2026-02-25', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: 214.29 }, env);
+      const second = await api.createTransaction({ ID: 'dup-2', Date: '2026-02-25', Category: 'Expense: Food',
+                                                   Account: 'Maya', Amount: 214.29 }, env);
+      assert.strictEqual(second.status, 'success', 'advisory only — a real repeat must still land');
+      assert.match(second.warning, /Similar transaction exists \(dup-1\)/);
+    });
+
+    test('a negative receivable is a liability, not a smaller asset', async () => {
+      // Money the owner OWES sitting in an Asset subtype: it deflated the asset total
+      // instead of showing as debt, and the runway skipped it entirely.
+      sqlite.exec("INSERT INTO account_types (subtype, type) VALUES ('Receivable','Asset');" +
+        "INSERT INTO accounts (id,name,currency,subtype,starting_balance_u) VALUES " +
+        "(5,'Mommy','PHP','Receivable',-1000000000),(6,'Lent','PHP','Receivable',2000000000);");
+      // A real card charge too, so the sign of a genuine liability is pinned here.
+      await api.createTransaction({ ID: 'lb-1', Date: '2026-02-27', Category: 'Expense: Food',
+                                    Account: 'Card', Amount: 500 }, env);
+      const { accounts } = await api.getAccounts({}, env);
+      const by = Object.fromEntries(accounts.map((a) => [a.name, a]));
+      const t = api.netWorthTotals(accounts);
+      assert.strictEqual(by.Mommy.isLiability, false, 'still an Asset account — the SIGN reclassifies it');
+      assert.strictEqual(by.Card.netWorthPhp, -500);
+      assert.strictEqual(t.liabilities, by.Card.netWorthPhp + by.Mommy.netWorthPhp,
+        'the negative receivable joins the card in liabilities');
+      assert.strictEqual(t.assets, by.Maya.netWorthPhp + by.Wise.netWorthPhp + by.IBKR.netWorthPhp + by.Lent.netWorthPhp,
+        'and is out of assets, while the POSITIVE receivable stays in');
+      const d = await api.getDashboard({}, env);
+      assert.ok(d.liabilities < 0, 'liabilities are stored and reported NEGATIVE, never absoluted');
+      assert.ok(Math.abs(d.netWorth - (d.assets + d.liabilities)) < 0.01);
+
+      // Runway: the debt shortens it; the 2000 lent out does not lengthen it.
+      const inv = await api.getInvestments({}, env);
+      const expected = Math.round((by.Maya.balancePhp + by.Wise.balancePhp - by.Card.balancePhp - 1000) * 100) / 100;
+      assert.strictEqual(inv.runway.efPhp, expected);
+    });
+
+    test('the admin grid refuses to rewrite the meaning of existing rows', async () => {
+      // Each of these silently reprices or re-signs history: an Asset/Liability flip
+      // inverts every past delta, a currency change reprices fx-NULL rows, a category
+      // type flip breaks the Transfer<->ToAccount invariant.
+      await assert.rejects(api.updateTableCell({ table: 'categories', pk: 2, column: 'type', value: 'Income' }, env),
+                           /frozen/);
+      await assert.rejects(api.updateTableCell({ table: 'accounts', pk: 1, column: 'currency', value: 'USD' }, env),
+                           /frozen/);
+      await assert.rejects(api.updateTableCell({ table: 'accounts', pk: 1, column: 'subtype', value: 'Credit' }, env),
+                           /frozen/);
+      await assert.rejects(api.updateTableCell({ table: 'account_types', pk: 'Savings', column: 'type', value: 'Liability' }, env),
+                           /frozen/);
+      // An account nothing references yet is still editable — the guard is about
+      // history, not about the column.
+      const ok = await api.updateTableCell({ table: 'accounts', pk: 6, column: 'subtype', value: 'Savings' }, env);
+      assert.strictEqual(ok.status, 'success');
+      // And a plain rename is never frozen.
+      assert.strictEqual((await api.updateTableCell({ table: 'accounts', pk: 1, column: 'name', value: 'Maya' }, env)).status, 'success');
+    });
+  });
 
   await describe('HTTP layer', () => {
     test('/api is closed without a credential and open with either one', async () => {

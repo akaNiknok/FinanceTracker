@@ -28,6 +28,11 @@ const MANILA = new Intl.DateTimeFormat('en-CA', {
 });
 /** 'yyyy-MM-dd' in Manila. The only source of "today" in this codebase. */
 export function manilaToday(d) { return MANILA.format(d || new Date()); }
+/** 'yyyy-MM-dd' in Manila, one day back. The month-close boundary: the cron runs at
+ * 06:00 Manila, so the last run INSIDE a month is on its last day and would close the
+ * month without that day's activity. Stamping yesterday's month makes the run on the
+ * 1st the month's true close, which is also the convention migrate/backfill-nw.js used. */
+export function manilaYesterday(d) { return manilaToday(new Date((d || new Date()).getTime() - 86400000)); }
 /** 'yyyy-MM-dd' -> 'yyyy-MMM' (the month key shape used everywhere, DB included). */
 export function monthOf(iso) { return String(iso).slice(0, 4) + '-' + MONTHS[Number(String(iso).slice(5, 7)) - 1]; }
 export function manilaMonth(d) { return monthOf(manilaToday(d)); }

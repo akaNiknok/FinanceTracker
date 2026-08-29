@@ -1007,7 +1007,11 @@ function renderDashboard(){
     }
 
     // ── expenses by category (donut) ──
+    // Spend is signed now (a refund is a negative expense row), and a category that
+    // nets zero or below has no slice to draw — an arc cannot have negative length.
+    // It still counts in the month total and in its budget meter.
     var cats=Object.keys(d.spendByCategory||{}).map(function(k){return [k,d.spendByCategory[k]];})
+      .filter(function(p){return p[1]>0;})
       .sort(function(a,b){return b[1]-a[1];});
     var pie=cats.length?donutChart(cats):null;
     if(pie){
@@ -2438,7 +2442,11 @@ function commitTx(o){
   closeModal(); toast(o.addedMsg,'ok');
   var tmp=pushPendingAdd(o.payload);
   gs(o.create, o.payload)
-    .then(function(r){ if(r && r.status==='queued') return; dropPendingAdd(tmp); afterMutation(); })
+    .then(function(r){ if(r && r.status==='queued') return;
+      // Advisory from the server (unresolved FX, a same-day/amount duplicate). The row
+      // landed — this only tells the owner to look, so it never reopens the modal.
+      if(r && r.warning) toast(r.warning,'err');
+      dropPendingAdd(tmp); afterMutation(); })
     .catch(function(e){ dropPendingAdd(tmp); repaintTxList();
       toast(o.failMsg+' — reopening: '+(e.message||e),'err'); o.reopen(o.payload); });
 }

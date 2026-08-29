@@ -25,7 +25,7 @@
 import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
   dataVersion, bumpStmt, toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
-  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, BASE_CURRENCY,
+  monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, manilaYesterday, BASE_CURRENCY,
   isInvestedNetWorth, isSharesAcct
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
@@ -56,6 +56,31 @@ function assertShape(type, hasTo) {
   if (type !== 'Transfer' && hasTo) throw new Error('Only a Transfer category may have a ToAccount.');
 }
 const hasTo = (v) => !!(v && String(v).trim() !== '');
+
+/**
+ * A zero row is never a real event: it moves nothing, it renders as a blank line and
+ * it is what an empty form or a mis-parsed message produces. Checked in MICROS, so
+ * an amount that rounds to zero is caught too — the same test Release 2's
+ * CHECK (amount_u != 0) will make the database enforce. A NEGATIVE amount is legal:
+ * that is how a refund is recorded (negative expense, original category).
+ */
+function assertNonZero(label, v) {
+  if (toU(v) === 0) throw new Error(label + ' must not be zero.');
+}
+
+/**
+ * F16 advisory: the same account, category, amount and date, twice, from two different
+ * ids. Idempotency only catches a REPLAY of one id, so a genuine double-log (two
+ * Telegram messages, one purchase) sails through. Advisory on purpose — same-day
+ * repeats are real (two coffees), so this warns and never blocks.
+ */
+async function duplicateWarning(env, id, row) {
+  const hit = await env.DB.prepare(
+    'SELECT id FROM transactions WHERE account_id = ? AND category_id = ? AND amount_u = ? ' +
+    'AND date = ? AND id != ? LIMIT 1')
+    .bind(row.account_id, row.category_id, row.amount_u, row.date, id).first();
+  return hit ? 'Similar transaction exists (' + hit.id + ') — undo if duplicate.' : null;
+}
 
 /**
  * A same-currency transfer stores ToAmount == Amount, so an Amount-only edit has to
@@ -151,6 +176,11 @@ export async function listTransactions(args, env) {
  *
  * Actuals count Expense AND Transfer: a segment like Growth is funded by moving cash
  * into an investment account, so that transfer must draw the Growth budget down.
+ *
+ * The sums are SIGNED, not ABS: a refund is a negative-amount row in the original
+ * expense category, and it must net the spend down. ABS() made a refund INFLATE the
+ * figure it should reduce. Every ordinary row is positive by convention, so the two
+ * agree everywhere except on a refund.
  */
 async function budgetsPayload(env, monthArg, fx) {
   const ref = parseMonthKey(monthArg) || parseMonthKey(manilaMonth());
@@ -170,9 +200,9 @@ async function budgetsPayload(env, monthArg, fx) {
     // needs it). Summing dollars natively keeps a USD meter still while the peso
     // moves — the round trip through amount_php_u and back reprices every past row.
     const q = await env.DB.prepare(
-      'SELECT TRIM(c.segment) AS seg, t.month AS m, SUM(ABS(t.amount_php_u)) AS s, ' +
-      "SUM(CASE WHEN a.currency = 'USD' THEN ABS(t.amount_u) ELSE 0 END) AS usd_s, " +
-      "SUM(CASE WHEN a.currency = 'USD' THEN 0 ELSE ABS(t.amount_php_u) END) AS rest_s " +
+      'SELECT TRIM(c.segment) AS seg, t.month AS m, SUM(t.amount_php_u) AS s, ' +
+      "SUM(CASE WHEN a.currency = 'USD' THEN t.amount_u ELSE 0 END) AS usd_s, " +
+      "SUM(CASE WHEN a.currency = 'USD' THEN 0 ELSE t.amount_php_u END) AS rest_s " +
       'FROM transactions t JOIN categories c ON c.id = t.category_id ' +
       'JOIN accounts a ON a.id = t.account_id ' +
       "WHERE c.type IN ('Expense','Transfer') AND t.month IN (" + list(keys.length) + ') ' +
@@ -255,21 +285,31 @@ export async function getBudgets(args, env) {
 }
 
 /** The net-worth fold over shaped accounts, in raw PHP (q2 at the boundary).
- * Signs match the API: liabilities positive, netWorth signed, shares a subset of
- * assets. sharesValue uses isInvestedNetWorth (subtype-based, NARROWER than the
- * Holdings card's isInvestment) so a near-cash share holding — a treasury ETF held
- * as an EF, say — sits with liquid here while still showing in Holdings. Shared by
- * getDashboard and snapshotNetWorth so the tile, chart and snapshot agree exactly. */
+ * Signs match what is STORED and what the API reports: `liabilities` is NEGATIVE
+ * (it sums netWorthPhp, which is already signed), netWorth is signed, shares are a
+ * subset of assets. The SPA's hero takes Math.abs of it. Do not "fix" the sign —
+ * every nw_snapshots row on disk holds it this way. sharesValue uses
+ * isInvestedNetWorth (subtype-based, NARROWER than the Holdings card's isInvestment)
+ * so a near-cash share holding — a treasury ETF held as an EF, say — sits with liquid
+ * here while still showing in Holdings. Shared by getDashboard and snapshotNetWorth
+ * so the tile, chart and snapshot agree exactly.
+ *
+ * A RECEIVABLE that has gone negative is money the owner OWES, not an asset worth
+ * less: it reports under liabilities, so a debt cannot hide inside the asset total. */
 export function netWorthTotals(accounts) {
   let netWorth = 0, assets = 0, liabilities = 0, sharesValue = 0;
   accounts.forEach((a) => {
     const php = a.netWorthPhp == null ? 0 : a.netWorthPhp;
     if (isInvestedNetWorth(a)) sharesValue += a.balancePhp || 0;
     netWorth += php;
-    if (a.isLiability) liabilities += php; else assets += php;
+    if (a.isLiability || (php < 0 && isReceivable(a))) liabilities += php; else assets += php;
   });
   return { netWorth, assets, liabilities, sharesValue };
 }
+
+/** Money lent out (an Asset subtype). Negative means the flow reversed and the owner
+ * is the borrower — the sign, not the subtype, says which way the debt runs. */
+const isReceivable = (a) => /receivable/i.test(String(a.subtype || ''));
 
 /** Cron: record this month's net worth (jobs.js runs it after prices, so it uses
  * fresh quotes). Upsert by month — the last write of a month is its close. Not an
@@ -280,7 +320,12 @@ export async function snapshotNetWorth(env) {
   const r = await refs(env);
   const { accounts } = await accountsList(env, r);
   const t = netWorthTotals(accounts);
-  const month = manilaMonth();
+  // Yesterday's month, not today's. The cron runs 06:00 Manila, so the last run INSIDE
+  // a month happens on its last day and would close the month without that day's
+  // activity; the run on the 1st now writes the previous month's TRUE close. Days 2..n
+  // still refresh the current month, so nothing else about the upsert changes. Same
+  // convention as migrate/backfill-nw.js, which valued real month-ends.
+  const month = monthOf(manilaYesterday());
   await env.DB.prepare(
     'INSERT INTO nw_snapshots (month, net_worth_u, assets_u, liabilities_u, shares_u, taken_at) ' +
     'VALUES (?,?,?,?,?,?) ON CONFLICT(month) DO UPDATE SET net_worth_u = excluded.net_worth_u, ' +
@@ -303,14 +348,15 @@ export async function getDashboard(args, env) {
 
   // Aggregation in SQL, not JS: the 10ms CPU budget is the one real constraint on
   // this handler, and a full-table scan in JS is what would break it.
+  // Signed sums, no ABS: a refund is a negative expense row and nets its category down.
   const [spend, flow, recent, snaps] = await env.DB.batch([
     env.DB.prepare(
       // Single quotes only: SQLite reads "" as an identifier, not an empty string.
       "SELECT COALESCE(NULLIF(TRIM(c.segment), ''), 'Unsegmented') AS seg, c.name AS cat, " +
-      'SUM(ABS(t.amount_php_u)) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
+      'SUM(t.amount_php_u) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
       "WHERE t.month = ? AND c.type = 'Expense' GROUP BY seg, cat").bind(month),
     env.DB.prepare(
-      'SELECT t.month AS m, c.type AS type, SUM(ABS(t.amount_php_u)) AS s FROM transactions t ' +
+      'SELECT t.month AS m, c.type AS type, SUM(t.amount_php_u) AS s FROM transactions t ' +
       'JOIN categories c ON c.id = t.category_id ' +
       "WHERE t.month IN (" + list(flowKeys.length) + ") AND c.type IN ('Income','Expense') " +
       'GROUP BY m, type').bind(...flowKeys),
@@ -385,7 +431,7 @@ export async function getInvestments(args, env) {
       'WHERE t.to_account_id IN (' + (shareIds.length ? list(shareIds.length) : 'NULL') + ') ' +
       'ORDER BY t.date DESC').bind(...shareIds),
     env.DB.prepare(
-      'SELECT SUM(ABS(t.amount_php_u)) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
+      'SELECT SUM(t.amount_php_u) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
       "WHERE c.type = 'Expense' AND t.month IN (" + list(monthKeys.length) + ')').bind(...monthKeys)
   ]);
   const quarters = [];
@@ -406,7 +452,11 @@ export async function getInvestments(args, env) {
   // ponytail: targetMonths is the doc's fixed 4-month rule; make it a meta key if it ever moves.
   const efPhp = accounts.reduce((s, a) => {
     if (a.isLiability) return s - (a.balancePhp || 0);
-    if (isInvestedNetWorth(a) || /receivable/i.test(a.subtype || '')) return s;
+    if (isInvestedNetWorth(a)) return s;
+    // A receivable is asymmetric on purpose: money LENT is not reachable in an
+    // emergency, so a positive balance adds nothing — but a NEGATIVE one is money the
+    // owner owes, and a debt does shorten the runway. Excluding both hid ₱13.6k of it.
+    if (isReceivable(a)) return s + Math.min(0, a.balancePhp || 0);
     return s + (a.balancePhp || 0);
   }, 0);
   const avg = spendQ.results[0] && spendQ.results[0].s ? fromU(spendQ.results[0].s) / monthKeys.length : 0;
@@ -575,22 +625,46 @@ export async function createTransaction(args, env) {
   if (!acct) throw new Error('Unknown Account: ' + args.Account);
   if (args.Amount === undefined || args.Amount === '' || isNaN(parseFloat(args.Amount)))
     throw new Error('Missing/invalid required field: Amount');
+  assertNonZero('Amount', args.Amount);
   assertShape(cat.type, false);   // a plain tx never has a destination
 
   const id = args.ID || crypto.randomUUID();
   const fx = await resolveRate(env, acct.currency, args.ExchangeRate);
+  const row = { date: parseDate(args.Date), category_id: cat.id, account_id: acct.id, amount_u: toU(args.Amount) };
   const [res] = await env.DB.batch([
     env.DB.prepare('INSERT INTO transactions (id, date, period, category_id, description, account_id, amount_u, fx_rate) ' +
       'VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING')
-      .bind(id, parseDate(args.Date), parsePeriod(args.Period) || null, cat.id,
-            args.Description || '', acct.id, toU(args.Amount), fx.blank ? null : fx.rate),
+      .bind(id, row.date, parsePeriod(args.Period) || null, cat.id,
+            args.Description || '', acct.id, row.amount_u, fx.blank ? null : fx.rate),
     bumpStmt(env)
   ]);
   const transaction = await txById(env, r, id);
   if (!res.meta.changes) return { status: 'duplicate', message: 'ID already exists.', transaction };
   const out = { status: 'success', message: 'Transaction created.', transaction };
-  if (fx.warning) out.warning = fx.warning;
+  const dup = await duplicateWarning(env, id, row);
+  if (fx.warning || dup) out.warning = [fx.warning, dup].filter(Boolean).join(' ');
   return out;
+}
+
+/**
+ * The rate to stamp on a transfer. A conversion that LANDS IN PESOS already knows its
+ * own rate — ToAmount/Amount is the rate the transfer actually realised, spread and
+ * fees included. The live rate is a different number, so stamping it valued the source
+ * leg at a rate nobody got and made the conversion spread vanish from the books
+ * (two prod rows, ~₱65 of phantom money). An explicit ExchangeRate still wins, and
+ * every other shape falls through to resolveRate unchanged.
+ *
+ * Only a PHP destination qualifies: fx_rate converts the SOURCE amount to pesos, so
+ * ToAmount/Amount is that rate only when ToAmount is in pesos. A PHP source needs no
+ * rate at all (resolveRate returns blank), and a Shares leg is a quantity, not money.
+ */
+async function impliedRate(env, from, to, amount, toAmount, override) {
+  const src = String(from.currency || '').toUpperCase(), dst = String(to.currency || '').toUpperCase();
+  const usable = (override === undefined || override === null || override === '') &&
+    src !== dst && dst === BASE_CURRENCY && src !== 'SHARES' &&
+    Number(amount) && Number(toAmount);
+  if (usable) return { rate: Math.abs(toAmount / amount), blank: false, source: 'implied' };
+  return resolveRate(env, from.currency, override);
 }
 
 /** Transfer: ONE row carrying both sides, same as the sheet. Same idempotency contract. */
@@ -608,22 +682,28 @@ export async function createTransfer(args, env) {
   assertShape(cat.type, true);
   if (args.Amount === undefined || isNaN(parseFloat(args.Amount)))
     throw new Error('Missing/invalid Amount (source amount).');
+  assertNonZero('Amount', args.Amount);
 
   const toAmount = (args.ToAmount !== undefined && args.ToAmount !== '')
     ? parseFloat(args.ToAmount) : parseFloat(args.Amount);
+  assertNonZero('ToAmount', toAmount);
   const id = args.ID || crypto.randomUUID();
-  const fx = await resolveRate(env, acct.currency, args.ExchangeRate);
+  const fx = await impliedRate(env, acct, to, args.Amount, toAmount, args.ExchangeRate);
+  const row = { date: parseDate(args.Date), category_id: cat.id, account_id: acct.id, amount_u: toU(args.Amount) };
   const [res] = await env.DB.batch([
     env.DB.prepare('INSERT INTO transactions (id, date, period, category_id, description, account_id, amount_u, fx_rate, to_account_id, to_amount_u) ' +
       'VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING')
-      .bind(id, parseDate(args.Date), parsePeriod(args.Period) || null, cat.id,
-            args.Description || '', acct.id, toU(args.Amount), fx.blank ? null : fx.rate,
+      .bind(id, row.date, parsePeriod(args.Period) || null, cat.id,
+            args.Description || '', acct.id, row.amount_u, fx.blank ? null : fx.rate,
             to.id, toU(toAmount)),
     bumpStmt(env)
   ]);
   const transaction = await txById(env, r, id);
   if (!res.meta.changes) return { status: 'duplicate', message: 'ID already exists.', transaction };
-  return { status: 'success', message: 'Transfer created.', transaction };
+  const out = { status: 'success', message: 'Transfer created.', transaction };
+  const dup = await duplicateWarning(env, id, row);
+  if (fx.warning || dup) out.warning = [fx.warning, dup].filter(Boolean).join(' ');
+  return out;
 }
 
 export async function updateTransaction(args, env) {
@@ -640,6 +720,9 @@ export async function updateTransaction(args, env) {
   const patch = {};
   TX_CLIENT_FIELDS.forEach((f) => { if (args[f] !== undefined) patch[f] = args[f]; });
   if (!Object.keys(patch).length) throw new Error('Nothing to update.');
+
+  if (patch.Amount !== undefined) assertNonZero('Amount', patch.Amount);
+  if (patch.ToAmount !== undefined && patch.ToAmount !== '') assertNonZero('ToAmount', patch.ToAmount);
 
   const effCat = patch.Category !== undefined ? patch.Category : cur.Category;
   const effTo = patch.ToAccount !== undefined ? patch.ToAccount : cur.ToAccount;
@@ -698,6 +781,9 @@ export async function bulkUpdateTransactions(args, env) {
   const p = {};
   TX_CLIENT_FIELDS.forEach((f) => { if (patch[f] !== undefined) p[f] = patch[f]; });
   if (!Object.keys(p).length) throw new Error('Nothing to update.');
+
+  if (p.Amount !== undefined) assertNonZero('Amount', p.Amount);
+  if (p.ToAmount !== undefined && p.ToAmount !== '') assertNonZero('ToAmount', p.ToAmount);
 
   const found = (await env.DB.prepare(
     'SELECT t.id, t.to_account_id, c.type AS type FROM transactions t JOIN categories c ON c.id = t.category_id ' +
@@ -881,6 +967,34 @@ function coerceCell(t, col, value) {
   return value;
 }
 
+/**
+ * Cells that rewrite the MEANING of history, not just a label. Flipping an
+ * account_type Asset↔Liability inverts every past delta on every account of that
+ * subtype; changing an account's currency reprices every fx-NULL row it carries;
+ * changing a category's type breaks the Transfer⇔ToAccount invariant on rows already
+ * written. Each is frozen while any transaction references the record — the numbers
+ * would silently change under rows nobody re-checked. Escape hatch, deliberately
+ * outside the app: `wrangler d1 execute`, followed by fixing up the affected rows.
+ *
+ * `binds` is how many times the pk goes into the statement.
+ */
+const FROZEN_CELLS = {
+  'categories|type': { sql: 'SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', binds: 1 },
+  'accounts|currency': { sql: 'SELECT COUNT(*) AS n FROM transactions WHERE account_id = ? OR to_account_id = ?', binds: 2 },
+  'accounts|subtype': { sql: 'SELECT COUNT(*) AS n FROM transactions WHERE account_id = ? OR to_account_id = ?', binds: 2 },
+  'account_types|type': { sql: 'SELECT COUNT(*) AS n FROM transactions t JOIN accounts a ' +
+                               'ON a.id = t.account_id OR a.id = t.to_account_id WHERE a.subtype = ?', binds: 1 }
+};
+
+async function assertNotFrozen(env, table, col, pk) {
+  const f = FROZEN_CELLS[table + '|' + col];
+  if (!f) return;
+  const row = await env.DB.prepare(f.sql).bind(...new Array(f.binds).fill(pk)).first();
+  if (row && row.n) throw new Error(
+    table + '.' + col + ' is frozen: ' + row.n + ' transaction(s) reference this row, and changing it ' +
+    'rewrites what they mean. Use `wrangler d1 execute` if that is really the intent.');
+}
+
 export async function updateTableCell(args, env) {
   const name = String(args.table || '');
   const t = tableSpec(name);
@@ -888,6 +1002,7 @@ export async function updateTableCell(args, env) {
   if (t.edit.indexOf(col) === -1)
     throw new Error(col + ' is not editable on ' + name + '. Editable: ' + (t.edit.join(', ') || '(none)'));
   if (args.pk === undefined || args.pk === null || args.pk === '') throw new Error('updateTableCell requires pk.');
+  await assertNotFrozen(env, name, col, args.pk);
   const [res] = await env.DB.batch([
     env.DB.prepare('UPDATE ' + name + ' SET ' + col + ' = ? WHERE ' + t.pk + ' = ?')
       .bind(coerceCell(t, col, args.value), args.pk),
