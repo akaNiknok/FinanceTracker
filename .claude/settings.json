@@ -1,4 +1,14 @@
 {
+  "attribution": { "commit": "", "pr": "" },
+  "permissions": {
+    "deny": [
+      "Read(./worker/.dev.vars)",
+      "Read(./worker/.dev-data.sql)",
+      "Read(./worker/.dev-backfill.sql)",
+      "Read(./backfill-nw.sql)",
+      "Read(./fix-fx-rates.sql)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -6,6 +16,17 @@
           {
             "type": "command",
             "command": "node -e \"const fs=require('fs');if(fs.existsSync('HANDOFF.md'))console.log('=== HANDOFF.md — previous session resume point (gitignored) ===\n'+fs.readFileSync('HANDOFF.md','utf8'))\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-push.js\""
           }
         ]
       }
