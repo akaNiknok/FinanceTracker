@@ -15,7 +15,10 @@ const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const here = process.cwd();
+// Anchor to this file, not to the caller's cwd: a SessionStart hook runs from
+// wherever Claude Code starts, and every worktree has its own copy of this script.
+process.chdir(__dirname);
+const here = __dirname;
 const gitCommonDir = execSync('git rev-parse --path-format=absolute --git-common-dir').toString().trim();
 const mainCheckout = path.dirname(gitCommonDir);
 const isWorktree = path.resolve(mainCheckout) !== path.resolve(here);
