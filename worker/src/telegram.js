@@ -127,7 +127,9 @@ export async function logItems(env, chat, idPrefix, items, replyTo, mailId) {
     };
     try {
       const res = p.ToAccount ? await createTransfer(args, env) : await createTransaction(args, env);
-      out.push(receipt(p, res.status));
+      // res.warning is advisory (an unresolved FX rate, a same-day/amount duplicate).
+      // The receipt is the only feedback this path has, so it must not swallow it.
+      out.push(receipt(p, res.status) + (res.warning ? '\n› ⚠ ' + res.warning : ''));
       ids.push(args.ID); idx.push(i);
     } catch (err) {
       out.push('❌ *Failed to add transaction*\n› ' + msgOf(err));
@@ -260,8 +262,9 @@ export function tgMonthKey(s) {
 
 /**
  * Rows -> the reply body: total, count, and the most recent few. Amounts are summed
- * absolute (the ledger signs expenses and income differently, and a filtered query is
- * always "how much moved through this").
+ * ABSOLUTE, and stay that way while the reports went sign-aware: this answers "how much
+ * moved through this", so a refund is movement too, and a mixed Income+Expense filter
+ * would otherwise net to a meaningless figure.
  */
 export function querySummary(rows, total) {
   rows = rows || [];

@@ -84,6 +84,18 @@ describe('Apps Script (vm)', () => {
       assert.strictEqual(db.manilaToday(new Date('2026-08-23T15:59:00Z')), '2026-08-23');
     });
 
+    test('manilaYesterday is the month-close boundary', () => {
+      // The cron fires 06:00 Manila. On the 1st it must close the month that just
+      // ended — stamping today's month there would leave that month's last day out of
+      // its own close and disagree with the backfill.
+      assert.strictEqual(db.manilaYesterday(new Date('2026-09-01T00:00:00Z')), '2026-08-31');
+      assert.strictEqual(db.monthOf(db.manilaYesterday(new Date('2026-08-31T22:00:00Z'))), '2026-Aug');
+      // 22:00Z on the 31st is already 06:00 on the 1st in Manila — the run that closes August.
+      assert.strictEqual(db.manilaYesterday(new Date('2026-08-31T22:00:00Z')), '2026-08-31');
+      // Mid-month it is just yesterday, so the current month keeps refreshing.
+      assert.strictEqual(db.manilaYesterday(new Date('2026-08-15T22:00:00Z')), '2026-08-15');
+    });
+
     test('parsePeriod normalises or throws — never writes a dead key', () => {
       assert.strictEqual(db.parsePeriod('2026-08'), '2026-Aug');
       assert.strictEqual(db.parsePeriod('2026-AUGUST'), '2026-Aug');

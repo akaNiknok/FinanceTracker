@@ -15,6 +15,10 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/bootstrap.js\" >/dev/null 2>&1 || true"
+          },
+          {
+            "type": "command",
             "command": "node -e \"const fs=require('fs');if(fs.existsSync('HANDOFF.md'))console.log('=== HANDOFF.md — previous session resume point (gitignored) ===\n'+fs.readFileSync('HANDOFF.md','utf8'))\""
           }
         ]
