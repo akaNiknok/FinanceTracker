@@ -1168,7 +1168,9 @@ function groupByDay(rows){
     var d=fmtDate(t.Date);
     if(!byDate[d]){ byDate[d]={label:d,rows:[],net:0,date:t.Date}; groups.push(byDate[d]); }
     byDate[d].rows.push(t);
-    var php=Math.abs(Number(t['Amount (PHP)'])||0);
+    // Signed, not absolute: a refund is a negative Expense, so subtracting it ADDS
+    // back to the day's net — which is what a refund does to the balance.
+    var php=Number(t['Amount (PHP)'])||0;
     if(String(t.Type)==='Expense') byDate[d].net-=php;
     else if(String(t.Type)==='Income') byDate[d].net+=php;
   });
@@ -1187,16 +1189,16 @@ function repaintTxList(){
   if(S.screen==='transactions') renderTxList();
 }
 function isPendingRow(t){ return !!(t._pending || (t.ID && (S.tx.pendingDeletes[t.ID] || S.tx.pendingEdits[t.ID]))); }
-// Show an in-flight edit's NEW values while it's still in the air. Amount is patched as
-// a magnitude, so keep the row's sign and its FX ratio (money() renders the signed PHP
-// figure); a category change can flip Type, which drives the +/− and the icon.
+// Show an in-flight edit's NEW values while it's still in the air. Amount is patched
+// SIGNED (a refund is negative), so only the FX ratio has to be carried over; a category
+// change can flip Type, which drives the +/− and the icon.
 function withPendingEdit(t){
   var p=t.ID&&S.tx.pendingEdits[t.ID]; if(!p) return t;
   var o=Object.assign({},t,p);
   if(p.Amount!=null){
-    var old=Number(t.Amount)||0, php=Number(t['Amount (PHP)']), rate=old?Math.abs(php/old):1;
-    o.Amount=(old<0?-1:1)*Math.abs(p.Amount);
-    o['Amount (PHP)']=(php<0?-1:1)*Math.abs(p.Amount)*rate;
+    var old=Number(t.Amount)||0, php=Number(t['Amount (PHP)']), rate=old?php/old:1;
+    o.Amount=Number(p.Amount);
+    o['Amount (PHP)']=Number(p.Amount)*rate;
   }
   var cat=p.Category&&S.boot&&(S.boot.categories||{})[p.Category];
   if(cat&&cat.Type) o.Type=cat.Type;
@@ -1284,16 +1286,20 @@ function txRow(t,opts){
   var edit=!!opts.edit, pending=!!opts.pending, clickable=!!opts.clickable;
   var type=String(t.Type||'');
   var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
-  var icCls=isXfer?'xfer':(type==='Expense'?'out':(type==='Income'?'in':''));
-  var icCh=isXfer?'⇄':(type==='Expense'?'−':(type==='Income'?'+':'•'));
+  // Which way the money actually ran. The category type says the usual direction, and a
+  // NEGATIVE amount reverses it: a refund is a negative Expense, so it pays money back
+  // and reads "+" and green. Deriving the sign from the type alone printed "- -₱95".
+  var dir=(type==='Expense'?-1:(type==='Income'?1:0))*(Number(t.Amount)<0?-1:1);
+  var icCls=isXfer?'xfer':(dir<0?'out':(dir>0?'in':''));
+  var icCh=isXfer?'⇄':(dir<0?'−':(dir>0?'+':'•'));
   var amtPhp=t['Amount (PHP)'];
   var cur=t.Currency||'PHP';
   var isForeign=cur!=='PHP';
   // Foreign-currency tx: show the NATIVE amount in its own symbol; keep the PHP
-  // equivalent in the meta line so nothing is lost.
-  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(amtPhp);
-  var sign=type==='Expense'?'-':(type==='Income'?'+':'');
-  var amtCls=type==='Expense'?'neg':(type==='Income'?'pos':'');
+  // equivalent in the meta line so nothing is lost. Magnitudes both — `sign` carries it.
+  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(Math.abs(amtPhp));
+  var sign=dir<0?'-':(dir>0?'+':'');
+  var amtCls=dir<0?'neg':(dir>0?'pos':'');
   var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
 
   var r=el('div','litem'+(edit?' edit':'')+(clickable&&!edit?' click':'')+
@@ -1329,7 +1335,7 @@ function txRow(t,opts){
     sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
       inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
     }));
-    if(isForeign) sub.appendChild(document.createTextNode(' · '+money(amtPhp)));
+    if(isForeign) sub.appendChild(document.createTextNode(' · '+money(Math.abs(amtPhp))));
     grow.appendChild(sub);
   } else {
     // Description is optional: with none, the Category headlines the row and drops out
@@ -1344,10 +1350,10 @@ function txRow(t,opts){
 
   // amount — inline editable in edit mode (edits the native magnitude; sign derives from Type)
   var amt=el('div','amt '+(edit?'amt-edit ':'')+amtCls,
-    sign+mainAmt+(isForeign&&!edit?'<span class="amt-sub">'+money(amtPhp)+'</span>':''));
+    sign+mainAmt+(isForeign&&!edit?'<span class="amt-sub">'+money(Math.abs(amtPhp))+'</span>':''));
   if(edit){
     amt.title='Edit amount';
-    amt.onclick=function(){ inlineInput(amt,'number', Math.abs(Number(t.Amount)), function(v){ commitInline(t,'Amount',v); }); };
+    amt.onclick=function(){ inlineInput(amt,'number', Number(t.Amount), function(v){ commitInline(t,'Amount',v); }); };
   }
   r.appendChild(amt);
 
@@ -2138,7 +2144,7 @@ function commitInline(t, field, val){
   if(field==='Amount'){
     var n=parseFloat(val);
     if(isNaN(n)){ toast('Enter a valid amount','err'); renderTxList(); return; }
-    if(n===Math.abs(Number(t.Amount))){ renderTxList(); return; }  // no-op
+    if(n===Number(t.Amount)){ renderTxList(); return; }            // no-op
     patch.Amount=n;
   } else {
     var cur=(t[field]==null?'':String(t[field]));
@@ -2396,7 +2402,10 @@ function prefSet(k,v){ try{ if(v) localStorage.setItem('ft.'+k,String(v)); }catc
 function focusCombo(c){ var i=c&&c.querySelector('.combo-input'); if(i){ i.focus(); i.select(); } }
 // Amount for a form field: absolute value, blank when there's nothing usable
 // (a carried-over draft may hold '' or a half-typed number).
-function amtField(v){ return (v===''||v==null||isNaN(v))?'':Math.abs(v); }
+/* The field shows the amount AS STORED, sign and all. It used to show the magnitude,
+ * which turned every open-and-save of a refund (a negative expense) into a charge:
+ * -95 rendered as 95 and 95 is what went back to the server. */
+function amtField(v){ return (v===''||v==null||isNaN(v))?'':v; }
 
 /* —— transaction ⇄ transfer switcher (new rows only) ——————————————————————
  * The FAB is the only add path on most screens, so a transfer shouldn't mean a detour
