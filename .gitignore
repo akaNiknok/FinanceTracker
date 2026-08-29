@@ -32,3 +32,9 @@ backfill-nw.sql
 # One-shot FX-rate repair for the seven blank-rate v1 rows
 fix-fx-rates.sql
 worker/.dev-backfill.sql
+
+# Generated per checkout by `npm run bootstrap` — each worktree gets its own dev port
+.claude/launch.json
+
+# git worktrees created by Claude Code live here
+.claude/worktrees/

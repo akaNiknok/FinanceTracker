@@ -17,7 +17,8 @@
     "push": "clasp push",
     "pull": "clasp pull",
     "open": "clasp open",
-    "release": "node release.js"
+    "release": "node release.js",
+    "bootstrap": "node bootstrap.js"
   },
   "devDependencies": {
     "@google/clasp": "^2.4.2"
