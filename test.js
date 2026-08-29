@@ -322,6 +322,19 @@ describe('Apps Script (vm)', () => {
       const held = app.netWorthSeries(cf, 500, {}, false);
       assert.strictEqual(held[2].nw, 500);
       assert.strictEqual(held[0].nw, 500, 'invested holds flat, does not roll back through cash flow');
+      // A refund is a NEGATIVE Expense row. The list used to read Amount as a magnitude
+      // and take its sign from the category type, which printed "- -₱95" and — far
+      // worse — sent 95 back on save, turning the refund into a charge.
+      const refund = { ID: 'r1', Date: '2026-08-25', Type: 'Expense', Amount: -95,
+                       'Amount (PHP)': -95, Currency: 'PHP', Account: 'MariBank' };
+      assert.strictEqual(app.amtField(-95), -95, 'the edit field must not absolute the amount');
+      assert.strictEqual(app.groupByDay([refund])[0].net, 95, 'a refund ADDS to the day net');
+      assert.strictEqual(app.groupByDay([{ Date: '2026-08-25', Type: 'Expense', Amount: 95,
+                                           'Amount (PHP)': 95 }])[0].net, -95);
+      app.S.tx = { pendingEdits: { r1: { ID: 'r1', Amount: -50 } } };
+      assert.strictEqual(app.withPendingEdit(refund).Amount, -50, 'an in-flight edit keeps the sign');
+      assert.strictEqual(app.withPendingEdit(refund)['Amount (PHP)'], -50);
+
       return app.gs('api_getDashboard', {}).then(() => {
         assert.ok(!/_v=/.test(seen), 'gs() still stamps _v: ' + seen);
         assert.ok(/action=getDashboard/.test(seen), seen);
