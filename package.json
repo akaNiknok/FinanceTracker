@@ -1,6 +1,6 @@
 {
   "name": "financetracker",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "description": "Personal finance tracker: Cloudflare Worker + D1, a PWA, and a Telegram bot",
   "private": true,
   "scripts": {
@@ -17,7 +17,8 @@
     "push": "clasp push",
     "pull": "clasp pull",
     "open": "clasp open",
-    "release": "node release.js"
+    "release": "node release.js",
+    "bootstrap": "node bootstrap.js"
   },
   "devDependencies": {
     "@google/clasp": "^2.4.2"

@@ -184,7 +184,8 @@ Cloudflare does not do a job again after a failure. Thus each job sends a Telegr
 ## Routine tasks
 
 ```bash
-npm test                 # 50 tests, no account necessary
+npm run bootstrap        # make a fresh clone or a new worktree runnable
+npm test                 # tests, no account necessary
 npm run dev              # operate the app, the API and the bot locally
 npm run migrate          # apply the pending database migrations
 npm run tail             # read the live Worker log
@@ -194,15 +195,17 @@ npm run push             # send the two files to Apps Script
 ### Release procedure
 
 1. Do the work on `develop`, or on a `feature/*` branch.
-2. Increase the version number in `package.json`, then commit.
-3. Merge `develop` into `main`.
-4. Go to `main`, then run `npm run release`.
+2. Increase the version number in `package.json`. Put the same number in the `brand-ver` span of `worker/public/index.html`. Commit both.
+3. Run `npm run release`. The command tests the code, then opens the pull request from `develop` to `main`. It does not deploy.
+4. Merge the pull request on GitHub.
 
-The command applies the database migrations, deploys the Worker, makes the tag, pushes, and makes the GitHub release. It stops if the branch is not `main`, if the working tree is not clean, or if the tag exists. The Apps Script files are not part of this procedure. Send them with `npm run push` when you change them.
+The merge starts the Release workflow. The workflow applies the database migrations, deploys the Worker, makes the tag, and makes the GitHub release. A merge that does not change the version does nothing. The Apps Script files are not part of this procedure. Send them with `npm run push` when you change them.
+
+The workflow needs two GitHub repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Give the token the permissions **Workers Scripts:Edit** and **D1:Edit**, and no more. The token can read all of the financial data, because it can deploy a Worker that is bound to the database. Protect the `main` branch.
 
 ### Database migration procedure
 
-Put each schema change in a new file in `worker/migrations/`, with a higher number. Do not change a file that was applied. Test with `npm run migrate:local`, then let `npm run release` apply it to the live database.
+Put each schema change in a new file in `worker/migrations/`, with a higher number. Do not change a file that was applied. Test with `npm run migrate:local`. The Release workflow applies it to the live database.
 
 ### How to recover the data
 
