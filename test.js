@@ -167,6 +167,18 @@ describe('Apps Script (vm)', () => {
       assert.deepStrictEqual(p[0], { symbol: 'VOO', price: 512.34, currency: 'USD', position: 2.5, pricedAt: '2026-08-22' });
     });
 
+    test('flexWhy keeps the evidence a failed poll would otherwise throw away', () => {
+      // ErrorCode present -> the code, so 1019 vs a real fault is readable.
+      assert.strictEqual(
+        jobs.flexWhy(200, '<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode>' +
+          '<ErrorMessage>Statement generation in progress.</ErrorMessage></FlexStatementResponse>'),
+        '200 1019 Statement generation in progress.');
+      // No ErrorCode (a block page) -> the status and stripped text, NOT a bare "not ready".
+      assert.strictEqual(jobs.flexWhy(403, '<html><body>  Access\n Denied </body></html>'),
+        '403 Access Denied');
+      assert.strictEqual(jobs.flexWhy(502, ''), '502 (empty body)');
+    });
+
     test('telegram undo payloads round-trip inside the 64-byte cap', () => {
       assert.deepStrictEqual(tg.undoIds(tg.undoData('tg-90210', [0, 2])), ['tg-90210-0', 'tg-90210-2']);
       const gm = tg.undoData('gm-198f2a3b4c5d6e7f', [0]);

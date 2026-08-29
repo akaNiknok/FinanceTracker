@@ -23,7 +23,7 @@ import { snapshotNetWorth } from './api.js';
 // REQUIRES a User-Agent header and answers 403 to a bare request.
 const FLEX_SEND = 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest';
 const FLEX_UA = { 'User-Agent': 'FinanceTracker/2.0 (personal finance tracker)' };
-const FLEX_TRIES = 6, FLEX_WAIT = 3000;
+const FLEX_TRIES = 8, FLEX_WAIT = 5000;   // ~35s budget; IBKR is slow some mornings
 
 const xmlTag = (xml, tag) => {
   const m = new RegExp('<' + tag + '>([^<]*)</' + tag + '>').exec(xml);
@@ -58,6 +58,12 @@ export function parsePositions(xml) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** One-line "what did IBKR actually say", for the failure message. */
+export const flexWhy = (status, body) => status + ' ' +
+  (xmlTag(body, 'ErrorCode')
+    ? xmlTag(body, 'ErrorCode') + ' ' + xmlTag(body, 'ErrorMessage')
+    : String(body).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) || '(empty body)');
+
 export async function pricesJob(env) {
   const t = env.IBKR_FLEX_TOKEN, q = env.IBKR_FLEX_QUERY_ID;
   if (!t || !q) return { skipped: 'IBKR_FLEX_TOKEN / IBKR_FLEX_QUERY_ID not set' };
@@ -71,16 +77,23 @@ export async function pricesJob(env) {
   // Poll: the statement is generated asynchronously and answers ErrorCode 1019
   // ("statement generation in progress") until it is ready. This is I/O wait, which
   // does not count against the CPU limit.
-  let xml = '';
+  let xml = '', last = '';
   for (let i = 0; i < FLEX_TRIES; i++) {
     if (i) await sleep(FLEX_WAIT);
-    xml = await (await fetch(url + '?q=' + encodeURIComponent(ref) + '&t=' + encodeURIComponent(t) + '&v=3',
-      { headers: FLEX_UA })).text();
+    const res = await fetch(url + '?q=' + encodeURIComponent(ref) + '&t=' + encodeURIComponent(t) + '&v=3',
+      { headers: FLEX_UA });
+    xml = await res.text();
     if (xml.indexOf('<FlexQueryResponse') !== -1) break;
     const code = xmlTag(xml, 'ErrorCode');
     if (code && code !== '1019') throw new Error('Flex GetStatement error ' + code + ': ' + xmlTag(xml, 'ErrorMessage'));
+    last = flexWhy(res.status, xml);
   }
-  if (xml.indexOf('<FlexQueryResponse') === -1) throw new Error('Flex statement not ready after ' + FLEX_TRIES + ' tries.');
+  // The body goes into the message: a poll that ends without <FlexQueryResponse> and
+  // without an ErrorCode is NOT necessarily "still generating" — a 403, a throttle page
+  // or an HTML error all look identical from here. Without the body there is nothing
+  // to diagnose the next morning.
+  if (xml.indexOf('<FlexQueryResponse') === -1)
+    throw new Error('Flex statement not ready after ' + FLEX_TRIES + ' tries. Last reply: ' + last);
 
   const positions = parsePositions(xml);
   if (!positions.length) return { written: 0, message: 'No open positions in the statement.' };
