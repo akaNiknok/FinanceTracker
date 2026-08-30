@@ -26,7 +26,7 @@ import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
   dataVersion, bumpStmt, toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
   monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, manilaYesterday, BASE_CURRENCY,
-  isInvestedNetWorth, isSharesAcct, NOT_SHARES_SRC
+  isInvestedNetWorth, isSharesAcct, NOT_SHARES_SRC, resolveAccount, resolveCategory
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
 
@@ -710,9 +710,9 @@ export async function createTransaction(args, env) {
   const r = await refs(env);
   if (!args.Category) throw new Error('Missing required field: Category');
   if (!args.Account) throw new Error('Missing required field: Account');
-  const cat = r.catByName[args.Category];
+  const cat = resolveCategory(r, args.Category);
   if (!cat) throw new Error('Unknown Category: ' + args.Category);
-  const acct = r.acctByName[args.Account];
+  const acct = resolveAccount(r, args.Account);
   if (!acct) throw new Error('Unknown Account: ' + args.Account);
   if (args.Amount === undefined || args.Amount === '' || isNaN(parseFloat(args.Amount)))
     throw new Error('Missing/invalid required field: Amount');
@@ -762,13 +762,15 @@ async function impliedRate(env, from, to, amount, toAmount, override) {
 export async function createTransfer(args, env) {
   const r = await refs(env);
   if (!args.Account || !args.ToAccount) throw new Error('Transfer needs both Account and ToAccount.');
-  const acct = r.acctByName[args.Account];
+  const acct = resolveAccount(r, args.Account);
   if (!acct) throw new Error('Unknown Account: ' + args.Account);
-  const to = r.acctByName[args.ToAccount];
+  const to = resolveAccount(r, args.ToAccount);
   if (!to) throw new Error('Unknown ToAccount: ' + args.ToAccount);
-  if (args.Account === args.ToAccount) throw new Error('Account and ToAccount must differ.');
+  // Compare the RESOLVED rows, not the strings: "maribank" and "MariBank" name one
+  // account, and a self-transfer would otherwise slip through as two different names.
+  if (acct.id === to.id) throw new Error('Account and ToAccount must differ.');
   if (!args.Category) throw new Error('Transfer needs a Category (Transfer type).');
-  const cat = r.catByName[args.Category];
+  const cat = resolveCategory(r, args.Category);
   if (!cat) throw new Error('Unknown Category: ' + args.Category);
   assertShape(cat.type, true);
   if (args.Amount === undefined || isNaN(parseFloat(args.Amount)))
@@ -803,13 +805,20 @@ export async function updateTransaction(args, env) {
   const cur = await txById(env, r, args.ID);
   if (!cur) throw new Error('No transaction with ID: ' + args.ID);
 
-  if (args.Category !== undefined && !r.catByName[args.Category]) throw new Error('Unknown Category: ' + args.Category);
-  if (args.Account !== undefined && !r.acctByName[args.Account]) throw new Error('Unknown Account: ' + args.Account);
-  if (args.ToAccount !== undefined && args.ToAccount !== '' && !r.acctByName[args.ToAccount])
+  const nCat = args.Category === undefined ? null : resolveCategory(r, args.Category);
+  const nAcct = args.Account === undefined ? null : resolveAccount(r, args.Account);
+  const nTo = (args.ToAccount === undefined || args.ToAccount === '') ? null : resolveAccount(r, args.ToAccount);
+  if (args.Category !== undefined && !nCat) throw new Error('Unknown Category: ' + args.Category);
+  if (args.Account !== undefined && !nAcct) throw new Error('Unknown Account: ' + args.Account);
+  if (args.ToAccount !== undefined && args.ToAccount !== '' && !nTo)
     throw new Error('Unknown ToAccount: ' + args.ToAccount);
 
   const patch = {};
   TX_CLIENT_FIELDS.forEach((f) => { if (args[f] !== undefined) patch[f] = args[f]; });
+  // Canonical names from here down — every lookup below indexes the exact-name maps.
+  if (nCat) patch.Category = nCat.name;
+  if (nAcct) patch.Account = nAcct.name;
+  if (nTo) patch.ToAccount = nTo.name;
   if (!Object.keys(patch).length) throw new Error('Nothing to update.');
 
   if (patch.Amount !== undefined) assertNonZero('Amount', patch.Amount);
@@ -864,13 +873,20 @@ export async function bulkUpdateTransactions(args, env) {
   const patch = args.patch || {};
   if (!ids.length) throw new Error('bulkUpdate requires a non-empty ids[].');
   const r = await refs(env);
-  if (patch.Category !== undefined && !r.catByName[patch.Category]) throw new Error('Unknown Category: ' + patch.Category);
-  if (patch.Account !== undefined && !r.acctByName[patch.Account]) throw new Error('Unknown Account: ' + patch.Account);
-  if (patch.ToAccount !== undefined && patch.ToAccount !== '' && !r.acctByName[patch.ToAccount])
+  const nCat = patch.Category === undefined ? null : resolveCategory(r, patch.Category);
+  const nAcct = patch.Account === undefined ? null : resolveAccount(r, patch.Account);
+  const nTo = (patch.ToAccount === undefined || patch.ToAccount === '') ? null : resolveAccount(r, patch.ToAccount);
+  if (patch.Category !== undefined && !nCat) throw new Error('Unknown Category: ' + patch.Category);
+  if (patch.Account !== undefined && !nAcct) throw new Error('Unknown Account: ' + patch.Account);
+  if (patch.ToAccount !== undefined && patch.ToAccount !== '' && !nTo)
     throw new Error('Unknown ToAccount: ' + patch.ToAccount);
 
   const p = {};
   TX_CLIENT_FIELDS.forEach((f) => { if (patch[f] !== undefined) p[f] = patch[f]; });
+  // Canonical names from here down — every lookup below indexes the exact-name maps.
+  if (nCat) p.Category = nCat.name;
+  if (nAcct) p.Account = nAcct.name;
+  if (nTo) p.ToAccount = nTo.name;
   if (!Object.keys(p).length) throw new Error('Nothing to update.');
 
   if (p.Amount !== undefined) assertNonZero('Amount', p.Amount);
@@ -963,12 +979,16 @@ export async function updateAccount(args, env) {
     set.push(col + ' = ?'); bind.push(v);
   });
   if (!set.length) throw new Error('No editable fields supplied. Editable: ' + Object.keys(ACCOUNT_EDITABLE).join(', '));
+  // Resolve the target first: the UPDATE matches on the exact name, so a case slip would
+  // otherwise report "Unknown Account" for an account that is right there.
+  const target = resolveAccount(await refs(env), args.Name);
+  if (!target) throw new Error('Unknown Account: ' + args.Name);
   const [res] = await env.DB.batch([
-    env.DB.prepare('UPDATE accounts SET ' + set.join(', ') + ' WHERE name = ?').bind(...bind, args.Name),
+    env.DB.prepare('UPDATE accounts SET ' + set.join(', ') + ' WHERE id = ?').bind(...bind, target.id),
     bumpStmt(env)
   ]);
   if (!res.meta.changes) throw new Error('Unknown Account: ' + args.Name);
-  return { status: 'success', message: 'Account updated.', name: args.Name, fieldsWritten: set.length };
+  return { status: 'success', message: 'Account updated.', name: target.name, fieldsWritten: set.length };
 }
 
 // ── admin grid + export ──────────────────────────────────────────────────────
