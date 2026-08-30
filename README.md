@@ -206,7 +206,15 @@ Staging is separate in every way that matters. It has its own database. It has n
 cd worker && npx wrangler secret put APP_PASS --env staging
 ```
 
-The database starts empty. To fill it, open the Staging workflow on GitHub, select **Run workflow**, and set **reseed** to true. The seed is `worker/seed.sql`, which holds invented data. A normal push never reseeds, so your test data stays while you work.
+The database starts empty. Fill it from your computer:
+
+```bash
+npm run seed:staging
+```
+
+The seed is `worker/seed.sql`, which holds invented data. A normal push never reseeds, so your test data stays while you work. Use the same command again for a clean database.
+
+The Staging workflow can also do it: select **Run workflow**, then set **reseed** to true. **GitHub shows that button only when the workflow file is on the default branch.** So the button appears after the next release moves `staging.yml` into `main`. Until then, use the command above.
 
 **Do not copy the real data into staging.** A second copy doubles the damage if a person learns the passphrase.
 
