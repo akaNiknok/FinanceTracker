@@ -1414,11 +1414,19 @@ function renderAccounts(){
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Accounts'));
 
+    // Same split as netWorthTotals() in api.js: a NEGATIVE receivable is money the
+    // owner owes, so it counts as a liability, not an asset worth less. Tiles show
+    // liabilities positive, so a negative net worth adds its absolute value here.
     var assets=0,liab=0;
-    accs.forEach(function(a){ if(a.isLiability)liab+=(a.balancePhp||0); else assets+=(a.netWorthPhp||0); });
+    accs.forEach(function(a){
+      var nw=a.netWorthPhp||0;
+      if(a.isLiability) liab+=(a.balancePhp||0);
+      else if(nw<0 && /receivable/i.test(a.subtype||'')) liab-=nw;
+      else assets+=nw;
+    });
     var top=el('div','grid grid-2');
     top.appendChild(tile('Total assets', money(assets,true), accs.length+' accounts tracked'));
-    top.appendChild(tile('Total liabilities', money(liab,true), 'owed across credit lines'));
+    top.appendChild(tile('Total liabilities', money(liab,true), 'credit lines and money owed back'));
     w.appendChild(top);
 
     // group by type
