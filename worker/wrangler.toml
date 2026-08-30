@@ -77,7 +77,7 @@ binding = "DB"
 database_name = "financetracker-staging"
 # npx wrangler d1 create financetracker-staging --location=apac  -> paste the id here.
 # The zero id below is a placeholder: the first staging deploy fails until it is real.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "d490a74a-1b5a-425a-9635-1e0011b03fb4"
 migrations_dir = "migrations"
 
 # An empty list is how one environment cancels an inherited schedule.
