@@ -15,6 +15,7 @@
     "migrate:local": "cd worker && npx wrangler d1 migrations apply financetracker --local",
     "tail": "cd worker && npx wrangler tail",
     "tail:staging": "cd worker && npx wrangler tail --env staging",
+    "seed:staging": "cd worker && npx wrangler d1 execute financetracker-staging --env staging --remote --file=./seed.sql",
     "login": "clasp login",
     "push": "clasp push",
     "pull": "clasp pull",
