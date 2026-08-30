@@ -42,7 +42,7 @@ Owner holds a **BS in Management Information Systems**. Bridge IT and strategy: 
 
 ## Git workflow (gitflow + releases)
 - **`main`** = released/live code only. **`develop`** = integration branch; day-to-day commits and merges land here.
-- **Features:** `feature/<name>` off `develop`, merge back to `develop`.
+- **Features:** `feature/<name>` off `develop`, merge back to `develop`. **Create it with `git switch -c feature/<name> --no-track origin/develop`.** `git checkout -b <name> origin/develop` sets the UPSTREAM to `origin/develop`, so a bare `git push` from that branch lands straight on `develop` and there is then no branch to open a PR from (this happened on 2026-08-30). With `--no-track` the branch has no upstream and a bare push refuses until you name one.
 - **Release: a merge into `main` is the ONLY way code reaches live.** `.github/workflows/release.yml` runs on that merge — `npm test`, D1 migrations, `wrangler deploy`, tag `v<package.json version>`, GitHub Release, in that order (new code must never meet an old schema). A push to `main` whose version is already tagged does nothing, so the hotfix flow reaches live on the bump commit. **No credential is needed locally any more**; the Cloudflare token lives in GitHub repo secrets.
 - **Preparing a release:** bump on `develop` (`npm version patch|minor --no-git-tag-version`, commit). **`stamp-version.js` now writes `index.html`'s `brand-ver` span for you** and stages it — do not hand-edit it. Then `npm run release`, which **does not release** — it checks the bump, runs the tests and opens the `develop` → `main` PR. Merging that PR ships.
 - **Hotfix:** `hotfix/<name>` off `main` → merge to `main`, bump patch. The workflow releases on the bump commit.
