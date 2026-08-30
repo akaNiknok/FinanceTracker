@@ -599,6 +599,101 @@ function d1(db) {
     });
   });
 
+  await describe('Investments: sell legs, cost basis, the net-worth bridge', () => {
+    // A dedicated ticker, funded only from Wise, so the native (USD) figures are
+    // unambiguous. The fixture's IBKR is funded from both Maya and Wise on purpose
+    // elsewhere, which is the mixed-currency case asserted at the end.
+    test('a sell leg reports as a trade and never as pesos', async () => {
+      sqlite.exec("INSERT INTO accounts (id,name,currency,subtype,symbol,starting_balance_u) " +
+        "VALUES (7,'ACME','Shares','Shares','ACME',0);" +
+        "INSERT INTO prices (symbol,priced_at,price,currency) VALUES ('ACME','2026-08-22',120,'USD');");
+      // Two lots: $100 for 2 shares, then $140 for 2 more. Average cost $60.
+      await api.createTransfer({ ID: 'ac-b1', Date: '2026-05-05', Category: 'Investment: Growth',
+                                 Account: 'Wise', ToAccount: 'ACME', Amount: 100, ToAmount: 2 }, env);
+      await api.createTransfer({ ID: 'ac-b2', Date: '2026-05-06', Category: 'Investment: Growth',
+                                 Account: 'Wise', ToAccount: 'ACME', Amount: 140, ToAmount: 2 }, env);
+      // The sell: OUT of the ticker. Amount is the QUANTITY, ToAmount the money.
+      await api.createTransfer({ ID: 'ac-s1', Date: '2026-06-10', Category: 'Investment: Growth',
+                                 Account: 'ACME', ToAccount: 'Wise', Amount: 2, ToAmount: 150 }, env);
+      // This is the trap the whole exclusion exists for: the row's own amount_php_u is
+      // a share count read as pesos, because SHARES gets no rate.
+      const raw = sqlite.prepare("SELECT fx_rate, amount_php_u FROM transactions WHERE id='ac-s1'").get();
+      assert.strictEqual(raw.fx_rate, null);
+      assert.strictEqual(raw.amount_php_u, 2000000, '2 shares look like 2 pesos to the generated column');
+
+      // Growth is a Quarterly USD budget, and Q2 is Apr-Jun: x3 ($100) + the two lots
+      // ($240). The sale contributes NOTHING — not its 150 dollars, not its 2 "pesos".
+      const g = Object.fromEntries((await api.getBudgets({ month: '2026-Jun' }, env))
+        .budgets.map((x) => [x.segment, x])).Growth;
+      assert.strictEqual(g.actualNative, 340, 'a quantity leaked into the budget');
+      assert.strictEqual(g.actualPhp, 340 * 50);
+
+      // The row the bot's querySummary has to skip: shaped Currency 'Shares', with a
+      // peso figure that is really a share count. (The skip itself is in test.js.)
+      const sold = (await api.listTransactions({ account: 'ACME' }, env)).transactions
+        .find((x) => x.ID === 'ac-s1');
+      assert.strictEqual(sold.Currency, 'Shares');
+      assert.strictEqual(sold['Amount (PHP)'], 2);
+    });
+
+    test('cost basis: a sale takes cost out at the average, not off the top', async () => {
+      const inv = await api.getInvestments({}, env);
+      const p = inv.positions.find((x) => x.name === 'ACME');
+      // 4 shares in for $240, half sold: 2 left, $120 of cost, average cost unmoved.
+      assert.strictEqual(p.quantity, 2);
+      assert.strictEqual(p.avgCostNative, 60);
+      assert.strictEqual(p.costCurrency, 'USD');
+      // House money: $240 in, $150 back out.
+      assert.strictEqual(p.investedNative, 90);
+      // The peso pool is historical cost at the stamped rate (50), halved by the sale.
+      assert.strictEqual(p.costPhp, 6000);
+      assert.strictEqual(p.valuePhp, 2 * 120 * 50);
+      assert.strictEqual(p.gainPhp, 6000);
+      assert.strictEqual(p.gainPct, 100);
+      assert.strictEqual(inv.totalGainPhp, dbm.q2(inv.totalValuePhp - inv.totalCostPhp));
+
+      // The pulse carries the sale as its own side and nets the quarter's dollars.
+      const q2q = inv.pulse.quarters.find((x) => x.quarter === '2026-Q2');
+      const sell = q2q.buys.find((b) => b.symbol === 'ACME' && b.side === 'sell');
+      assert.strictEqual(sell.amount, 150, 'the MONEY side, not the quantity');
+      assert.strictEqual(sell.quantity, 2);
+      assert.strictEqual(q2q.totalUsd, 100 + 240 - 150, 'a sale is negative flow');
+
+      // IBKR is funded from pesos AND dollars, so no native figure can be true.
+      const ibkr = inv.positions.find((x) => x.name === 'IBKR');
+      assert.strictEqual(ibkr.avgCostNative, null);
+      assert.strictEqual(ibkr.costCurrency, null);
+      assert.ok(ibkr.costPhp > 0, 'the peso pool still works — every buy leg has a rate');
+    });
+
+    test('the net-worth bridge splits a month into savings and everything else', async () => {
+      sqlite.exec("INSERT INTO nw_snapshots (month,net_worth_u,assets_u,liabilities_u,shares_u,taken_at) VALUES " +
+        "('2026-May',100000000000,100000000000,0,0,'2026-06-01T00:00:00Z')," +
+        "('2026-Jun',150000000000,150000000000,0,0,'2026-07-01T00:00:00Z');");
+      const d = await api.getDashboard({ month: '2026-Jun' }, env);
+      const jun = d.cashflow.find((x) => x.month === '2026-Jun');
+      assert.strictEqual(d.bridge.from, '2026-May');
+      assert.strictEqual(d.bridge.live, false);
+      assert.strictEqual(d.bridge.deltaNetWorth, 50000);
+      assert.strictEqual(d.bridge.savings, jun.income - jun.expense);
+      assert.strictEqual(d.bridge.residual, dbm.q2(50000 - d.bridge.savings),
+                         'market, FX and timing is whatever the ledger did not explain');
+
+      // The live month bridges the last snapshot to live net worth instead.
+      const now = dbm.parseMonthKey(dbm.manilaMonth());
+      const prev = dbm.shiftMonth(now.y, now.m, -1);
+      sqlite.exec("INSERT OR REPLACE INTO nw_snapshots (month,net_worth_u,assets_u,liabilities_u,shares_u,taken_at) " +
+        "VALUES ('" + dbm.monthKey(prev.y, prev.m) + "',1000000,1000000,0,0,'2026-01-01T00:00:00Z')");
+      const live = await api.getDashboard({}, env);
+      assert.strictEqual(live.bridge.live, true);
+      assert.strictEqual(live.bridge.endNetWorth, live.netWorth);
+      assert.strictEqual(live.bridge.startNetWorth, 1);
+
+      // No predecessor snapshot, no bridge: history only accrues forward.
+      assert.strictEqual((await api.getDashboard({ month: '2025-Feb' }, env)).bridge, null);
+    });
+  });
+
   await describe('HTTP layer', () => {
     test('/api is closed without a credential and open with either one', async () => {
       assert.strictEqual((await call('/api?action=getDataVersion')).status, 401);

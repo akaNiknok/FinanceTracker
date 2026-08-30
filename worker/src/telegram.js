@@ -265,12 +265,17 @@ export function tgMonthKey(s) {
  * ABSOLUTE, and stay that way while the reports went sign-aware: this answers "how much
  * moved through this", so a refund is movement too, and a mixed Income+Expense filter
  * would otherwise net to a meaningless figure.
+ *
+ * A row on a SHARES account is skipped from the sum: its Amount is a share quantity, so
+ * its 'Amount (PHP)' is a share count read as pesos. It still shows in the list and the
+ * count — it happened — it just cannot be added to money.
  */
 export function querySummary(rows, total) {
   rows = rows || [];
   const n = (total === undefined) ? rows.length : total;
   if (!n) return 'No matching transactions.';
-  const sum = rows.reduce((s, r) => s + Math.abs(Number(r['Amount (PHP)']) || 0), 0);
+  const sum = rows.reduce((s, r) => String(r.Currency).toUpperCase() === 'SHARES'
+    ? s : s + Math.abs(Number(r['Amount (PHP)']) || 0), 0);
   const lines = rows.slice(0, 5).map((r) =>
     '› _' + String(r.Date).slice(0, 10) + '_ ' + r.Category +
     (r.Description ? ' — ' + r.Description : '') + ' `' + php(r['Amount (PHP)']) + '`');
