@@ -48,6 +48,10 @@ jobs:
     needs: check
     if: needs.check.outputs.release == 'true'
     runs-on: ubuntu-latest
+    # The GitHub environment is kept for the Deployments log, NOT as a gate: its
+    # protection rules were removed on purpose (2026-08-30). Approving the
+    # develop -> main PR is the approval; a second click here approved nothing new.
+    # Do not add required reviewers back unless you want that click again.
     environment: production
     env:
       TAG: ${{ needs.check.outputs.tag }}
@@ -105,3 +109,20 @@ jobs:
           fi
           printf '## What'"'"'s Changed\n%s\n\n%s\n' "$LOG" "$LINK" \
             | gh release create "$TAG" --title "$TAG" --notes-file -
+
+  # A merge into main leaves develop behind by the merge commit (or, in the hotfix
+  # flow, by the bump commit). develop is an ancestor of main in both cases, so this
+  # is a fast-forward. It runs on every push to main, released or not, and is
+  # deliberately independent of the release job: develop must catch up even when the
+  # deploy fails. A diverged develop fails the job instead of forcing anything.
+  backmerge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Fast-forward develop to main
+        run: |
+          if git push origin HEAD:develop; then exit 0; fi
+          echo "::error::develop has diverged from main. Merge main into develop by hand."
+          exit 1
