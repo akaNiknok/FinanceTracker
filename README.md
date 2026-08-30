@@ -187,6 +187,7 @@ Cloudflare does not do a job again after a failure. Thus each job sends a Telegr
 npm run bootstrap        # make a fresh clone or a new worktree runnable
 npm test                 # tests, no account necessary
 npm run dev              # operate the app, the API and the bot locally
+npm run dev:seed         # fill the local database with invented data
 npm run migrate          # apply the pending database migrations
 npm run tail             # read the live Worker log
 npm run push             # send the two files to Apps Script
@@ -194,18 +195,30 @@ npm run push             # send the two files to Apps Script
 
 ### Release procedure
 
-1. Do the work on `develop`, or on a `feature/*` branch.
-2. Increase the version number in `package.json`. Put the same number in the `brand-ver` span of `worker/public/index.html`. Commit both.
+1. Do the work on a `feature/*` branch. Merge the branch into `develop` with a pull request.
+2. Run `npm version patch` or `npm version minor` on `develop`. The command also writes the number into `worker/public/index.html`. Commit the result.
 3. Run `npm run release`. The command tests the code, then opens the pull request from `develop` to `main`. It does not deploy.
-4. Merge the pull request on GitHub.
+4. Wait for the CI check. Then merge the pull request on GitHub.
+
+The CI workflow tests each pull request and each push to `develop`. The `main` branch accepts only a pull request with a green check. Nobody approves the release a second time: your merge is the approval. After the merge, the Release workflow moves `develop` forward to `main` again. You can also set auto-merge on the pull request. GitHub then merges it when the check becomes green, and the release starts without you.
 
 The merge starts the Release workflow. The workflow applies the database migrations, deploys the Worker, makes the tag, and makes the GitHub release. A merge that does not change the version does nothing. The Apps Script files are not part of this procedure. Send them with `npm run push` when you change them.
 
-The workflow needs two GitHub repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Give the token the permissions **Workers Scripts:Edit** and **D1:Edit**, and no more. The token can read all of the financial data, because it can deploy a Worker that is bound to the database. Protect the `main` branch.
+The workflow needs two GitHub repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Give the token the permissions **Workers Scripts:Edit** and **D1:Edit**, and no more. The token can read all of the financial data, because it can deploy a Worker that is bound to the database. The `main` branch is protected: it accepts only a pull request, and the CI check must pass.
 
 ### Database migration procedure
 
 Put each schema change in a new file in `worker/migrations/`, with a higher number. Do not change a file that was applied. Test with `npm run migrate:local`. The Release workflow applies it to the live database.
+
+### How to undo a release
+
+The code and the database do not go back together. Undo the code first.
+
+1. Read the list of versions: `npx wrangler versions list`.
+2. Put the last good version back: `npx wrangler rollback`.
+3. Tell the repository what you did. Open an issue, or make the fix on a `hotfix/*` branch.
+
+**A migration does not go back.** `npx wrangler d1 migrations apply` moves forward only. So an old Worker must still operate with the new schema. Never put a migration that removes or renames a column in the same release as the code that needs the change. Use two releases: the first adds, the second removes. If a migration destroys data, use D1 Time Travel below.
 
 ### How to recover the data
 
@@ -221,6 +234,7 @@ Put each schema change in a new file in `worker/migrations/`, with a higher numb
 | The error "Wrong response from the webhook: 302". | The webhook address. It must be the Worker address, and it must end with `/tg`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |
 | The job does not record the emails. | The Gmail filter. Then the property `GMAIL_QUERY`, which replaces the label. Then the trigger, because Apps Script can disable it. Then the property `WORKER_URL` and the two `INGEST_TOKEN` values. |
+| The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
 | The app asks for the passphrase frequently. | A person changed `APP_PASS`, or the cookie is more than one year old. |
 | The app starts, but each request fails. | `npm run tail`. Usually the D1 binding or a secret is absent. |
 | The share values are 0 or absent. | The Telegram message from the price job. Then the IBKR token, because it expires. Then the `symbol` column of the account on the Admin screen. |

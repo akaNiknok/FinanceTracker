@@ -98,6 +98,26 @@ function d1(db) {
     INSERT INTO prices (symbol,priced_at,price,currency) VALUES ('VOO','2026-08-22',500,'USD');
   `);
 
+  // The local-dev fixture. It is not test data — an agent opens the SPA on it — but it
+  // has to keep matching the schema, and only a real database can say whether it does.
+  await test('seed.sql applies to the real schema, is re-runnable, and dates itself to today', () => {
+    const fresh = new DatabaseSync(':memory:');
+    const dir = path.join(__dirname, 'worker', 'migrations');
+    fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+      .forEach((f) => fresh.exec(fs.readFileSync(path.join(dir, f), 'utf8')));
+    const seed = fs.readFileSync(path.join(__dirname, 'worker', 'seed.sql'), 'utf8');
+    fresh.exec(seed);
+    fresh.exec(seed);   // DELETE-first, so `npm run dev:seed` twice is not a PK collision
+    const one = (sql) => fresh.prepare(sql).get();
+    assert.ok(one('SELECT COUNT(*) n FROM transactions').n > 40, 'seed has too few transactions to fill a screen');
+    assert.strictEqual(one('SELECT COUNT(DISTINCT month) n FROM transactions').n, 3, 'seed should span three months');
+    // Relative dates: the app must open on a populated month, and never show the future.
+    assert.strictEqual(one("SELECT COUNT(*) n FROM transactions WHERE date > date('now')").n, 0);
+    assert.ok(one("SELECT MAX(date) d FROM transactions").d >= one("SELECT date('now','start of month') d").d,
+      'no seeded row lands in the current month — the relative-date expression stopped working');
+    assert.strictEqual(one('SELECT COUNT(*) n FROM ledger_view WHERE tx_deleted').n, 1, 'seed must keep one orphan ledger row');
+  });
+
   await describe('Writes', () => {
     test('createTransaction: stores, derives, and shapes the reply', async () => {
       const r = await api.createTransaction(
@@ -701,6 +721,19 @@ function d1(db) {
       assert.strictEqual((await call('/api?action=getDataVersion', { headers: cookie })).body.status, 'success');
       const bearer = { Authorization: 'Bearer tok' };
       assert.strictEqual((await call('/api?action=getExportAll', { headers: bearer })).body.status, 'success');
+    });
+
+    test('a wrangler dev host is open; a deployed host is not', async () => {
+      // The passphrase guards the deployed app. Locally it only blocked the agents and
+      // the fresh checkouts that have no worker/.dev.vars, and Cloudflare cannot route
+      // a production request to Host: localhost.
+      const local = await worker.fetch(new Request('http://localhost:8123/api?action=getDataVersion'), wenv, ctx);
+      assert.strictEqual(local.status, 200);
+      assert.strictEqual((await local.json()).status, 'success');
+      // ...and with no APP_PASS set at all, which is exactly what a fresh checkout has.
+      const bare = await worker.fetch(new Request('http://127.0.0.1/api?action=getDataVersion'), env, ctx);
+      assert.strictEqual((await bare.json()).status, 'success');
+      assert.strictEqual((await call('/api?action=getDataVersion')).status, 401);
     });
 
     test('/api enforces the GET/POST split and answers errors as JSON 200', async () => {

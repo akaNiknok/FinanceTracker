@@ -1,0 +1,33 @@
+name: CI
+
+# The gate that was missing. Before this, `npm test` ran only in the local push hook
+# (which no cloud session and no browser-merged PR passes through) and in the release
+# job, by which point the code is already on main and deploying. Now every pull request
+# and every push to develop is checked before it can reach that point.
+#
+# One job on purpose. `npm test` already applies every migration AND worker/seed.sql to
+# a real SQLite database (test-api.js), so a separate `wrangler d1 migrations apply
+# --local` step would download wrangler to re-prove what the tests just proved.
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+# A second push to the same branch makes the first run irrelevant. The release
+# workflow deliberately does NOT do this — a deploy must never be cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test

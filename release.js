@@ -38,7 +38,7 @@ if (existing) {
   const prev = out('git describe --tags --abbrev=0');
   const log = out(`git log --no-merges --invert-grep --grep="^Bump version" --format="* %s" ${prev}..HEAD`);
   run(`gh pr create --base main --head develop --title "Release ${tag}" --body-file -`, {
-    input: `Releases \`${tag}\`.\n\n## What's Changed\n${log}\n\n---\nMerging this runs the Release workflow: D1 migrations, \`wrangler deploy\`, the tag and the GitHub Release.\n`,
+    input: `Releases \`${tag}\`.\n\n## What's Changed\n${log}\n`,
     stdio: ['pipe', 'inherit', 'inherit'],
   });
 }
