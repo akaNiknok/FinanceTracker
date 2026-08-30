@@ -166,6 +166,16 @@ export async function latestPrices(env) {
 
 export const isSharesAcct = (a) =>
   String(a.currency).toUpperCase() === 'SHARES' || /share|stock/i.test(String(a.subtype || ''));
+/**
+ * SQL predicate over an `accounts a` join: the SOURCE account is NOT share-priced.
+ * On such an account `amount_u` is a QUANTITY, so the generated `amount_php_u` is
+ * a share count read as pesos (a sell leg gets no fx_rate — SHARES short-circuits
+ * resolveRate). Any peso aggregate that can see a Transfer must carry this, or one
+ * sale of 30 shares reports as 30 pesos of spending. Mirrors isSharesAcct().
+ */
+export const NOT_SHARES_SRC =
+  "(UPPER(COALESCE(a.currency,'')) != 'SHARES' AND COALESCE(a.subtype,'') NOT LIKE '%share%' " +
+  "AND COALESCE(a.subtype,'') NOT LIKE '%stock%')";
 /** "Counts as an investment" — drives the Holdings card. Broad: any share-priced
  * account is a position you hold and price, even one parked as near-cash. */
 export const isInvestmentAcct = (a) =>

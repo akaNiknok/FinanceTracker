@@ -1,6 +1,6 @@
 {
   "name": "financetracker",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Personal finance tracker: Cloudflare Worker + D1, a PWA, and a Telegram bot",
   "private": true,
   "scripts": {

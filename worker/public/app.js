@@ -225,7 +225,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 7;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 8;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -301,6 +301,9 @@ function num(n){return n==null?'—':Number(n).toLocaleString('en-PH',{maximumFr
 // not loaded yet — the re-render after boot lands fills it in.
 function usdOf(php){var r=S.boot&&S.boot.fxUsdPhp;return (php==null||!r)?'':moneyCur(php/r,'USD');}
 function pct(n){return n==null?'—':(Math.round(n*10)/10)+'%';}
+/* Signed variants: a gain reads '+' explicitly, so the sign is text and not only color. */
+function signedMoney(n){return n==null?'—':((n>0?'+':'')+money(n,true));}
+function signedPct(n){return n==null||!isFinite(n)?'—':((n>0?'+':'')+pct(n));}
 
 /* ── account color helpers (color-coding across screens) ─────────────────── */
 function isHex6(c){return !!c && /^#[0-9a-fA-F]{6}$/.test(c);}
@@ -988,6 +991,29 @@ function renderDashboard(){
         if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, liq));
       });
     }
+    // ── net-worth bridge: what moved net worth, and how much of it the ledger
+    // explains. Savings is income − expense for the month; the residual is market,
+    // FX and timing — and a residual that keeps running negative is spending nobody
+    // logged. Absent for a month whose predecessor has no snapshot yet. ──
+    if(d.bridge){
+      var br=d.bridge, brc=el('div','card');
+      brc.appendChild(el('div','card-h','Net worth bridge · '+esc(br.from)+' → '+
+        esc(br.month)+(br.live?' (live)':'')));
+      var rows=[['Net worth change',br.deltaNetWorth,'from '+money(br.startNetWorth,true)+' to '+money(br.endNetWorth,true)],
+                ['Saved',br.savings,'income − expense this month'],
+                ['Market, FX & timing',br.residual,'everything the ledger does not explain']];
+      var bl=el('div','list');
+      rows.forEach(function(x){
+        var r=el('div','litem');
+        r.innerHTML='<div class="grow"><div class="t1">'+esc(x[0])+'</div>'+
+          '<div class="t2">'+esc(x[2])+'</div></div>'+
+          '<div class="amt '+(x[1]>=0?'pos':'neg')+'">'+signedMoney(x[1])+'</div>';
+        bl.appendChild(r);
+      });
+      brc.appendChild(bl);
+      w.appendChild(brc);
+    }
+
     if(liq){
       var nc=el('div','card');
       nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last 6 months'));
@@ -1434,6 +1460,17 @@ function loadInvestments(){
     var tot=usdOf(inv.totalValuePhp);
     h.appendChild(ttl); h.appendChild(el('div','dim mono',money(inv.totalValuePhp)+(tot?' · '+tot:'')));
     card.appendChild(h);
+    // Unrealized gain against historical cost: what the buy legs cost in pesos on the
+    // day they were paid, versus what the positions are worth now. It carries market
+    // AND currency movement, which is right for a peso-denominated owner.
+    if(inv.totalCostPhp){
+      var gsev=inv.totalGainPhp>=0?'pos':'neg';
+      var gr=el('div','row-between'); gr.style.cssText='margin:-6px 0 10px;font-size:12px';
+      gr.innerHTML='<span class="dim">cost '+money(inv.totalCostPhp,true)+'</span>'+
+        '<span class="'+gsev+'" style="font-weight:600">'+signedMoney(inv.totalGainPhp)+
+        ' · '+signedPct(100*inv.totalGainPhp/inv.totalCostPhp)+'</span>';
+      card.appendChild(gr);
+    }
 
     // Color follows the entity: the account's own color when set, else a stable
     // slot from the validated fallback palette (assigned by name, not by rank).
@@ -1454,11 +1491,17 @@ function loadInvestments(){
       var r=el('div','litem');
       var q=p.quantity!=null?(num(p.quantity)+' · '):'';
       var pc=posColor(p);
+      // Average cost is the entry price a sale does NOT move (average-cost method), so
+      // it stays comparable to the live quote. The gain beside the value is peso gain
+      // against historical cost; it is text as well as color.
+      var cost=p.avgCostNative!=null?(' · avg '+moneyCur(p.avgCostNative,p.costCurrency)):'';
+      var gain=p.gainPhp==null?'':('<span class="amt-sub '+(p.gainPhp>=0?'pos':'neg')+'">'+
+        signedMoney(p.gainPhp)+(p.gainPct==null?'':' · '+signedPct(p.gainPct))+'</span>');
       r.innerHTML='<div class="ic" style="color:'+pc+';background:'+pc+'22">▲</div>'+
         '<div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
-        '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of portfolio</div></div>'+
+        '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of portfolio'+esc(cost)+'</div></div>'+
         '<div class="amt">'+money(p.valuePhp)+
-        (usdOf(p.valuePhp)?'<span class="amt-sub">'+usdOf(p.valuePhp)+'</span>':'')+'</div>';
+        (gain||(usdOf(p.valuePhp)?'<span class="amt-sub">'+usdOf(p.valuePhp)+'</span>':''))+'</div>';
       l.appendChild(r);
     });
     card.appendChild(l); host.appendChild(card);
@@ -1484,22 +1527,30 @@ function loadInvestments(){
           '<div class="mono" style="font-weight:700">'+right+'</div></div>';
         return w;
       }
+      var track='height:14px;border-radius:4px;margin-top:6px;border:1px dashed var(--warn);opacity:.6';
       if(!qs.length||qs[0].quarter!==pl.currentQuarter){
         var w0=qrow(qlabel(pl.currentQuarter),'<span class="warn" style="font-size:12px;font-weight:600">not invested yet</span>');
-        var tr=el('div'); tr.style.cssText='height:14px;border-radius:4px;margin-top:6px;border:1px dashed var(--warn);opacity:.6';
+        var tr=el('div'); tr.style.cssText=track;
         w0.appendChild(tr);
         qhost.appendChild(w0);
       }
       qs.forEach(function(q){
-        // merge buys per ticker (a quarter can buy the same one twice)
-        var order=[],agg={};
+        // merge buys per ticker (a quarter can buy the same one twice). Sells are held
+        // apart: they already NET the quarter's total server-side, and a bar drawn from
+        // a mixed sum would size a segment by money that left again.
+        var order=[],agg={},sells=[];
         q.buys.forEach(function(b){
+          if(b.side==='sell'){ sells.push(b); return; }
           if(!agg[b.symbol]){agg[b.symbol]={symbol:b.symbol,currency:b.currency,amount:0,quantity:0};order.push(b.symbol);}
           agg[b.symbol].amount+=b.amount||0; agg[b.symbol].quantity+=b.quantity||0;
         });
         var w=qrow(qlabel(q.quarter),moneyCur(q.totalUsd,'USD'));
+        // A quarter whose only activity was a sale has still parked nothing, so it gets
+        // the same dashed empty track as a quarter with no activity at all: the bar
+        // measures money going IN, and there is none to size it with.
         var bar=el('div');
-        bar.style.cssText='display:flex;gap:2px;height:14px;margin-top:6px;width:'+
+        if(!order.length){ bar.style.cssText=track; }
+        else bar.style.cssText='display:flex;gap:2px;height:14px;margin-top:6px;width:'+
           Math.max(6,Math.round(100*(q.totalUsd||0)/maxT))+'%';
         order.forEach(function(sym){
           var b=agg[sym], seg=el('div');
@@ -1512,6 +1563,12 @@ function loadInvestments(){
         var dl=el('div','',det);
         dl.style.cssText='font-size:12px;color:var(--text-faint);margin-top:4px';
         w.appendChild(dl);
+        if(sells.length){
+          var sl=el('div','neg','sold · '+sells.map(function(b){
+            return b.symbol+' '+moneyCur(b.amount,b.currency)+' ('+num(b.quantity)+' sh)';}).join(' · '));
+          sl.style.cssText='font-size:12px;margin-top:2px';
+          w.appendChild(sl);
+        }
         qhost.appendChild(w);
       });
       qc.appendChild(qhost); host.appendChild(qc);

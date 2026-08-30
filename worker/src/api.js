@@ -26,7 +26,7 @@ import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
   dataVersion, bumpStmt, toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
   monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, manilaYesterday, BASE_CURRENCY,
-  isInvestedNetWorth, isSharesAcct
+  isInvestedNetWorth, isSharesAcct, NOT_SHARES_SRC
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
 
@@ -193,6 +193,9 @@ async function budgetsPayload(env, monthArg, fx) {
   const keys = [...needed];
   const actual = Object.create(null);
   if (keys.length) {
+    // Budgets count Transfers, so they are the one report a SELL leg can reach: its
+    // amount_u is a share quantity. NOT_SHARES_SRC keeps quantities out of the peso
+    // and dollar sums; the buy leg (IBKR -> ticker, real dollars) still counts.
     // Three sums per segment-month, because a budget is measured in the currency it
     // is planned in: `s` is the PHP total every other read speaks, `usd_s` is the
     // dollar total of the rows already denominated in dollars, and `rest_s` is the
@@ -205,7 +208,8 @@ async function budgetsPayload(env, monthArg, fx) {
       "SUM(CASE WHEN a.currency = 'USD' THEN 0 ELSE t.amount_php_u END) AS rest_s " +
       'FROM transactions t JOIN categories c ON c.id = t.category_id ' +
       'JOIN accounts a ON a.id = t.account_id ' +
-      "WHERE c.type IN ('Expense','Transfer') AND t.month IN (" + list(keys.length) + ') ' +
+      "WHERE c.type IN ('Expense','Transfer') AND " + NOT_SHARES_SRC +
+      ' AND t.month IN (' + list(keys.length) + ') ' +
       'GROUP BY seg, m').bind(...keys).all();
     q.results.forEach((x) => { actual[x.seg + '|' + x.m] = x; });
   }
@@ -381,8 +385,9 @@ export async function getDashboard(args, env) {
   // derives the liquid (non-shares) line as total − shares, so the cash-flow
   // bars and their overlaid line move together, and stacks the two into the
   // Net worth chart. Both omit the live month (chart uses live figures there).
-  const netWorthHistory = {}, sharesHistory = {};
+  const netWorthHistory = {}, sharesHistory = {}, snapNw = {};
   snaps.results.forEach((s) => {
+    snapNw[s.month] = q2(fromU(s.net_worth_u));
     if (s.month === manilaMonth()) return;
     netWorthHistory[s.month] = q2(fromU(s.net_worth_u));
     sharesHistory[s.month] = q2(fromU(s.shares_u));
@@ -395,8 +400,38 @@ export async function getDashboard(args, env) {
     spendBySegment, spendByCategory,
     cashflow: flowKeys.map((k) => byMonth[k]),
     netWorthHistory, sharesHistory,
+    bridge: nwBridge(month, snapNw, byMonth, ref, totals.netWorth),
     budgets: (await budgetsPayload(env, month, fx)).budgets,
     recentTransactions: recent.results.map((row) => shapeTx(row, r))
+  };
+}
+
+/**
+ * The net-worth bridge: why did net worth move this much? Delta splits into what the
+ * ledger explains (income - expense) and what it does not. The residual is market and
+ * FX movement plus timing (a Period override reports a flow in a month its cash left
+ * in another) — and, when it is large and unexplained, unlogged spending. Five weeks
+ * of it once piled up into a single 33.7k catch-up row before anybody saw it.
+ *
+ * A closed month bridges snapshot to snapshot. The live month bridges the last
+ * snapshot to live net worth, so today's figure is comparable. Null when the previous
+ * month has no snapshot — history only accrues forward, so early months never bridge.
+ */
+export function nwBridge(month, snapNw, byMonth, ref, liveNetWorth) {
+  const p = shiftMonth(ref.y, ref.m, -1);
+  const from = monthKey(p.y, p.m);
+  const live = month === manilaMonth();
+  const start = snapNw[from];
+  const end = live ? q2(liveNetWorth) : snapNw[month];
+  const f = byMonth[month];
+  if (start == null || end == null || !f) return null;
+  const savings = q2(f.income - f.expense);
+  return {
+    month, from, live,
+    startNetWorth: start, endNetWorth: end,
+    deltaNetWorth: q2(end - start),
+    savings,
+    residual: q2(end - start - savings)
   };
 }
 
@@ -414,34 +449,89 @@ export async function getInvestments(args, env) {
   const total = positions.reduce((s, p) => s + (p.valuePhp || 0), 0);
   positions.forEach((p) => { p.weightPct = total ? Math.round((p.valuePhp || 0) / total * 1000) / 10 : 0; });
 
-  // Quarterly pulse: the buy legs ARE transfers into share-priced accounts, so the
-  // history needs no category discipline — it is derived from account subtypes and
-  // works retroactively. Funding legs (Wise→IBKR) never appear here: IBKR itself is
-  // not share-priced. Newest quarter first; the SPA flags the current quarter when
-  // it has no buys yet.
+  // Quarterly pulse: the trade legs ARE transfers into and out of share-priced
+  // accounts, so the history needs no category discipline — it is derived from account
+  // subtypes and works retroactively. Funding legs (Wise→IBKR) never appear here: IBKR
+  // itself is not share-priced. A BUY runs cash→ticker, a SELL runs ticker→cash, and
+  // the two sides swap meaning: on a sell, amount_u is the QUANTITY and to_amount_u is
+  // the money. One UNION ALL normalises them to (cash, qty, side). A ticker→ticker move
+  // is neither and is excluded from both arms, so nothing is counted twice.
+  // Newest quarter first; the SPA flags the current quarter when it has no buys yet.
   const shareIds = r.accounts.filter(isSharesAcct).map((a) => a.id);
+  const ids = shareIds.length ? list(shareIds.length) : 'NULL';
   const monthKeys = [];   // last 3 CLOSED months, for the runway's average spend
   const ref = parseMonthKey(manilaMonth());
   for (let i = 3; i >= 1; i--) { const s = shiftMonth(ref.y, ref.m, -i); monthKeys.push(monthKey(s.y, s.m)); }
-  const [buysQ, spendQ] = await env.DB.batch([
+  const [legsQ, spendQ] = await env.DB.batch([
     env.DB.prepare(
-      'SELECT t.date AS d, t.amount_u AS amt, t.to_amount_u AS qty, b.name AS symbol, ' +
-      "COALESCE(a.currency, 'USD') AS cur FROM transactions t " +
+      'SELECT t.date AS d, t.amount_u AS cash, t.to_amount_u AS qty, t.amount_php_u AS cash_php, ' +
+      "b.name AS symbol, COALESCE(a.currency, 'USD') AS cur, 'buy' AS side FROM transactions t " +
       'JOIN accounts b ON b.id = t.to_account_id LEFT JOIN accounts a ON a.id = t.account_id ' +
-      'WHERE t.to_account_id IN (' + (shareIds.length ? list(shareIds.length) : 'NULL') + ') ' +
-      'ORDER BY t.date DESC').bind(...shareIds),
+      'WHERE t.to_account_id IN (' + ids + ') AND t.account_id NOT IN (' + ids + ') ' +
+      'UNION ALL ' +
+      // cash_php is NULL on a sell on purpose: amount_php_u there is a share count read
+      // as pesos. A sale's peso cost comes out of the basis pool, never off the row.
+      "SELECT t.date, t.to_amount_u, t.amount_u, NULL, a.name, COALESCE(b.currency, 'USD'), 'sell' " +
+      'FROM transactions t JOIN accounts a ON a.id = t.account_id ' +
+      'LEFT JOIN accounts b ON b.id = t.to_account_id ' +
+      'WHERE t.account_id IN (' + ids + ') AND t.to_account_id IS NOT NULL ' +
+      'AND t.to_account_id NOT IN (' + ids + ') ' +
+      'ORDER BY d DESC').bind(...shareIds, ...shareIds, ...shareIds, ...shareIds),
     env.DB.prepare(
       'SELECT SUM(t.amount_php_u) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
       "WHERE c.type = 'Expense' AND t.month IN (" + list(monthKeys.length) + ')').bind(...monthKeys)
   ]);
+
+  // Cost basis, average-cost method, walked oldest-first. A buy puts cash in the pool
+  // and shares in the count; a sell takes cost OUT in proportion to the shares leaving,
+  // so the average entry price does not move when you sell. Two pools, because the two
+  // questions differ: poolNative is dollars actually paid, poolPhp is those dollars at
+  // the rate stamped on the day (the historical peso cost, comparable to valuePhp).
+  // investedNative is the separate house-money figure — cash in minus proceeds out — and
+  // it goes NEGATIVE once a position has returned more than it ever cost.
+  const basis = Object.create(null);
+  for (let i = legsQ.results.length - 1; i >= 0; i--) {
+    const x = legsQ.results[i];
+    const b = basis[x.symbol] || (basis[x.symbol] =
+      { qty: 0, poolNative: 0, poolPhp: 0, investedNative: 0, currency: x.cur });
+    const cash = fromU(x.cash) || 0, qty = fromU(x.qty) || 0;
+    if (x.side === 'buy') {
+      // Funded from two different currencies over the position's life? Then no native
+      // figure is true and only the peso pool means anything — every buy leg carries a
+      // stamped rate, so poolPhp is always well defined.
+      if (x.cur !== b.currency) b.mixed = true;
+      b.qty += qty; b.poolNative += cash; b.poolPhp += fromU(x.cash_php) || 0;
+      b.investedNative += cash;
+    } else {
+      const f = b.qty > 0 ? Math.min(1, qty / b.qty) : 0;
+      b.qty -= qty; b.poolNative -= b.poolNative * f; b.poolPhp -= b.poolPhp * f;
+      b.investedNative -= cash;
+    }
+  }
+  positions.forEach((p) => {
+    const b = basis[p.name];
+    if (!b) return;
+    p.costCurrency = b.mixed ? null : b.currency;
+    p.investedNative = b.mixed ? null : q2(b.investedNative);
+    p.avgCostNative = (b.mixed || b.qty <= 0) ? null : Math.round(b.poolNative / b.qty * 10000) / 10000;
+    p.costPhp = q2(b.poolPhp);
+    p.gainPhp = p.valuePhp == null ? null : q2(p.valuePhp - b.poolPhp);
+    p.gainPct = (p.valuePhp == null || !b.poolPhp) ? null
+      : Math.round((p.valuePhp / b.poolPhp - 1) * 1000) / 10;
+  });
+  const totalCostPhp = positions.reduce((s, p) => s + (p.costPhp || 0), 0);
+
   const quarters = [];
-  buysQ.results.forEach((x) => {
+  legsQ.results.forEach((x) => {
     const q = quarterOf(x.d);
     let row = quarters[quarters.length - 1];
     if (!row || row.quarter !== q) { row = { quarter: q, totalUsd: 0, buys: [] }; quarters.push(row); }
-    const amt = q2(fromU(x.amt));
-    row.buys.push({ date: x.d, symbol: x.symbol, amount: amt, currency: x.cur, quantity: fromU(x.qty) });
-    if (x.cur === 'USD') row.totalUsd = q2(row.totalUsd + amt);
+    const amt = q2(fromU(x.cash));
+    row.buys.push({ date: x.d, symbol: x.symbol, amount: amt, currency: x.cur,
+                   quantity: fromU(x.qty), side: x.side });
+    // A sale is negative flow in its quarter: the pulse answers "did I park money this
+    // quarter", and money taken back out is not parking.
+    if (x.cur === 'USD') row.totalUsd = q2(row.totalUsd + (x.side === 'sell' ? -amt : amt));
   });
 
   // Emergency runway: EF pesos are commingled with spending money (no dedicated EF
@@ -470,7 +560,8 @@ export async function getInvestments(args, env) {
 
   return {
     status: 'success', version: await dataVersion(env),
-    totalValuePhp: q2(total), positions,
+    totalValuePhp: q2(total), totalCostPhp: q2(totalCostPhp),
+    totalGainPhp: q2(total - totalCostPhp), positions,
     pulse: { currentQuarter: quarterOf(manilaToday()), quarters },
     runway,
     coreTargets: { 60: 'Core', 25: 'Growth', 15: 'Speculative' },

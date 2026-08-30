@@ -221,6 +221,16 @@ describe('Apps Script (vm)', () => {
       assert.ok(s.includes('2 more'), s);
       assert.strictEqual(tg.querySummary([], 0), 'No matching transactions.');
     });
+
+    test('querySummary refuses to add a share quantity to money', () => {
+      // A sell leg's Amount is a QUANTITY, so its 'Amount (PHP)' is a share count read
+      // as pesos. The row still counts and still lists — it just cannot be summed.
+      const rows = [{ Date: '2026-06-10', Category: 'Investment: Growth', Currency: 'Shares', 'Amount (PHP)': 2 },
+                    { Date: '2026-06-11', Category: 'Food', Currency: 'PHP', 'Amount (PHP)': 40 }];
+      const s = tg.querySummary(rows, 2);
+      assert.ok(s.includes('₱40'), s);
+      assert.ok(s.includes('2 tx'), 'the trade still happened, so it still counts: ' + s);
+    });
   });
 
   // ── 3. contract guards ────────────────────────────────────────────────────
@@ -259,6 +269,18 @@ describe('Apps Script (vm)', () => {
         assert.ok(src.includes("'duplicate'"), name + ' no longer reports {status:"duplicate"}');
         assert.ok(src.includes('meta.changes'), name + ' no longer detects the no-op insert');
       });
+    });
+
+    test('every peso aggregate that can see a Transfer excludes share-priced sources', () => {
+      // On a share-priced account amount_u is a QUANTITY, and a sell leg gets no
+      // fx_rate — so amount_php_u is a share count read as pesos. Budgets are the one
+      // report that counts Transfers, so they are the one that can ingest it, and the
+      // failure is silent: a 30-share sale reports as ₱30 of spending.
+      const src = fs.readFileSync(path.join(__dirname, 'worker', 'src', 'api.js'), 'utf8');
+      assert.ok(src.includes('NOT_SHARES_SRC'),
+        'budgetsPayload no longer excludes share-priced sources from its peso sums');
+      assert.ok(/SHARES/.test(db.NOT_SHARES_SRC) && /stock/.test(db.NOT_SHARES_SRC),
+        'NOT_SHARES_SRC must mirror isSharesAcct — currency AND subtype');
     });
 
     test('button glyphs stay outside the emoji set', () => {
