@@ -560,6 +560,45 @@ function d1(db) {
     });
   });
 
+  await describe('Schema invariants (migration 0003)', () => {
+    // The handlers already refuse these shapes; these tests prove the DATABASE does
+    // too, so a wrangler d1 execute or a future write path cannot corrupt silently.
+    const raw = (sql) => () => sqlite.exec(sql);
+    const cols = '(id,date,category_id,account_id,amount_u,fx_rate,to_account_id,to_amount_u)';
+    const ins = (id, vals) => `INSERT INTO transactions ${cols} VALUES ('${id}',${vals});`;
+
+    test('a zero amount cannot be written at all', () => {
+      assert.throws(raw(ins('ck-zero', "'2026-03-01',2,1,0,NULL,NULL,NULL")), /CHECK constraint failed/);
+    });
+
+    test('half a transfer cannot be written', () => {
+      assert.throws(raw(ins('ck-half-a', "'2026-03-01',3,1,1000000,NULL,2,NULL")), /CHECK constraint failed/);
+      assert.throws(raw(ins('ck-half-b', "'2026-03-01',3,1,1000000,NULL,NULL,1000000")), /CHECK constraint failed/);
+    });
+
+    test('a non-positive fx_rate cannot be written', () => {
+      assert.throws(raw(ins('ck-fx0',  "'2026-03-01',2,2,1000000,0,NULL,NULL")),  /CHECK constraint failed/);
+      assert.throws(raw(ins('ck-fxneg', "'2026-03-01',2,2,1000000,-50,NULL,NULL")), /CHECK constraint failed/);
+    });
+
+    test('an impossible month or day cannot be written', () => {
+      // 2026-13-45 passed the GLOB alone — the shape was right, the date was not.
+      assert.throws(raw(ins('ck-m13', "'2026-13-01',2,1,1000000,NULL,NULL,NULL")), /CHECK constraint failed/);
+      assert.throws(raw(ins('ck-d45', "'2026-03-45',2,1,1000000,NULL,NULL,NULL")), /CHECK constraint failed/);
+    });
+
+    test('the legitimate shapes still pass — negative amounts, PHP rows, transfers', () => {
+      sqlite.exec(ins('ck-ok-refund', "'2026-03-02',2,1,-9500000,NULL,NULL,NULL"));
+      sqlite.exec(ins('ck-ok-transfer', "'2026-03-03',3,2,1000000,50,1,50000000"));
+      const rows = sqlite.prepare("SELECT id,month,amount_php_u FROM transactions WHERE id LIKE 'ck-ok-%' ORDER BY id").all();
+      assert.strictEqual(rows.length, 2);
+      assert.strictEqual(rows[0].month, '2026-Mar');            // generated columns survived the recreate
+      assert.strictEqual(rows[0].amount_php_u, -9500000);       // ROUND-before-CAST, still signed
+      assert.strictEqual(rows[1].amount_php_u, 50000000);
+      sqlite.exec("DELETE FROM transactions WHERE id LIKE 'ck-ok-%';");
+    });
+  });
+
   await describe('HTTP layer', () => {
     test('/api is closed without a credential and open with either one', async () => {
       assert.strictEqual((await call('/api?action=getDataVersion')).status, 401);
