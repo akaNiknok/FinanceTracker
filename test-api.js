@@ -141,6 +141,55 @@ function d1(db) {
       assert.strictEqual(n, 1, 'the offline queue would have double-posted');
     });
 
+    // ── name resolution ──────────────────────────────────────────────────────
+    // "Foodpanda for Berry / 413.52 Maribank" was refused with "Unknown Account:
+    // Maribank" while MariBank sat in the table (2026-08-30). Every write path now
+    // resolves a name exactly first and case-insensitively behind it. Each test cleans
+    // up after itself: the Reads describe shares this database.
+    test('a case-slipped account and category still resolve to the real rows', async () => {
+      const r = await api.createTransaction(
+        { ID: 'ci-1', Date: '2026-08-06', Category: 'expense: food', Account: 'maya',
+          Amount: 413.52, Description: 'Foodpanda' }, env);
+      assert.strictEqual(r.status, 'success');
+      assert.strictEqual(r.transaction.Account, 'Maya', 'the row must carry the canonical name');
+      assert.strictEqual(r.transaction.Category, 'Expense: Food');
+      await api.deleteTransaction({ ID: 'ci-1' }, env);
+    });
+
+    test('both transfer legs resolve, and one account under two spellings is not a transfer', async () => {
+      const r = await api.createTransfer(
+        { ID: 'ci-2', Date: '2026-08-10', Category: 'INVESTMENT: GROWTH', Account: '  MAYA ',
+          ToAccount: 'ibkr', Amount: 5000, ToAmount: 0.2 }, env);
+      assert.strictEqual(r.transaction.Account, 'Maya');
+      assert.strictEqual(r.transaction.ToAccount, 'IBKR');
+      await api.deleteTransaction({ ID: 'ci-2' }, env);
+      await assert.rejects(() => api.createTransfer(
+        { Date: '2026-08-10', Category: 'Investment: Growth', Account: 'Maya',
+          ToAccount: 'maya', Amount: 10 }, env), /must differ/,
+        'a self-transfer slipped through under a different spelling');
+    });
+
+    test('an account that does not exist is still Unknown, whatever its case', async () => {
+      await assert.rejects(() => api.createTransaction(
+        { Date: '2026-08-06', Category: 'Expense: Food', Account: 'maribank', Amount: 10 }, env),
+        /Unknown Account/);
+      await assert.rejects(() => api.createTransaction(
+        { Date: '2026-08-06', Category: 'expense: groceries', Account: 'Maya', Amount: 10 }, env),
+        /Unknown Category/);
+    });
+
+    test('updateTransaction and updateAccount resolve a case-slipped name too', async () => {
+      await api.createTransaction({ ID: 'ci-3', Date: '2026-08-06', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: 10 }, env);
+      const u = await api.updateTransaction({ ID: 'ci-3', Account: 'card' }, env);
+      assert.strictEqual(u.transaction.Account, 'Card');
+      await api.deleteTransaction({ ID: 'ci-3' }, env);
+      const a = await api.updateAccount({ Name: 'mAyA', Notes: 'resolved by name' }, env);
+      assert.strictEqual(a.name, 'Maya', 'the reply must echo the canonical name');
+      assert.strictEqual(sqlite.prepare('SELECT notes FROM accounts WHERE id=1').get().notes,
+                         'resolved by name', 'updateAccount matched no row');
+    });
+
     test('Period overrides the month the row reports under', async () => {
       await api.createTransaction(
         { ID: 't2', Date: '2026-07-31', Period: '2026-08', Category: 'Income: Salary',
@@ -440,6 +489,15 @@ function d1(db) {
       const d = await api.bulkDeleteTransactions({ ids: ['t3', 'nope'] }, env);
       assert.strictEqual(d.deleted, 1);
       assert.deepStrictEqual(d.skipped, ['nope']);
+    });
+
+    test('a bulk patch resolves a case-slipped name before it writes', async () => {
+      await api.createTransaction({ ID: 'ci-4', Date: '2026-08-06', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: 12 }, env);
+      const u = await api.bulkUpdateTransactions({ ids: ['ci-4'], patch: { Account: 'CARD' } }, env);
+      assert.strictEqual(u.updated, 1);
+      assert.strictEqual((await api.listTransactions({ id: 'ci-4' }, env)).transactions[0].Account, 'Card');
+      await api.deleteTransaction({ ID: 'ci-4' }, env);
     });
 
     test('the other whitelist shapes work too (composite and text primary keys)', async () => {

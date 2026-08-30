@@ -127,7 +127,9 @@ export function prompt(refs, unixDate) {
     'RULES:',
     '1. Date must be ISO yyyy-MM-dd. If no date is mentioned, use: ' + today,
     '2. Category must exactly match a name from VALID CATEGORIES (case-sensitive)',
-    '3. Account must exactly match a name from VALID ACCOUNTS (case-sensitive)',
+    '3. Copy Account and ToAccount character for character from VALID ACCOUNTS, including',
+    '    its capitalisation ("MariBank", not "Maribank") — do NOT echo the spelling the',
+    '    message used',
     '4. Amount must be a positive number',
     '5. For a transfer between accounts: use a Transfer-type category and set BOTH ToAccount and ToAmount',
     '6. ExchangeRate is PHP per 1 USD — only set it if explicitly mentioned, otherwise null',
@@ -139,7 +141,7 @@ export function prompt(refs, unixDate) {
     '    keep all-caps only for names that are genuinely all-caps (acronyms, brands like BPI, SM, GCash)',
     '12. Leave reference/confirmation/transaction numbers out of the Description',
     '13. Leave Description empty when it would only restate the Category or the accounts',
-    '    ("Transfer to Maribank" for a transfer to Maribank, "Cashback" on Income: Cashback).',
+    '    ("Transfer to MariBank" for a transfer to MariBank, "Cashback" on Income: Cashback).',
     '    Only describe what the Category and Account do not already say (merchant, item, reason)'
   ].join('\n');
 }
