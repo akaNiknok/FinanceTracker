@@ -48,3 +48,44 @@ id = "414311e8408f43679204a86377b6c414"
 # The daily-interest cron was removed in v2.0.1 — the bank's own figures never matched it.
 [triggers]
 crons = ["0 22 * * *"]
+
+# ── staging ──────────────────────────────────────────────────────────────────
+# `develop`'s deploy target — financetracker-telegram-staging.<subdomain>.workers.dev,
+# redeployed by .github/workflows/staging.yml on every push to develop. It exists so a
+# change can be checked from a phone before the release PR is merged.
+#
+# There is no `name` key on purpose: wrangler appends the environment name to the
+# top-level one, so the "never rename the Worker" rule stays untouched.
+#
+# MOST keys are INHERITED — `main`, `compatibility_date`, `assets`, `workers_dev` and
+# `triggers` — so the SPA and the routes need no repetition here. BINDINGS are not:
+#   * d1_databases   repeated below, pointing at a SEPARATE database. test.js fails the
+#                    build if the two ids ever match.
+#   * kv_namespaces  deliberately NOT repeated. FX_CACHE is optional (unbound just means
+#                    every FX lookup fetches), so staging skips the namespace entirely.
+#   * triggers       INHERITED, which is the trap: without the empty override below,
+#                    staging would run the 06:00 IBKR job and the net-worth snapshot
+#                    against the staging database, on its own schedule.
+#
+# Secrets are per-Worker and are NOT copied. Staging needs exactly one —
+#   npx wrangler secret put APP_PASS --env staging
+# and no other, because it has no bot, no Gmail courier and no cron.
+[env.staging]
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "financetracker-staging"
+# npx wrangler d1 create financetracker-staging --location=apac  -> paste the id here.
+# The zero id below is a placeholder: the first staging deploy fails until it is real.
+database_id = "d490a74a-1b5a-425a-9635-1e0011b03fb4"
+migrations_dir = "migrations"
+
+# An empty list is how one environment cancels an inherited schedule.
+[env.staging.triggers]
+crons = []
+
+# NOT a secret — a deliberately wrong value. worker.js checks the Telegram header only
+# when SECRET_TOKEN is SET, so leaving it unset on a public hostname would make /tg an
+# open write endpoint. Staging has no bot, so every real Telegram POST must be refused.
+[env.staging.vars]
+SECRET_TOKEN = "staging-has-no-bot"

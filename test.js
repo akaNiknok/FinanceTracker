@@ -296,6 +296,45 @@ describe('Apps Script (vm)', () => {
       ['↻', '⌕', '✎'].forEach((good) => assert.ok(src.includes(good), 'lost the ' + good + ' button glyph'));
     });
 
+    test('the staging environment cannot inherit the cron or share the live database', () => {
+      // Wrangler inherits MOST keys into a named environment but not the bindings, and
+      // both halves of that bite. `triggers` IS inherited, so without an empty override
+      // staging runs the 06:00 IBKR job and the net-worth snapshot on its own schedule.
+      // `d1_databases` is NOT, so a copied block that keeps the production id points a
+      // staging Worker at the real ledger. Neither failure says anything at deploy time.
+      const toml = fs.readFileSync(path.join(__dirname, 'worker', 'wrangler.toml'), 'utf8');
+      const sections = [];
+      let cur = null;
+      toml.split(/\r?\n/).forEach((line) => {
+        const head = line.match(/^\s*\[\[?([^\]]+?)\]\]?\s*$/);
+        if (head) sections.push((cur = { name: head[1], body: [] }));
+        else if (cur) cur.body.push(line);
+      });
+      const val = (sec, key) => {
+        const m = sec.body.join('\n').match(new RegExp('^\\s*' + key + '\\s*=\\s*"([^"]*)"', 'm'));
+        return m && m[1];
+      };
+      const named = (n) => sections.filter((sec) => sec.name === n);
+
+      const live = named('d1_databases'), staging = named('env.staging.d1_databases');
+      assert.strictEqual(staging.length, live.length,
+        'every [[d1_databases]] needs an [[env.staging.d1_databases]] copy — bindings are not inherited');
+      live.forEach((l) => {
+        const copy = staging.find((x) => val(x, 'binding') === val(l, 'binding'));
+        assert.ok(copy, 'no staging copy of the D1 binding ' + val(l, 'binding'));
+        assert.notStrictEqual(val(copy, 'database_id'), val(l, 'database_id'),
+          'staging binding ' + val(l, 'binding') + ' points at the PRODUCTION database');
+      });
+
+      const trig = named('env.staging.triggers')[0];
+      assert.ok(trig && /crons\s*=\s*\[\s*\]/.test(trig.body.join('\n')),
+        '[env.staging.triggers] crons = [] is missing — staging would inherit the production cron');
+
+      // vars are not inherited either, so a top-level block needs a staging counterpart.
+      if (named('vars').length) assert.ok(named('env.staging.vars').length,
+        'a top-level [vars] block needs an [env.staging.vars] copy — vars are not inherited');
+    });
+
     test('the topbar version matches package.json', () => {
       // The header badge is hardcoded (no build step stamps the SPA), so this is the
       // only thing that stops it drifting a release behind.

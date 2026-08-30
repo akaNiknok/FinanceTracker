@@ -1,6 +1,6 @@
 {
   "name": "financetracker",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "Personal finance tracker: Cloudflare Worker + D1, a PWA, and a Telegram bot",
   "private": true,
   "scripts": {
@@ -8,15 +8,19 @@
     "icons": "node icons.js",
     "dev": "cd worker && npx wrangler dev",
     "dev:pull": "node dev-pull.js",
+    "dev:seed": "cd worker && npx wrangler d1 migrations apply financetracker --local && npx wrangler d1 execute financetracker --local --file=./seed.sql",
     "backfill:nw": "node migrate/backfill-nw.js",
     "deploy": "cd worker && npx wrangler deploy",
     "migrate": "cd worker && npx wrangler d1 migrations apply financetracker --remote",
     "migrate:local": "cd worker && npx wrangler d1 migrations apply financetracker --local",
     "tail": "cd worker && npx wrangler tail",
+    "tail:staging": "cd worker && npx wrangler tail --env staging",
+    "seed:staging": "cd worker && npx wrangler d1 execute financetracker-staging --env staging --remote --file=./seed.sql",
     "login": "clasp login",
     "push": "clasp push",
     "pull": "clasp pull",
     "open": "clasp open",
+    "version": "node stamp-version.js && git add worker/public/index.html",
     "release": "node release.js",
     "bootstrap": "node bootstrap.js"
   },

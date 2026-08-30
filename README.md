@@ -108,6 +108,8 @@ The repository is public. Do not put a secret value in a tracked file.
 | Item | Where | Notes |
 | --- | --- | --- |
 | App, API, bot and jobs | Cloudflare Workers, name `financetracker-telegram` | There is no custom domain. The address ends with `workers.dev`. Do not change the name: it is the address of the app and of the webhook. |
+| Staging app | Cloudflare Workers, name `financetracker-telegram-staging` | The `develop` branch deploys here. It has no bot, no cron and no email job. The data is invented. |
+| Staging database | Cloudflare D1, name `financetracker-staging` | It holds `worker/seed.sql` only. Never put real data here. |
 | Database | Cloudflare D1, name `financetracker` | Region `apac`. The id is in `worker/wrangler.toml`. |
 | Mail courier and backup | Google Apps Script | Open script.google.com, or use `npm run open`. The project id is in `.clasp.json`. There is no Web App deployment. |
 | Backup spreadsheet | Google Sheets, owner account | The job makes it on the first night and keeps the id in a script property. |
@@ -187,25 +189,61 @@ Cloudflare does not do a job again after a failure. Thus each job sends a Telegr
 npm run bootstrap        # make a fresh clone or a new worktree runnable
 npm test                 # tests, no account necessary
 npm run dev              # operate the app, the API and the bot locally
+npm run dev:seed         # fill the local database with invented data
 npm run migrate          # apply the pending database migrations
 npm run tail             # read the live Worker log
+npm run tail:staging     # read the staging Worker log
 npm run push             # send the two files to Apps Script
 ```
 
+### The staging app
+
+The `develop` branch deploys to a second Worker. Each push to `develop` starts the Staging workflow. The workflow applies the migrations, then deploys. Use the staging app to examine a change before you merge the release.
+
+Staging is separate in every way that matters. It has its own database. It has no cron, so it never calls IBKR. It has no bot token and no email job. It needs one secret only:
+
+```bash
+cd worker && npx wrangler secret put APP_PASS --env staging
+```
+
+The database starts empty. Fill it from your computer:
+
+```bash
+npm run seed:staging
+```
+
+The seed is `worker/seed.sql`, which holds invented data. A normal push never reseeds, so your test data stays while you work. Use the same command again for a clean database.
+
+The Staging workflow can also do it: select **Run workflow**, then set **reseed** to true. **GitHub shows that button only when the workflow file is on the default branch.** So the button appears after the next release moves `staging.yml` into `main`. Until then, use the command above.
+
+**Do not copy the real data into staging.** A second copy doubles the damage if a person learns the passphrase.
+
 ### Release procedure
 
-1. Do the work on `develop`, or on a `feature/*` branch.
-2. Increase the version number in `package.json`. Put the same number in the `brand-ver` span of `worker/public/index.html`. Commit both.
+1. Do the work on a `feature/*` branch. Merge the branch into `develop` with a pull request.
+2. Run `npm version patch` or `npm version minor` on `develop`. The command also writes the number into `worker/public/index.html`. Commit the result.
 3. Run `npm run release`. The command tests the code, then opens the pull request from `develop` to `main`. It does not deploy.
-4. Merge the pull request on GitHub.
+4. Wait for the CI check. Then merge the pull request on GitHub.
+
+The CI workflow tests each pull request and each push to `develop`. The `main` branch accepts only a pull request with a green check. Nobody approves the release a second time: your merge is the approval. After the merge, the Release workflow moves `develop` forward to `main` again. You can also set auto-merge on the pull request. GitHub then merges it when the check becomes green, and the release starts without you.
 
 The merge starts the Release workflow. The workflow applies the database migrations, deploys the Worker, makes the tag, and makes the GitHub release. A merge that does not change the version does nothing. The Apps Script files are not part of this procedure. Send them with `npm run push` when you change them.
 
-The workflow needs two GitHub repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Give the token the permissions **Workers Scripts:Edit** and **D1:Edit**, and no more. The token can read all of the financial data, because it can deploy a Worker that is bound to the database. Protect the `main` branch.
+The workflow needs two GitHub repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Give the token the permissions **Workers Scripts:Edit** and **D1:Edit**, and no more. The token can read all of the financial data, because it can deploy a Worker that is bound to the database. The `main` branch is protected: it accepts only a pull request, and the CI check must pass.
 
 ### Database migration procedure
 
 Put each schema change in a new file in `worker/migrations/`, with a higher number. Do not change a file that was applied. Test with `npm run migrate:local`. The Release workflow applies it to the live database.
+
+### How to undo a release
+
+The code and the database do not go back together. Undo the code first.
+
+1. Read the list of versions: `npx wrangler versions list`.
+2. Put the last good version back: `npx wrangler rollback`.
+3. Tell the repository what you did. Open an issue, or make the fix on a `hotfix/*` branch.
+
+**A migration does not go back.** `npx wrangler d1 migrations apply` moves forward only. So an old Worker must still operate with the new schema. Never put a migration that removes or renames a column in the same release as the code that needs the change. Use two releases: the first adds, the second removes. If a migration destroys data, use D1 Time Travel below.
 
 ### How to recover the data
 
@@ -221,6 +259,8 @@ Put each schema change in a new file in `worker/migrations/`, with a higher numb
 | The error "Wrong response from the webhook: 302". | The webhook address. It must be the Worker address, and it must end with `/tg`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |
 | The job does not record the emails. | The Gmail filter. Then the property `GMAIL_QUERY`, which replaces the label. Then the trigger, because Apps Script can disable it. Then the property `WORKER_URL` and the two `INGEST_TOKEN` values. |
+| The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create financetracker-staging --location=apac`, then write the id into the file. |
+| The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
 | The app asks for the passphrase frequently. | A person changed `APP_PASS`, or the cookie is more than one year old. |
 | The app starts, but each request fails. | `npm run tail`. Usually the D1 binding or a secret is absent. |
 | The share values are 0 or absent. | The Telegram message from the price job. Then the IBKR token, because it expires. Then the `symbol` column of the account on the Admin screen. |
