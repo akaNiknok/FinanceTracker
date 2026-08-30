@@ -20,6 +20,7 @@
     "push": "clasp push",
     "pull": "clasp pull",
     "open": "clasp open",
+    "version": "node stamp-version.js && git add worker/public/index.html",
     "release": "node release.js",
     "bootstrap": "node bootstrap.js"
   },
