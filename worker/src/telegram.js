@@ -118,18 +118,25 @@ async function route(env, update) {
  */
 export async function logItems(env, chat, idPrefix, items, replyTo, mailId) {
   const out = [], ids = [], idx = [];
+  // One read for the whole message, not one per item: resolveAccountName needs the live
+  // account list to turn what the model wrote into the name the ledger knows.
+  const accounts = (await refs(env)).accounts;
   for (let i = 0; i < items.length; i++) {
     const p = items[i];
     const args = {
       ID: idPrefix + '-' + i,
-      Date: p.Date, Category: p.Category, Description: p.Description, Account: p.Account,
-      Amount: p.Amount, ExchangeRate: p.ExchangeRate, ToAccount: p.ToAccount, ToAmount: p.ToAmount
+      Date: p.Date, Category: p.Category, Description: p.Description,
+      Account: resolveAccountName(accounts, p.Account),
+      Amount: p.Amount, ExchangeRate: p.ExchangeRate,
+      ToAccount: p.ToAccount ? resolveAccountName(accounts, p.ToAccount) : p.ToAccount,
+      ToAmount: p.ToAmount
     };
     try {
-      const res = p.ToAccount ? await createTransfer(args, env) : await createTransaction(args, env);
+      const res = args.ToAccount ? await createTransfer(args, env) : await createTransaction(args, env);
       // res.warning is advisory (an unresolved FX rate, a same-day/amount duplicate).
       // The receipt is the only feedback this path has, so it must not swallow it.
-      out.push(receipt(p, res.status) + (res.warning ? '\n› ⚠ ' + res.warning : ''));
+      // The receipt reads `args`, not `p`: it must show the resolved account names.
+      out.push(receipt(args, res.status) + (res.warning ? '\n› ⚠ ' + res.warning : ''));
       ids.push(args.ID); idx.push(i);
     } catch (err) {
       out.push('❌ *Failed to add transaction*\n› ' + msgOf(err));
@@ -322,6 +329,37 @@ export function matchAccounts(accounts, name) {
   const q = String(name || '').trim().toLowerCase();
   if (!q) return accounts;
   return accounts.filter((a) => String(a.name).toLowerCase().indexOf(q) !== -1);
+}
+
+/**
+ * The name the ledger knows, from the name the model wrote — the log path's version of
+ * what matchAccounts does for /balance. The parser is told to copy a name character for
+ * character out of VALID ACCOUNTS, and mostly does, but it echoes the sender's own
+ * spelling often enough to lose a transaction ("Maribank" for "MariBank", 2026-08-30).
+ * An ingested email is worse again: it shouts "MARIBANK".
+ *
+ * Four passes, widening but never guessing:
+ *   1. exact                       "MariBank"
+ *   2. case-insensitive            "maribank", "MARIBANK"
+ *   3. letters and digits only     "mari bank", "Mari-Bank"
+ *   4. case-insensitive substring  "mari" — the same test /balance already makes
+ * Passes 2-4 accept exactly ONE candidate. Two candidates return the name unchanged, so
+ * createTransaction throws its usual "Unknown Account" instead of picking the wrong one;
+ * 3 and 4 need three characters, because a two-letter fragment matches half the ledger.
+ * The resolved name goes on the receipt too — the reply then shows what was really written.
+ */
+export function resolveAccountName(accounts, name) {
+  const raw = String(name === undefined || name === null ? '' : name).trim();
+  if (!raw || !accounts || !accounts.length) return name;
+  const low = raw.toLowerCase();
+  const squash = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const q = squash(raw);
+  const only = (hits) => (hits.length === 1 ? hits[0].name : null);
+  if (accounts.some((a) => a.name === raw)) return raw;
+  return only(accounts.filter((a) => String(a.name).toLowerCase() === low))
+    || (q.length >= 3 ? only(accounts.filter((a) => squash(a.name) === q)) : null)
+    || (low.length >= 3 ? only(accounts.filter((a) => String(a.name).toLowerCase().indexOf(low) !== -1)) : null)
+    || name;
 }
 
 /** Absolute amount with its currency's symbol; unknown currencies (SHARES) trail the code. */

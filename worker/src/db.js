@@ -82,19 +82,49 @@ export function parsePeriod(v) {
 }
 
 // ── reference data + meta ────────────────────────────────────────────────────
-/** Accounts (with their derived Type) and Categories, indexed by name and by id. */
+/** Lookup key for a name: case-insensitive, edge whitespace removed. */
+export const nameKey = (s) => String(s === undefined || s === null ? '' : s).trim().toLowerCase();
+
+/**
+ * Accounts (with their derived Type) and Categories, indexed by name and by id.
+ *
+ * The name indexes come in two flavours. `acctByName`/`catByName` are exact, as they
+ * always were. `acctByNameCI`/`catByNameCI` key on nameKey() and hold `null` where two
+ * rows collide — "maribank" must not silently pick one of a "MariBank"/"Maribank" pair.
+ * Read them through resolveAccount/resolveCategory, which try the exact index first,
+ * so a real duplicate stays reachable by its true name.
+ */
 export async function refs(env) {
   const [ar, cr] = await env.DB.batch([
     env.DB.prepare('SELECT a.*, t.type AS type FROM accounts a JOIN account_types t ON t.subtype = a.subtype ORDER BY a.id'),
     env.DB.prepare('SELECT * FROM categories ORDER BY id')
   ]);
   const index = (rows, k) => rows.reduce((m, r) => { m[r[k]] = r; return m; }, Object.create(null));
+  const indexCI = (rows, k) => rows.reduce((m, r) => {
+    const key = nameKey(r[k]);
+    m[key] = Object.prototype.hasOwnProperty.call(m, key) ? null : r;
+    return m;
+  }, Object.create(null));
   return {
     accounts: ar.results, categories: cr.results,
     acctByName: index(ar.results, 'name'), acctById: index(ar.results, 'id'),
-    catByName: index(cr.results, 'name'), catById: index(cr.results, 'id')
+    catByName: index(cr.results, 'name'), catById: index(cr.results, 'id'),
+    acctByNameCI: indexCI(ar.results, 'name'), catByNameCI: indexCI(cr.results, 'name')
   };
 }
+
+/**
+ * Name -> row, exact first and case-insensitive behind it. Every write path resolves
+ * through these, so "maribank" and "MARIBANK" land on MariBank instead of failing with
+ * "Unknown Account" — the Gemini parser echoes the sender's spelling often enough that
+ * a case slip cost a logged transaction (2026-08-30). The handlers then bind the row's
+ * id, so the stored row carries the canonical name whatever the caller typed.
+ * An ambiguous key (two names differing only by case) resolves to undefined: the caller
+ * gets its usual "Unknown …" error rather than a coin flip.
+ */
+const resolveName = (exact, ci, name) => exact[name] || ci[nameKey(name)] || undefined;
+export const resolveAccount = (r, name) => resolveName(r.acctByName, r.acctByNameCI, name);
+export const resolveCategory = (r, name) => resolveName(r.catByName, r.catByNameCI, name);
 
 export async function metaAll(env) {
   const r = await env.DB.prepare('SELECT key, value FROM meta').all();

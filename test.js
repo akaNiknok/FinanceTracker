@@ -213,6 +213,25 @@ describe('Apps Script (vm)', () => {
       assert.ok(text.includes('₱130'), 'total is signed net worth (100+50-20), got: ' + text);
     });
 
+    test('resolveAccountName turns what the model wrote into the ledger name', () => {
+      const accts = [{ name: 'MariBank' }, { name: 'Wise' }, { name: 'Wise Savings' },
+                     { name: 'BPI Banko' }, { name: 'GCash' }];
+      const r = (n) => tg.resolveAccountName(accts, n);
+      assert.strictEqual(r('MariBank'), 'MariBank');            // exact
+      assert.strictEqual(r('Maribank'), 'MariBank');            // the 2026-08-30 failure
+      assert.strictEqual(r('MARIBANK'), 'MariBank');            // an ingested email shouts
+      assert.strictEqual(r(' maribank '), 'MariBank');
+      assert.strictEqual(r('mari bank'), 'MariBank');           // letters and digits only
+      assert.strictEqual(r('bpi'), 'BPI Banko');                // one substring hit
+      assert.strictEqual(r('Wise'), 'Wise', 'an exact name must win over its own prefix');
+      // Two candidates is not a guess: the name passes through and the API refuses it.
+      assert.strictEqual(r('wis'), 'wis');
+      assert.strictEqual(r('Nowhere Bank'), 'Nowhere Bank');
+      // Too short to substring-match, so it never lands on GCash by accident.
+      assert.strictEqual(r('ca'), 'ca');
+      [undefined, null, ''].forEach((v) => assert.strictEqual(r(v), v));
+    });
+
     test('querySummary sums absolute PHP and caps the list', () => {
       const rows = Array.from({ length: 7 }, (_, i) =>
         ({ Date: '2026-08-0' + (i + 1), Category: 'Food', 'Amount (PHP)': -10 }));
