@@ -19,7 +19,9 @@
  * Auth on /api: the ft_auth cookie (the SPA) OR `Authorization: Bearer INGEST_TOKEN`
  * (the two remaining Apps Script jobs — the Gmail courier and the backup puller).
  * 401 is JSON, never a redirect: that is what lets gs() prompt for the passphrase and
- * retry the call in place.
+ * retry the call in place. A request whose HOST is localhost skips the check entirely
+ * (see isLocalDev) — that is `wrangler dev`, and Cloudflare cannot route a production
+ * request to that hostname.
  *
  * The KV edge read cache is GONE. It existed to hide Apps Script latency and D1 is the
  * thing it was faking; the namespace is rebound as FX_CACHE (see src/fx.js). The
@@ -125,11 +127,24 @@ async function authorized(request, env) {
   return (request.headers.get('Cookie') || '').split(/;\s*/).includes(want);
 }
 
+/**
+ * A `wrangler dev` server is not gated. The passphrase protects the DEPLOYED app; asking
+ * for it locally only blocked the agents and the fresh checkouts that have no
+ * `worker/.dev.vars` at all, and a local D1 holds `seed.sql`'s invented data anyway.
+ * Cloudflare routes to a Worker BY HOSTNAME, so a production request can never arrive
+ * with Host: localhost — this is inert once deployed.
+ * ponytail: a hostname test, not a DEV flag. A flag has to be planted in every checkout
+ * and could be set on the real Worker by accident; a hostname cannot.
+ */
+const isLocalDev = (url) => url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+
 /** The JSON API. Handlers throw; a throw becomes {status:'error', message}. */
 async function api(request, env, url) {
-  if (!env.APP_PASS) return json({ status: 'error', message: 'APP_PASS is not set on the Worker.' }, 503);
+  if (!isLocalDev(url)) {
+    if (!env.APP_PASS) return json({ status: 'error', message: 'APP_PASS is not set on the Worker.' }, 503);
+    if (!await authorized(request, env)) return json({ status: 'error', message: 'Locked' }, 401);
+  }
   if (!env.DB) return json({ status: 'error', message: 'The D1 binding DB is not configured.' }, 503);
-  if (!await authorized(request, env)) return json({ status: 'error', message: 'Locked' }, 401);
 
   // Query params + JSON body merged into one args object, body winning. Port of rt_args_.
   const args = {};

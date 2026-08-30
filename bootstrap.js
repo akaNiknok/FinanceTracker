@@ -82,6 +82,13 @@ const portFor = (dir) => {
       port,
     }],
   };
+  // 4. fake data. Not applied here: it costs two wrangler round trips and this script
+  // runs from a SessionStart hook. Say so instead, and let whoever needs it run one line.
+  const localD1 = path.join('worker', '.wrangler', 'state', 'v3', 'd1');
+  console.log(fs.existsSync(localD1)
+    ? '- local D1 present'
+    : '- local D1 is empty. `npm run dev:seed` fills it with invented data (worker/seed.sql).');
+
   fs.mkdirSync('.claude', { recursive: true });
   fs.writeFileSync(path.join('.claude', 'launch.json'), JSON.stringify(launch, null, 2) + '\n');
   console.log(`- .claude/launch.json -> port ${port}${port === BASE ? '' : ' (8123 was busy)'}`);

@@ -8,6 +8,7 @@
     "icons": "node icons.js",
     "dev": "cd worker && npx wrangler dev",
     "dev:pull": "node dev-pull.js",
+    "dev:seed": "cd worker && npx wrangler d1 migrations apply financetracker --local && npx wrangler d1 execute financetracker --local --file=./seed.sql",
     "backfill:nw": "node migrate/backfill-nw.js",
     "deploy": "cd worker && npx wrangler deploy",
     "migrate": "cd worker && npx wrangler d1 migrations apply financetracker --remote",
