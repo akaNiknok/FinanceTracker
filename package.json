@@ -14,6 +14,7 @@
     "migrate": "cd worker && npx wrangler d1 migrations apply financetracker --remote",
     "migrate:local": "cd worker && npx wrangler d1 migrations apply financetracker --local",
     "tail": "cd worker && npx wrangler tail",
+    "tail:staging": "cd worker && npx wrangler tail --env staging",
     "login": "clasp login",
     "push": "clasp push",
     "pull": "clasp pull",

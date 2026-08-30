@@ -108,6 +108,8 @@ The repository is public. Do not put a secret value in a tracked file.
 | Item | Where | Notes |
 | --- | --- | --- |
 | App, API, bot and jobs | Cloudflare Workers, name `financetracker-telegram` | There is no custom domain. The address ends with `workers.dev`. Do not change the name: it is the address of the app and of the webhook. |
+| Staging app | Cloudflare Workers, name `financetracker-telegram-staging` | The `develop` branch deploys here. It has no bot, no cron and no email job. The data is invented. |
+| Staging database | Cloudflare D1, name `financetracker-staging` | It holds `worker/seed.sql` only. Never put real data here. |
 | Database | Cloudflare D1, name `financetracker` | Region `apac`. The id is in `worker/wrangler.toml`. |
 | Mail courier and backup | Google Apps Script | Open script.google.com, or use `npm run open`. The project id is in `.clasp.json`. There is no Web App deployment. |
 | Backup spreadsheet | Google Sheets, owner account | The job makes it on the first night and keeps the id in a script property. |
@@ -190,8 +192,23 @@ npm run dev              # operate the app, the API and the bot locally
 npm run dev:seed         # fill the local database with invented data
 npm run migrate          # apply the pending database migrations
 npm run tail             # read the live Worker log
+npm run tail:staging     # read the staging Worker log
 npm run push             # send the two files to Apps Script
 ```
+
+### The staging app
+
+The `develop` branch deploys to a second Worker. Each push to `develop` starts the Staging workflow. The workflow applies the migrations, then deploys. Use the staging app to examine a change before you merge the release.
+
+Staging is separate in every way that matters. It has its own database. It has no cron, so it never calls IBKR. It has no bot token and no email job. It needs one secret only:
+
+```bash
+cd worker && npx wrangler secret put APP_PASS --env staging
+```
+
+The database starts empty. To fill it, open the Staging workflow on GitHub, select **Run workflow**, and set **reseed** to true. The seed is `worker/seed.sql`, which holds invented data. A normal push never reseeds, so your test data stays while you work.
+
+**Do not copy the real data into staging.** A second copy doubles the damage if a person learns the passphrase.
 
 ### Release procedure
 
@@ -234,6 +251,7 @@ The code and the database do not go back together. Undo the code first.
 | The error "Wrong response from the webhook: 302". | The webhook address. It must be the Worker address, and it must end with `/tg`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |
 | The job does not record the emails. | The Gmail filter. Then the property `GMAIL_QUERY`, which replaces the label. Then the trigger, because Apps Script can disable it. Then the property `WORKER_URL` and the two `INGEST_TOKEN` values. |
+| The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create financetracker-staging --location=apac`, then write the id into the file. |
 | The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
 | The app asks for the passphrase frequently. | A person changed `APP_PASS`, or the cookie is more than one year old. |
 | The app starts, but each request fails. | `npm run tail`. Usually the D1 binding or a secret is absent. |
