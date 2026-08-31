@@ -306,15 +306,28 @@ describe('Apps Script (vm)', () => {
       assert.ok(/pricesJob\(env\)/.test(src), 'runCron must call pricesJob with the real pace');
     });
 
-    test('every write handler bumps the data version in its own batch', () => {
-      // The successor to "every write handler must end with cache_bumpVersion_()". Forget
-      // it and the SPA keeps serving a cached screen after the write — no error anywhere.
-      const DELEGATES = { ingestEmail: 1 };   // routes through createTransaction/createTransfer
-      Object.keys(worker.ROUTES_WRITE).forEach((name) => {
-        if (DELEGATES[name]) return;
-        assert.ok(worker.ROUTES_WRITE[name].toString().includes('bumpStmt'),
-          name + ' does not call bumpStmt — its writes would leave stale caches everywhere');
-      });
+    test('no handler carries a cache version any more', () => {
+      // The successor to "every write handler bumps the data version", which was itself
+      // the successor to cache_bumpVersion_(). Both existed because forgetting the bump
+      // left the SPA serving a cached screen with no error anywhere. v2.9.0 removed the
+      // invariant instead of guarding it harder: reads carry an ETag over their own
+      // bytes (worker.js readResponse), so a write has nothing to remember. This guard
+      // stops half of the old scheme growing back — a `version:` on one read handler
+      // would be a field the client no longer reads and nothing would say so.
+      const src = fs.readFileSync(path.join(__dirname, 'worker', 'src', 'api.js'), 'utf8');
+      assert.ok(!/bumpStmt|dataVersion|data_version/.test(src),
+        'api.js is bumping a data version again — the ETag is the invalidation now');
+      assert.ok(!/version:/.test(src), 'a read handler is stamping `version:` again');
+      assert.ok(!('getDataVersion' in worker.ROUTES_READ), 'getDataVersion is back');
+    });
+
+    test('every read is answered with an ETag and honours If-None-Match', () => {
+      // The whole client cache hangs off this one function. test-api.js proves it with
+      // real requests; this proves the read path still ROUTES through it, which is the
+      // part a refactor of api() could quietly drop.
+      const src = fs.readFileSync(path.join(__dirname, 'worker', 'worker.js'), 'utf8');
+      assert.ok(/readResponse\(body, request\)/.test(src), 'GET reads no longer go through readResponse');
+      assert.ok(/If-None-Match/.test(src) && /304/.test(src), 'readResponse no longer answers 304');
     });
 
     test('both create paths keep their idempotency contract', () => {
@@ -417,11 +430,11 @@ describe('Apps Script (vm)', () => {
       };
       app.globalThis = app;
       let seen = '';
-      app.fetch = (u) => { seen = u; return Promise.resolve({ status: 200, json: () => Promise.resolve({ status: 'ok' }) }); };
+      app.fetch = (u) => { seen = u; return Promise.resolve({ status: 200, headers: { get: () => '"tag"' },
+                                                                json: () => Promise.resolve({ status: 'ok' }) }); };
       vm.createContext(app);
       vm.runInContext(fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8'), app, { filename: 'app.js' });
       assert.ok(app.SCREEN_FNS.admin, 'the Admin screen is not registered');
-      app.S.dataVersion = 41; app.S._verAt = Date.now();
       // Net worth: last point = current total; earlier months roll back through
       // that month's savings UNLESS a real snapshot pins them.
       const cf = [{ month: '2026-Jun', income: 80, expense: 30 },

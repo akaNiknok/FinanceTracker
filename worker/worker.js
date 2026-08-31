@@ -25,7 +25,8 @@
  *
  * The KV edge read cache is GONE. It existed to hide Apps Script latency and D1 is the
  * thing it was faking; the namespace is rebound as FX_CACHE (see src/fx.js). The
- * client's own version-gated cache is untouched — it is still the offline story.
+ * client's own cache is untouched — it is still the offline story — and every GET read
+ * carries an ETag it revalidates against (see readResponse).
  *
  * Secrets (wrangler secret put ...):
  *   APP_PASS, SECRET_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, GEMINI_API_KEY,
@@ -34,7 +35,7 @@
  */
 import {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
-  getLedger, getDataVersion, listTransactions, listTable, getExportAll,
+  getLedger, listTransactions, listTable, getExportAll,
   createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
   bulkUpdateTransactions, bulkDeleteTransactions, updateLedgerCell, appendLedgerRow,
   deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
@@ -51,7 +52,7 @@ const COOKIE = 'ft_auth';
  */
 export const ROUTES_READ = {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
-  getLedger, getDataVersion, listTransactions,
+  getLedger, listTransactions,
   listTable,        // admin grid
   getExportAll      // backup puller + the admin screen's CSV
 };
@@ -166,17 +167,41 @@ async function api(request, env, url) {
                   knownActions: Object.keys(request.method === 'GET' ? ROUTES_READ : ROUTES_WRITE) });
   }
   try {
-    return json(await handler(args, env));
+    const body = await handler(args, env);
+    return request.method === 'GET' ? readResponse(body, request) : json(body);
   } catch (err) {
     console.error(action + ': ' + (err && err.stack ? err.stack : err));
     return json({ status: 'error', message: (err && err.message) ? err.message : String(err) });
   }
 }
 
-const json = (body, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
-  });
+const HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: HEADERS });
+
+/**
+ * A read, answered with an ETag over its own bytes — and 304 when the caller already
+ * holds them. This REPLACED meta.data_version (v2.9.0): one counter could only say
+ * "something, somewhere, changed", so a Telegram ingest at 03:00 re-downloaded the
+ * dashboard, the accounts, the tax year and every admin page the phone had cached.
+ * A hash of the payload answers the question the client is actually asking — "is THIS
+ * screen different?" — and it answers it for the month-, year- and page-scoped cache
+ * keys too, which no counter could see. It also needs nothing from the write handlers,
+ * so a new route (or a new cron write) can never forget to invalidate.
+ *
+ * The tag must be stable for identical data, so a read payload must never carry a
+ * clock. test-api.js calls every read route twice and fails if a tag moves.
+ * `Cache-Control: no-store` stays: the SPA holds the tag in its own persisted cache and
+ * sends If-None-Match itself, so the browser's HTTP cache is not in the path at all —
+ * one cache, and it is the one that already survives a reload and works offline.
+ */
+async function readResponse(body, request) {
+  const s = JSON.stringify(body);
+  const tag = '"' + (await sha256(s)).slice(0, 32) + '"';
+  const headers = Object.assign({ ETag: tag }, HEADERS);
+  if (request.headers.get('If-None-Match') === tag) return new Response(null, { status: 304, headers });
+  return new Response(s, { status: 200, headers });
+}
 
 async function sha256(s) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
