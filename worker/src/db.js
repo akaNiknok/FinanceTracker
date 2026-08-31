@@ -138,16 +138,17 @@ export async function metaSet(env, key, value) {
   await env.DB.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .bind(key, String(value)).run();
 }
-export async function dataVersion(env) {
-  return Number(await metaGet(env, 'data_version', '0')) || 0;
-}
 /**
- * The version bump, as a statement to append to a write's own batch. D1 batches are
- * transactional, so "write + bump" is atomic — which is what replaces v1's su_lock_()
- * plus cache_bumpVersion_() pair entirely.
+ * There is no data version any more (v2.9.0). Every write used to append a bumpStmt()
+ * to its own batch and every read used to stamp the counter into its payload; the SPA
+ * refetched a screen when the number moved. It moved on EVERY write, so an ingest the
+ * owner never saw re-downloaded every cached screen. Reads now carry an ETag over their
+ * own bytes (worker.js readResponse), which is exact, needs nothing from a write path,
+ * and cannot be forgotten by a new handler.
+ * ponytail: `meta.data_version` is left in the table on purpose — dropping it in the
+ * same release as the code that stopped using it would leave a `wrangler rollback`
+ * with a frozen counter and permanently stale screens. Drop it a release later.
  */
-export const bumpStmt = (env) =>
-  env.DB.prepare("UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'");
 
 // ── balances (the port of "derivation lives in the Sheet") ───────────────────
 /**

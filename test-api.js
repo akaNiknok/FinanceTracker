@@ -235,11 +235,13 @@ function d1(db) {
       await assert.rejects(() => api.updateAccount({ Name: 'Nope', Notes: 'x' }, env), /Unknown Account/);
     });
 
-    test('a write bumps the data version', async () => {
-      const before = (await api.getDataVersion({}, env)).version;
+    test('a write leaves the row it wrote and nothing else to remember', async () => {
+      // Was 'a write bumps the data version'. There is no counter any more (v2.9.0) —
+      // the ETag over each read's own bytes is the invalidation, so a write's whole
+      // job is the write. The cache consequences are tested at the HTTP layer below.
       await api.createTransaction({ ID: 't3', Date: '2026-08-12', Category: 'Expense: Food',
                                     Account: 'Card', Amount: 1200 }, env);
-      assert.ok((await api.getDataVersion({}, env)).version > before);
+      assert.strictEqual((await api.listTransactions({ id: 't3' }, env)).total, 1);
     });
   });
 
@@ -363,8 +365,9 @@ function d1(db) {
 
     test('getBootstrap hydrates everything the app needs', async () => {
       const b = await api.getBootstrap({}, env);
-      ['owner', 'baseCurrency', 'categories', 'accounts', 'budgets', 'recurring', 'fxUsdPhp', 'minMonth', 'version']
+      ['owner', 'baseCurrency', 'categories', 'accounts', 'budgets', 'recurring', 'fxUsdPhp', 'minMonth']
         .forEach((k) => assert.ok(k in b, 'missing ' + k));
+      assert.ok(!('version' in b), 'the data version is back in the bootstrap payload');
       assert.strictEqual(b.minMonth, '2026-Jul');
       assert.strictEqual(b.recurring[0].Description, 'Internet');
       assert.strictEqual(b.recurring[0].Amount, 1699);
@@ -879,9 +882,9 @@ function d1(db) {
 
   await describe('HTTP layer', () => {
     test('/api is closed without a credential and open with either one', async () => {
-      assert.strictEqual((await call('/api?action=getDataVersion')).status, 401);
+      assert.strictEqual((await call('/api?action=getRecurring')).status, 401);
       const cookie = { Cookie: 'ft_auth=' + await hex('pw') };
-      assert.strictEqual((await call('/api?action=getDataVersion', { headers: cookie })).body.status, 'success');
+      assert.strictEqual((await call('/api?action=getRecurring', { headers: cookie })).body.status, 'success');
       const bearer = { Authorization: 'Bearer tok' };
       assert.strictEqual((await call('/api?action=getExportAll', { headers: bearer })).body.status, 'success');
     });
@@ -890,13 +893,13 @@ function d1(db) {
       // The passphrase guards the deployed app. Locally it only blocked the agents and
       // the fresh checkouts that have no worker/.dev.vars, and Cloudflare cannot route
       // a production request to Host: localhost.
-      const local = await worker.fetch(new Request('http://localhost:8123/api?action=getDataVersion'), wenv, ctx);
+      const local = await worker.fetch(new Request('http://localhost:8123/api?action=getRecurring'), wenv, ctx);
       assert.strictEqual(local.status, 200);
       assert.strictEqual((await local.json()).status, 'success');
       // ...and with no APP_PASS set at all, which is exactly what a fresh checkout has.
-      const bare = await worker.fetch(new Request('http://127.0.0.1/api?action=getDataVersion'), env, ctx);
+      const bare = await worker.fetch(new Request('http://127.0.0.1/api?action=getRecurring'), env, ctx);
       assert.strictEqual((await bare.json()).status, 'success');
-      assert.strictEqual((await call('/api?action=getDataVersion')).status, 401);
+      assert.strictEqual((await call('/api?action=getRecurring')).status, 401);
     });
 
     test('/api enforces the GET/POST split and answers errors as JSON 200', async () => {
@@ -912,6 +915,83 @@ function d1(db) {
       assert.strictEqual(bad.status, 200);
       assert.strictEqual(bad.body.status, 'error');
       assert.match(bad.body.message, /No transaction/);
+    });
+
+    // ── the ETag, which IS the client cache (v2.9.0, replaced meta.data_version) ──
+    const cookie = () => hex('pw').then((h) => ({ Cookie: 'ft_auth=' + h }));
+    const raw = async (url, headers) =>
+      worker.fetch(new Request('https://x' + url, { headers }), wenv, ctx);
+
+    test('a read carries an ETag and answers 304 when the caller already holds it', async () => {
+      const h = await cookie();
+      const first = await raw('/api?action=getAccounts', h);
+      const tag = first.headers.get('ETag');
+      assert.ok(tag, 'getAccounts sent no ETag — the whole client cache hangs off it');
+      assert.strictEqual(first.status, 200);
+      const again = await raw('/api?action=getAccounts', Object.assign({ 'If-None-Match': tag }, h));
+      assert.strictEqual(again.status, 304);
+      assert.strictEqual(again.headers.get('ETag'), tag);
+      assert.strictEqual(await again.text(), '', '304 must carry no body — that is the saving');
+      // A stale tag is not a match, and must come back with the whole payload.
+      const stale = await raw('/api?action=getAccounts', Object.assign({ 'If-None-Match': '"nope"' }, h));
+      assert.strictEqual(stale.status, 200);
+      assert.ok((await stale.json()).accounts.length);
+    });
+
+    test('a write moves the tag of what it changed and NOT of what it did not', async () => {
+      // This is the entire point of the change. Under meta.data_version EVERY tag moved
+      // on ANY write, so one Telegram ingest re-downloaded every cached screen.
+      const h = await cookie();
+      const tagOf = async (url) => (await raw(url, h)).headers.get('ETag');
+      const augBefore = await tagOf('/api?action=getBudgets&month=2026-Aug');
+      const janBefore = await tagOf('/api?action=getBudgets&month=2026-Jan');
+      const recBefore = await tagOf('/api?action=getRecurring');
+      const metaBefore = await tagOf('/api?action=listTable&table=meta');
+      await api.createTransaction({ ID: 'etag-1', Date: '2026-08-19', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: 250 }, env);
+      assert.notStrictEqual(await tagOf('/api?action=getBudgets&month=2026-Aug'), augBefore,
+        'August changed and its tag did not move — the screen would go stale');
+      assert.strictEqual(await tagOf('/api?action=getBudgets&month=2026-Jan'), janBefore,
+        'an August write moved the January tag — a month-scoped key must not refetch');
+      assert.strictEqual(await tagOf('/api?action=getRecurring'), recBefore,
+        'an unrelated payload moved — the tag is not over its own bytes');
+      assert.strictEqual(await tagOf('/api?action=listTable&table=meta'), metaBefore,
+        'an admin page moved on a transaction write');
+    });
+
+    test('getDashboard is the one screen a write always moves, and that is honest', async () => {
+      // Worth pinning, because it is the exception to the paragraph above. EVERY month's
+      // dashboard payload carries the LIVE hero (netWorth/assets/liabilities/sharesValue)
+      // and the rolling cashflow window, so any write changes January's bytes as well as
+      // August's. The tag is telling the truth — the number on that screen really did
+      // move — so this is not a bug to fix by trimming the payload; the hero is the point
+      // of the screen. It does mean the dashboard is the one key that cannot 304 after a
+      // write, and the saving lives on Budgets, Tax and the admin pages instead.
+      const h = await cookie();
+      const before = (await raw('/api?action=getDashboard&month=2026-Jan', h)).headers.get('ETag');
+      await api.createTransaction({ ID: 'etag-2', Date: '2026-08-20', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: 99 }, env);
+      assert.notStrictEqual((await raw('/api?action=getDashboard&month=2026-Jan', h)).headers.get('ETag'),
+        before, 'the live hero stopped moving the tag — is netWorth still in the payload?');
+    });
+
+    test('every read route answers the same bytes twice', async () => {
+      // The one way an ETag dies silently: a clock (or anything else per-request) in a
+      // read payload makes every tag unique, so nothing ever 304s and nobody notices —
+      // the app just quietly costs what it used to. getExportAll is exempt: it stamps
+      // exportedAt on purpose, and it is the backup puller's, not a cached screen.
+      const h = await cookie();
+      const ARGS = { listTable: '&table=meta' };   // the only read that needs one to succeed
+      const routes = Object.keys((await load('worker.js')).ROUTES_READ).filter((n) => n !== 'getExportAll');
+      for (const action of routes) {
+        const url = '/api?action=' + action + (ARGS[action] || '');
+        const one = await raw(url, h);
+        const two = await raw(url, h);
+        assert.strictEqual(one.status, 200, action + ' did not answer 200');
+        assert.ok(one.headers.get('ETag'), action + ' sent no ETag');
+        assert.strictEqual(two.headers.get('ETag'), one.headers.get('ETag'),
+          action + ' answers a different ETag for identical data — something in its payload moves per request');
+      }
     });
   });
 })().catch((err) => { console.error(err); process.exit(1); });

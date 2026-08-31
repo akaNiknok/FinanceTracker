@@ -4,15 +4,17 @@
  *
  * THE PRIME DIRECTIVE OF THIS FILE: the JSON contract does not change. Same action
  * names, same argument names (the sheet's header casing — `Category`, `Amount`,
- * `Amount (PHP)`), same response keys, same {status:'error'|'duplicate'} semantics,
- * same DATA_VERSION protocol. worker/public/app.js is untouched by the platform
- * swap except for the new admin screen. The v1 fixture diff that proved it
- * (migrate/verify.js) retired with the cutover; test-api.js is the standing check.
+ * `Amount (PHP)`), same response keys, same {status:'error'|'duplicate'} semantics.
+ * worker/public/app.js is untouched by the platform swap except for the new admin
+ * screen. (The one contract change since: the `version` field went away in v2.9.0 —
+ * an ETag over the response bytes replaced it, see worker.js readResponse.) The v1
+ * fixture diff that proved it (migrate/verify.js) retired with the cutover;
+ * test-api.js is the standing check.
  *
  * What DID change, and why it is less code rather than more:
- *   * su_lock_() + cache_bumpVersion_() are gone. D1 batch() is transactional, so
- *     every write puts its statements AND bumpStmt() in one batch: no lock to take,
- *     no bump to forget, no window where a reader sees the write but the old version.
+ *   * su_lock_() + cache_bumpVersion_() are gone, and so is the data version that
+ *     replaced them (v2.9.0). D1 batch() is transactional, so a write needs no lock;
+ *     a read carries an ETag over its own bytes, so no write has a cache to bump.
  *   * the derivation band (ARRAYFORMULAs) is gone. Month and Amount (PHP) are
  *     generated columns; Type/Segment/Currency are JOINs. There is no "never write a
  *     derived column" rule left to break.
@@ -24,7 +26,7 @@
  */
 import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
-  dataVersion, bumpStmt, toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
+  toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
   monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, manilaYesterday, BASE_CURRENCY,
   isInvestedNetWorth, isSharesAcct, NOT_SHARES_SRC, resolveAccount, resolveCategory
 } from './db.js';
@@ -113,14 +115,10 @@ async function accountsList(env, r) {
 }
 
 // ── reads ────────────────────────────────────────────────────────────────────
-export async function getDataVersion(args, env) {
-  return { status: 'success', version: await dataVersion(env) };
-}
-
 export async function getAccounts(args, env) {
   const r = await refs(env);
   const { accounts } = await accountsList(env, r);
-  return { status: 'success', version: await dataVersion(env), accounts };
+  return { status: 'success', accounts };
 }
 
 export async function getRecurring(args, env) {
@@ -163,7 +161,7 @@ export async function listTransactions(args, env) {
       .bind(...bind, limit, offset)
   ]);
   return {
-    status: 'success', version: await dataVersion(env),
+    status: 'success',
     total: cnt.results[0].n, offset, limit,
     transactions: page.results.map((row) => shapeTx(row, r))
   };
@@ -281,11 +279,20 @@ function combine(budgets, names) {
   };
 }
 
+/**
+ * The whole Budgets screen in one response. `recurring` rides along because the screen
+ * always draws both and getRecurring is a handful of rows: two GETs meant two ETags to
+ * revalidate and two round trips on a cell connection to learn nothing changed.
+ * getRecurring stays a route of its own — getBootstrap and the admin grid still use it.
+ */
 export async function getBudgets(args, env) {
   const r = await refs(env);
   const fx = await fxMap(env, r.accounts.map((a) => a.currency).concat(['USD']));
-  return Object.assign({ status: 'success', version: await dataVersion(env) },
-    await budgetsPayload(env, args.month, fx));
+  const [payload, recurring] = await Promise.all([
+    budgetsPayload(env, args.month, fx),
+    getRecurring({}, env)
+  ]);
+  return Object.assign({ status: 'success', recurring: recurring.rows }, payload);
 }
 
 /** The net-worth fold over shaped accounts, in raw PHP (q2 at the boundary).
@@ -394,7 +401,7 @@ export async function getDashboard(args, env) {
   });
 
   return {
-    status: 'success', version: await dataVersion(env), month,
+    status: 'success', month,
     netWorth: q2(totals.netWorth), assets: q2(totals.assets), liabilities: q2(totals.liabilities),
     sharesValue: q2(totals.sharesValue),
     spendBySegment, spendByCategory,
@@ -559,7 +566,7 @@ export async function getInvestments(args, env) {
   };
 
   return {
-    status: 'success', version: await dataVersion(env),
+    status: 'success',
     totalValuePhp: q2(total), totalCostPhp: q2(totalCostPhp),
     totalGainPhp: q2(total - totalCostPhp), positions,
     pulse: { currentQuarter: quarterOf(manilaToday()), quarters },
@@ -595,8 +602,7 @@ export async function getBootstrap(args, env) {
     recurring: recurring.rows,
     fxUsdPhp: fx.USD || null,
     // Oldest ledger month, so the month pickers reach all history.
-    minMonth: minRow && minRow.d ? monthOf(minRow.d) : null,
-    version: Number(meta.data_version) || 0
+    minMonth: minRow && minRow.d ? monthOf(minRow.d) : null
   };
 }
 
@@ -642,7 +648,7 @@ export async function getLedger(args, env) {
       'ORDER BY t.date DESC, t.rowid DESC').bind(cat ? cat.id : -1)
   ]);
   return {
-    status: 'success', version: await dataVersion(env),
+    status: 'success',
     year: String(args.year || manilaToday().slice(0, 4)),
     years: years.results.map((x) => x.y),
     rows: view.results.map(shapeLedger),
@@ -676,8 +682,7 @@ export async function updateLedgerCell(args, env) {
   if (!args.header) throw new Error('updateLedgerCell requires a column header.');
   const { col, value } = ledgerCell(args.header, args.value);
   const [res] = await env.DB.batch([
-    env.DB.prepare('UPDATE ledger SET ' + col + ' = ? WHERE id = ?').bind(value, row),
-    bumpStmt(env)
+    env.DB.prepare('UPDATE ledger SET ' + col + ' = ? WHERE id = ?').bind(value, row)
   ]);
   if (!res.meta.changes) throw new Error('No ledger row ' + row + '.');
   const fresh = await env.DB.prepare('SELECT * FROM ledger_view WHERE id = ?').bind(row).first();
@@ -694,8 +699,7 @@ export async function appendLedgerRow(args, env) {
   });
   if (!cols.length) throw new Error('Nothing to add — fill at least one editable field.');
   const [res] = await env.DB.batch([
-    env.DB.prepare('INSERT INTO ledger (' + cols.join(',') + ') VALUES (' + list(cols.length) + ')').bind(...vals),
-    bumpStmt(env)
+    env.DB.prepare('INSERT INTO ledger (' + cols.join(',') + ') VALUES (' + list(cols.length) + ')').bind(...vals)
   ]);
   return { status: 'success', row: res.meta.last_row_id };
 }
@@ -704,7 +708,7 @@ export async function deleteLedgerRow(args, env) {
   const row = parseInt(args.row, 10);
   if (!row) throw new Error('deleteLedgerRow requires a valid data row.');
   const [res] = await env.DB.batch([
-    env.DB.prepare('DELETE FROM ledger WHERE id = ?').bind(row), bumpStmt(env)
+    env.DB.prepare('DELETE FROM ledger WHERE id = ?').bind(row)
   ]);
   if (!res.meta.changes) throw new Error('No ledger row ' + row + '.');
   return { status: 'success', row };
@@ -742,8 +746,7 @@ export async function createTransaction(args, env) {
     env.DB.prepare('INSERT INTO transactions (id, date, period, category_id, description, account_id, amount_u, fx_rate) ' +
       'VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING')
       .bind(id, row.date, parsePeriod(args.Period) || null, cat.id,
-            args.Description || '', acct.id, row.amount_u, fx.blank ? null : fx.rate),
-    bumpStmt(env)
+            args.Description || '', acct.id, row.amount_u, fx.blank ? null : fx.rate)
   ]);
   const transaction = await txById(env, r, id);
   if (!res.meta.changes) return { status: 'duplicate', message: 'ID already exists.', transaction };
@@ -804,8 +807,7 @@ export async function createTransfer(args, env) {
       'VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING')
       .bind(id, row.date, parsePeriod(args.Period) || null, cat.id,
             args.Description || '', acct.id, row.amount_u, fx.blank ? null : fx.rate,
-            to.id, toU(toAmount)),
-    bumpStmt(env)
+            to.id, toU(toAmount))
   ]);
   const transaction = await txById(env, r, id);
   if (!res.meta.changes) return { status: 'duplicate', message: 'ID already exists.', transaction };
@@ -867,8 +869,7 @@ export async function updateTransaction(args, env) {
   }
 
   await env.DB.batch([
-    env.DB.prepare('UPDATE transactions SET ' + set.join(', ') + ' WHERE id = ?').bind(...bind, args.ID),
-    bumpStmt(env)
+    env.DB.prepare('UPDATE transactions SET ' + set.join(', ') + ' WHERE id = ?').bind(...bind, args.ID)
   ]);
   return { status: 'success', message: 'Transaction updated.', transaction: await txById(env, r, args.ID) };
 }
@@ -879,7 +880,7 @@ export async function deleteTransaction(args, env) {
   const snapshot = await txById(env, r, args.ID);
   if (!snapshot) throw new Error('No transaction with ID: ' + args.ID);
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM transactions WHERE id = ?').bind(args.ID), bumpStmt(env)
+    env.DB.prepare('DELETE FROM transactions WHERE id = ?').bind(args.ID)
   ]);
   return { status: 'success', message: 'Transaction deleted.', transaction: snapshot };
 }
@@ -946,8 +947,7 @@ export async function bulkUpdateTransactions(args, env) {
   if (targets.length) {
     await env.DB.batch([
       env.DB.prepare('UPDATE transactions SET ' + set.join(', ') + ' WHERE id IN (' + list(targets.length) + ')')
-        .bind(...bind, ...targets),
-      bumpStmt(env)
+        .bind(...bind, ...targets)
     ]);
   }
   return { status: 'success', message: 'Bulk update complete.', updated: targets.length, skipped };
@@ -961,8 +961,7 @@ export async function bulkDeleteTransactions(args, env) {
   const have = new Set(found);
   if (found.length) {
     await env.DB.batch([
-      env.DB.prepare('DELETE FROM transactions WHERE id IN (' + list(found.length) + ')').bind(...found),
-      bumpStmt(env)
+      env.DB.prepare('DELETE FROM transactions WHERE id IN (' + list(found.length) + ')').bind(...found)
     ]);
   }
   return { status: 'success', message: 'Bulk delete complete.', deleted: found.length,
@@ -1000,8 +999,7 @@ export async function updateAccount(args, env) {
   const target = resolveAccount(await refs(env), args.Name);
   if (!target) throw new Error('Unknown Account: ' + args.Name);
   const [res] = await env.DB.batch([
-    env.DB.prepare('UPDATE accounts SET ' + set.join(', ') + ' WHERE id = ?').bind(...bind, target.id),
-    bumpStmt(env)
+    env.DB.prepare('UPDATE accounts SET ' + set.join(', ') + ' WHERE id = ?').bind(...bind, target.id)
   ]);
   if (!res.meta.changes) throw new Error('Unknown Account: ' + args.Name);
   return { status: 'success', message: 'Account updated.', name: target.name, fieldsWritten: set.length };
@@ -1078,7 +1076,7 @@ export async function listTable(args, env) {
     return o;
   });
   return {
-    status: 'success', version: await dataVersion(env),
+    status: 'success',
     table: name, pk: t.pk, editable: t.edit, addable: addCols(t), money: moneyCols(t),
     deletable: !t.nodelete,
     tables: Object.keys(TABLES),   // the Admin screen's picker buttons, in TABLES order
@@ -1132,8 +1130,7 @@ export async function updateTableCell(args, env) {
   await assertNotFrozen(env, name, col, args.pk);
   const [res] = await env.DB.batch([
     env.DB.prepare('UPDATE ' + name + ' SET ' + col + ' = ? WHERE ' + t.pk + ' = ?')
-      .bind(coerceCell(t, col, args.value), args.pk),
-    bumpStmt(env)
+      .bind(coerceCell(t, col, args.value), args.pk)
   ]);
   if (!res.meta.changes) throw new Error('No ' + name + ' row with ' + t.pk + ' = ' + args.pk);
   return { status: 'success', table: name, pk: args.pk, column: col };
@@ -1152,8 +1149,7 @@ export async function insertTableRow(args, env) {
   });
   if (!cols.length) throw new Error('Nothing to insert. Settable: ' + allowed.join(', '));
   const [res] = await env.DB.batch([
-    env.DB.prepare('INSERT INTO ' + name + ' (' + cols.join(',') + ') VALUES (' + list(cols.length) + ')').bind(...vals),
-    bumpStmt(env)
+    env.DB.prepare('INSERT INTO ' + name + ' (' + cols.join(',') + ') VALUES (' + list(cols.length) + ')').bind(...vals)
   ]);
   return { status: 'success', table: name, pk: res.meta.last_row_id };
 }
@@ -1164,8 +1160,7 @@ export async function deleteTableRow(args, env) {
   if (t.nodelete) throw new Error(name + ' is read-only in the admin grid.');
   if (args.pk === undefined || args.pk === null || args.pk === '') throw new Error('deleteTableRow requires pk.');
   const [res] = await env.DB.batch([
-    env.DB.prepare('DELETE FROM ' + name + ' WHERE ' + t.pk + ' = ?').bind(args.pk),
-    bumpStmt(env)
+    env.DB.prepare('DELETE FROM ' + name + ' WHERE ' + t.pk + ' = ?').bind(args.pk)
   ]);
   if (!res.meta.changes) throw new Error('No ' + name + ' row with ' + t.pk + ' = ' + args.pk);
   return { status: 'success', table: name, pk: args.pk, deleted: res.meta.changes };
@@ -1184,6 +1179,6 @@ export async function getExportAll(args, env) {
   const res = await env.DB.batch(names.map((n) => env.DB.prepare('SELECT * FROM ' + n)));
   const tables = {};
   names.forEach((n, i) => { tables[n] = res[i].results; });
-  return { status: 'success', version: await dataVersion(env),
+  return { status: 'success',
            exportedAt: new Date().toISOString(), tables };
 }
