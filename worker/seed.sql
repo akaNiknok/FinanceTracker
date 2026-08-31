@@ -91,7 +91,7 @@ INSERT INTO categories (id,name,type,segment,description) VALUES
   (34,'Services: Professional',      'Expense', 'Essentials','Haircut, laundry, package delivery (Lalamove) etc.'),
   (35,'Health: Medical',             'Expense', 'Essentials','Checkups, medicines, vitamins.'),
   (36,'Health: Fitness',             'Expense', 'Essentials','Gym fees, sports equipment (maintenance).'),
-  (37,'Gov: Contributions',          'Expense', NULL,        'SSS, PhilHealth, Pag-IBIG (Voluntary).'),
+  (37,'Gov: Contributions',          'Expense', 'Essentials','SSS, PhilHealth, Pag-IBIG (Voluntary).'),
   (38,'Gov: Fees',                   'Expense', 'Essentials','Other government fees'),
   (39,'Financial: Bank Fees',        'Expense', 'Essentials','Transfer fees, charges'),
   (40,'Financial: Untracked Change', 'Expense', 'Essentials','Untracked change'),
@@ -99,8 +99,7 @@ INSERT INTO categories (id,name,type,segment,description) VALUES
   (42,'Financial: Credit Payment',   'Transfer',NULL,        'Paying back credit'),
   (43,'Financial: Loan',             'Transfer',NULL,        'Loan'),
   (44,'Investment: Growth',          'Transfer','Growth',    'Growth investing funding: the monthly $200 moved to the broker (Wise to IBKR). Funding leg only'),
-  (45,'Transfer: Internal',          'Transfer',NULL,        'Moves between own accounts, including broker buys (IBKR to a ticker or IB01) and EF parking'),
-  (46,'Transfer: Essential',         'Transfer','Essentials','Do not use unless explicitly stated');
+  (45,'Transfer: Internal',          'Transfer',NULL,        'Moves between own accounts, including broker buys (IBKR to a ticker or IB01) and EF parking');
 
 -- Deliberately NO Stability row: the EF accrues as unspent residue and the runway card
 -- is its only measure. See CLAUDE.md.
