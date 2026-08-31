@@ -13,7 +13,7 @@
  * name prefix IS the rule that picks between them — it matches ROUTES_READ in
  * worker.js, so there's no second list to keep in sync. Nothing secret reaches
  * this file. */
-function gs(fn, arg, _retried){
+function gs(fn, arg, etag, _retried){
   var action = fn.replace(/^api_/, '');
   var read = /^(get|list)/.test(action);
   var url = '/api?action=' + encodeURIComponent(action), init, body = null;
@@ -23,9 +23,12 @@ function gs(fn, arg, _retried){
     });
     // No `_v` cache-bucket stamp any more: the Worker's KV read cache went away with
     // Apps Script in v2.0.0 (it existed to hide GAS latency, and D1 is the thing it was
-    // faking). The version gate that mattered is still here, one level up in
-    // cachedCall — it is also what makes the persisted cache the offline story.
-    init = { method:'GET' };
+    // faking). The gate that matters is one level up in cachedCall, and it is what
+    // makes the persisted cache the offline story.
+    // The conditional request: hand the tag we already hold back to the Worker, which
+    // answers 304 with no body when that payload has not changed. This is what makes
+    // an unrelated write (a 03:00 Telegram ingest) cost headers instead of a screen.
+    init = { method:'GET', headers: etag ? { 'If-None-Match': etag } : {} };
   } else {
     body = arg ? JSON.parse(JSON.stringify(arg)) : {};
     body.action = action;
@@ -39,7 +42,9 @@ function gs(fn, arg, _retried){
   return fetch(url, init).then(function(res){
     // The passphrase cookie expired (or was never set). Ask once, then retry —
     // a clean 401 is why /api answers JSON instead of redirecting to a login page.
-    if (res.status === 401 && !_retried) return unlock().then(function(){ return gs(fn, arg, true); });
+    if (res.status === 401 && !_retried) return unlock().then(function(){ return gs(fn, arg, etag, true); });
+    // Nothing changed. Only cachedCall ever sends a tag, so only cachedCall sees this.
+    if (res.status === 304) return { __304:true };
     return res.json().then(function(r){
       if (r == null) throw new Error('Empty response from server (a Date may have leaked into the payload).');
       if (r.status === 'error'){
@@ -47,6 +52,8 @@ function gs(fn, arg, _retried){
         // the ONLY thing flushQueue is allowed to discard a queued write for.
         var se = new Error(r.message || 'Server error'); se._server = true; throw se;
       }
+      // The tag travels beside the payload; cachedCall lifts it off before storing.
+      r.__etag = res.headers.get('ETag');
       return r;
     }, function(){ throw new Error('Server returned '+res.status+' (not JSON)'); });
   }, function(){
@@ -171,26 +178,37 @@ function unlock(){
   return _unlocking;
 }
 
-/* ── stale-while-revalidate cache, gated by the server data version ──────────
- * cachedCall(key, loader, onData): paint instantly from cache, then check the
- * tiny api_getDataVersion; only re-run `loader` (the big payload) when the
- * version moved. onData may fire twice: once from cache, once after a refetch.
- * `loader` is a thunk returning a Promise (so callers can Promise.all).
+/* ── stale-while-revalidate cache, revalidated with an ETag ──────────────────
+ * cachedCall(key, loader, onData): paint instantly from cache, then re-ask for the
+ * payload WITH the tag we already hold. Unchanged → 304, no body, nothing repainted.
+ * Changed → the new payload, cached and repainted. onData may fire twice: once from
+ * cache, once after a real refetch. `loader(etag)` returns a Promise.
  *
- * Round trips are the whole cost here — every /api call is a fresh GAS execution
- * a round trip — so two things keep them to a minimum: a cold key takes the version
- * straight out of its own payload (read handlers stamp `version`; the separate
- * api_getDataVersion is only a fallback for composite payloads), and a version
- * checked within VER_TTL is trusted, which kills the duplicate pings from a
- * re-render or a quick tab flip back and forth. */
-var VER_TTL = 3000;
-function verKnown(){ return S._verAt && (Date.now() - S._verAt) < VER_TTL; }
-/* Post-write invalidation: drop every payload AND the "version just checked"
- * stamp, since the write bumped the version server-side. */
-function dropCache(){ S.cache={}; S._verAt=0; saveCache(); }
-function putCache(key, data, version){
-  S.cache[key] = { data:data, version:version };
-  S.dataVersion = version; S._verAt = Date.now();
+ * This replaced one `meta.data_version` counter in v2.9.0. A counter can only say
+ * "something, somewhere, changed", so ANY write — a Telegram ingest at 03:00 the
+ * owner never saw — re-downloaded every screen the phone had cached. A tag over the
+ * payload's own bytes answers the question actually being asked, "is THIS screen
+ * different?", and it is the only thing that can see the month-, year- and
+ * page-scoped keys below: today's transaction does not change `dashboard|2026-Mar`,
+ * so browsing back through history now answers 304 instead of refetching in full.
+ *
+ * REVAL_TTL is the one part of the counter worth keeping: a key revalidated inside
+ * the window is not revalidated again, which kills the duplicate requests from a
+ * re-render or a quick tab flip. Data Saver widens it to a minute — on a cell
+ * connection the cost is the RADIO WAKE-UP, not the ~200 bytes, and walking four
+ * screens used to spend four of them. Refresh clears the stamps, so a forced check
+ * is still one tap. `connection` is Chromium-only; everywhere else gets 3000. */
+var REVAL_TTL = (navigator.connection && navigator.connection.saveData) ? 60000 : 3000;
+function fresh(c){ return c && (Date.now() - (c.at||0)) < REVAL_TTL; }
+/* Post-write invalidation. The TAGS are kept on purpose: a write moves some screens
+ * and not others, and the ones it did not move now answer 304 on their next visit
+ * instead of refetching. Only the freshness stamp goes, so every key revalidates. */
+function dropCache(){
+  Object.keys(S.cache).forEach(function(k){ S.cache[k].at = 0; });
+  saveCache();
+}
+function putCache(key, data, etag){
+  S.cache[key] = { data:data, etag:etag||null, at:Date.now() };
   saveCache();
 }
 function cachedCall(key, loader, onData){
@@ -199,42 +217,46 @@ function cachedCall(key, loader, onData){
   // is still on screen — otherwise a slow fetch lands after you've navigated away and
   // yanks you back to the screen you left.
   function emit(d){ if (gen === screenGen) onData(d); }
-  function fill(v){                       // fetch the payload and cache it at version v
-    return loader().then(function(data){
-      var ver = (data && data.version != null) ? data.version : v;
-      if (ver == null) return gs('api_getDataVersion').then(function(r){ putCache(key, data, r.version); emit(data); });
-      putCache(key, data, ver); emit(data);
-    });
+  if (cached){
+    emit(cached.data);                    // instant paint from cache
+    if (fresh(cached)) return Promise.resolve();
   }
-  if (!cached) return fill(verKnown() ? S.dataVersion : null);
-  emit(cached.data);                      // instant paint from cache
-  if (verKnown()) return S.dataVersion === cached.version ? Promise.resolve() : fill(S.dataVersion);
-  return gs('api_getDataVersion').then(function(v){
-    S.dataVersion = v.version; S._verAt = Date.now();
-    if (v.version === cached.version) return;          // unchanged → no big fetch
-    return fill(v.version);                            // repaint with fresh data
-  }).catch(function(){ /* keep showing stale on a revalidation hiccup */ });
+  return loader(cached && cached.etag).then(function(data){
+    if (data && data.__304){               // unchanged: keep the paint, restamp
+      cached.at = Date.now(); saveCache();
+      return;
+    }
+    var etag = data && data.__etag; if (data) delete data.__etag;
+    putCache(key, data, etag); emit(data);
+  }).catch(function(e){
+    // A cold key has nothing on screen, so its caller still needs the error. With a
+    // cached paint up, a revalidation hiccup is not worth one — keep showing stale.
+    if (!cached) throw e;
+  });
 }
 
 /* ── cache persistence ───────────────────────────────────────────────────────
- * The version gate makes the cache safe to reuse across a reload, so keep it in
+ * The ETag makes the cache safe to reuse across a reload, so keep it in
  * localStorage: a reload (or reopening the home-screen shortcut) paints from disk
- * and spends one tiny version call instead of going cold on every screen. Since
+ * and spends one 304 instead of going cold on every screen. The TAG is persisted
+ * with the payload — that is what makes the first request after a relaunch
+ * conditional rather than a full download. Since
  * v1.6.0 this actually survives: the app has a stable origin of its own, where the
  * old GAS sandbox origin could rotate and wipe it. Still best-effort (Safari
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 8;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 9;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
     try{
       // ponytail: keep the last 12 keys — that's the entire eviction policy. Object
-      // key order is insertion order, and S.cache is wiped on every write anyway.
+      // key order is insertion order, and an evicted key just goes cold once.
       var keys = Object.keys(S.cache).slice(-12), c = {};
       keys.forEach(function(k){ c[k] = S.cache[k]; });
-      localStorage.setItem(LS_CACHE, JSON.stringify({ s:LS_SCHEMA, boot:S.boot, cache:c }));
+      var boot = S.boot ? { data:S.boot, etag:S.bootEtag } : null;
+      localStorage.setItem(LS_CACHE, JSON.stringify({ s:LS_SCHEMA, boot:boot, cache:c }));
     }catch(e){ try{ localStorage.removeItem(LS_CACHE); }catch(e2){} }  // quota/full → start clean
   }, 400);
 }
@@ -243,19 +265,19 @@ function loadCache(){
     var o = JSON.parse(localStorage.getItem(LS_CACHE) || 'null');
     if(!o || o.s !== LS_SCHEMA) return false;
     if(o.cache) S.cache = o.cache;
-    if(o.boot){ S.boot = o.boot; S.dataVersion = o.boot.version; }  // _verAt stays 0 → still revalidates
+    if(o.boot){ S.boot = o.boot.data ? o.boot.data : null; S.bootEtag = o.boot.etag || null; }
     return !!o.boot;
   }catch(e){ return false; }
 }
 
 /* Transaction-page fetch. st = {filters,offset,limit}. */
-function fetchTxPage(st){
+function fetchTxPage(st,etag){
   var args={ limit:st.limit, offset:st.offset };
   var fl=st.filters||{};
   if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
   if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
   if(fl.type)args.type=fl.type;
-  return gs('api_listTransactions',args);
+  return gs('api_listTransactions',args,etag);
 }
 
 /* ── app state ───────────────────────────────────────────────────────────── */
@@ -263,15 +285,15 @@ var S = {
   boot:null,            // getBootstrap payload
   month:null,           // selected period "yyyy-MMM"
   screen:'dashboard',
-  dataVersion:null,     // last server data version we hold cache against
-  _verAt:0,             // when we last confirmed dataVersion with the server (ms)
-  cache:{},             // key → { data, version } (stale-while-revalidate, persisted)
+  bootEtag:null,        // the ETag of the getBootstrap payload in S.boot
+  cache:{},             // key → { data, etag, at } (stale-while-revalidate, persisted)
   // edit: the Transactions screen's edit mode (account rail + checkboxes + inline edit);
   // sel: ID → true for the bulk-action selection. pending*: optimistic in-flight writes.
   tx:{ rows:[], total:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
        pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },
   // admin: which whitelisted table the Admin grid is showing (sticky, like the screen)
-  admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })() }
+  admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })(), offset:0 },
+  taxYear:null          // the Tax screen's year; null = the current one
 };
 
 var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
@@ -393,11 +415,13 @@ window.addEventListener('DOMContentLoaded', boot);
 // so the first screen can paint without waiting on it / on the live FX fetch.
 var _bootPromise=null;
 function applyBoot(b){
+  S.bootEtag = b.__etag || null; delete b.__etag;
   S.boot=b;
-  if(b.version!=null){ S.dataVersion=b.version; S._verAt=Date.now(); }
   // getBootstrap already carries the full api_getAccounts payload, so seed that
   // screen's cache key from it — the Accounts screen then opens with zero fetches.
-  if(b.accounts && b.version!=null) S.cache['accounts']={data:{status:'success',accounts:b.accounts},version:b.version};
+  // No tag of its own (bootstrap's tag is not getAccounts' tag), so the first visit
+  // after REVAL_TTL costs one full fetch and every visit after that is conditional.
+  if(b.accounts) S.cache['accounts']={data:{status:'success',accounts:b.accounts},etag:null,at:Date.now()};
   saveCache();
   return b;
 }
@@ -406,15 +430,16 @@ function ensureBoot(){
   if(!_bootPromise) _bootPromise=gs('api_getBootstrap').then(applyBoot);
   return _bootPromise;
 }
-/* A boot restored from localStorage is stale by definition (and FX drift doesn't
- * bump the data version), so refetch in the background and repaint only if
- * something actually moved. */
+/* A boot restored from localStorage is stale by definition, so revalidate it in the
+ * background — conditionally, since this is the biggest single payload the app pulls
+ * (every account, every category, the budgets and the recurring rows). A launch that
+ * changed nothing now costs one 304 instead of all of it. */
 function revalidateBoot(){
   var old=S.boot;
-  return gs('api_getBootstrap').then(function(b){
-    var moved = b.version!==old.version || b.fxUsdPhp!==old.fxUsdPhp;
+  return gs('api_getBootstrap', null, S.bootEtag).then(function(b){
+    if(b.__304) return old;
     applyBoot(b);
-    if(moved) render();
+    render();
     return b;
   });
 }
@@ -475,7 +500,7 @@ function boot(){
 
 function refresh(){
   var btn=$('#refreshBtn'); btn.classList.add('spin');
-  S.cache={}; S.boot=null; _bootPromise=null; S._verAt=0; saveCache();
+  S.cache={}; S.boot=null; S.bootEtag=null; _bootPromise=null; saveCache();
   // Also drop the cached shell and retry the queue, which makes Refresh the single
   // answer to both "I deployed and still see the old UI" (new files land next launch,
   // see sw.js) and "this is still waiting to sync".
@@ -918,7 +943,7 @@ function periodPace(period,monthStr){
 function renderDashboard(){
   var key='dashboard|'+S.month;
   if(!S.cache[key]) loading('dashboard');
-  return cachedCall(key, function(){return gs('api_getDashboard',{month:S.month});}, function(d){
+  return cachedCall(key, function(et){return gs('api_getDashboard',{month:S.month},et);}, function(d){
     var w=el('div','screen');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Dashboard'));
@@ -1135,7 +1160,7 @@ function renderTransactions(){
 
 /* —— account rail (edit mode): balances beside the list, click to filter —— */
 function loadTxAccts(){
-  return cachedCall('accounts', function(){return gs('api_getAccounts');}, function(res){
+  return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
     var host=$('#txAccts'); if(!host) return;
     host.innerHTML='';
     host.appendChild(el('div','card-h','Accounts'));
@@ -1180,7 +1205,7 @@ function loadTx(w, silent){
   var st={filters:S.tx.filters, offset:S.tx.offset, limit:S.tx.limit};
   var key='tx|'+JSON.stringify(S.tx.filters||{})+'|'+S.tx.offset+'|'+S.tx.limit;
   var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skRows(7);
-  return cachedCall(key, function(){return fetchTxPage(st);}, function(res){
+  return cachedCall(key, function(et){return fetchTxPage(st,et);}, function(res){
     S.tx.total=res.total; S.tx.rows=res.transactions;
     renderTxList();
   }).catch(showErr);
@@ -1409,7 +1434,7 @@ function fmtDate(d){
  * ════════════════════════════════════════════════════════════════════════ */
 function renderAccounts(){
   if(!S.cache['accounts']) loading('accounts');
-  return cachedCall('accounts', function(){return gs('api_getAccounts');}, function(res){
+  return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
     var accs=res.accounts||[];
     var w=el('div','screen');
     w.appendChild(el('div','screen-title','Accounts'));
@@ -1456,7 +1481,7 @@ function renderAccounts(){
 
 /* Investment positions as a card on Accounts (read-only). */
 function loadInvestments(){
-  return cachedCall('investments', function(){return gs('api_getInvestments');}, function(inv){
+  return cachedCall('investments', function(et){return gs('api_getInvestments',null,et);}, function(inv){
     var host=$('#invCards'); if(!host) return;
     host.innerHTML='';
     var positions=inv.positions||[];
@@ -1670,11 +1695,11 @@ function accountRow(a){
 function renderBudgets(){
   var key='budgets|'+S.month;
   if(!S.cache[key]) loading('budgets');
+  // One request, not two: getBudgets carries `recurring` since v2.9.0, so the screen
+  // has one ETag to revalidate instead of a pair that could not 304 independently.
   return cachedCall(key,
-    function(){ return Promise.all([gs('api_getBudgets',{month:S.month}), gs('api_getRecurring')])
-                  .then(function(arr){ return {bg:arr[0], rec:arr[1], version:arr[0].version}; }); },
-    function(payload){
-    var bg=payload.bg, rec=payload.rec;
+    function(et){ return gs('api_getBudgets',{month:S.month},et); },
+    function(bg){
     var w=el('div','screen');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Budgets'));
@@ -1710,7 +1735,7 @@ function renderBudgets(){
     w.appendChild(bc);
 
     // recurring obligations
-    var rows=(rec.rows||[]);
+    var rows=(bg.recurring||[]);
     if(rows.length){
       var rcard=el('div','card');
       rcard.appendChild(el('div','card-h','Recurring & installments'));
@@ -1734,7 +1759,8 @@ function renderBudgets(){
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTax(){
   if(!S.cache['tax']) loading('table');
-  return cachedCall('tax', function(){return gs('api_getLedger');}, function(res){
+  var yr=S.taxYear||String(new Date().getFullYear());
+  return cachedCall('tax|'+yr, function(et){return gs('api_getLedger',{year:yr},et);}, function(res){
     var rows=(res.rows||[]).slice();
     var cols=ledgerCols(res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]));
     var derived={}; (res.derived||[]).forEach(function(h){derived[h]=true;});
@@ -1750,9 +1776,16 @@ function renderTax(){
     var w=el('div','screen');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Tax · BIR Ledger'));
+    var acts=el('div','btn-row');
+    // BIR files per year and the payload is now one year wide, so the year is a control,
+    // not a scroll. Native <select> for the same reason quarterSelect is one: a dozen
+    // fixed options. `years` comes from the server; the current year is always offered
+    // even before it has its first payslip.
+    acts.appendChild(ledgerYearSelect(res.year, res.years));
     var addBtn=el('button','btn sm primary','+ Add row');
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
-    head.appendChild(addBtn);
+    acts.appendChild(addBtn);
+    head.appendChild(acts);
     w.appendChild(head);
     w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only) · '+
       // The BSP reference rate is hand-typed per payslip, so link its source here.
@@ -1821,6 +1854,17 @@ function quarterOptions(keep){
   while(y>=LEDGER_FIRST_YEAR){ out.push(y+'-Q'+q); if(--q===0){ q=4; y--; } }
   if(keep && out.indexOf(keep)<0) out.unshift(keep);
   return out;
+}
+/* Tax-year picker. Same native-select reasoning as quarterSelect below. */
+function ledgerYearSelect(cur, years){
+  var now=String(new Date().getFullYear()), list=(years||[]).slice();
+  if(list.indexOf(now)<0) list.unshift(now);
+  if(cur && list.indexOf(String(cur))<0) list.unshift(String(cur));
+  var s=el('select','q-select');
+  list.forEach(function(y){ var o=el('option',null,esc(y)); o.value=y; s.appendChild(o); });
+  s.value=String(cur||now);
+  s.onchange=function(){ S.taxYear=s.value; renderTax(); };
+  return s;
 }
 /* Filed? picker — a dozen fixed options, so a native <select>, not the fuzzy combobox. */
 function quarterSelect(val, onPick){
@@ -2036,10 +2080,17 @@ function exCalc(){
    landing table — the one name we need before we can ask the first question. */
 function adminTable(){ return S.admin.table||'accounts'; }
 
+/* One page, not the whole table. 500 rows of `transactions` was a few hundred KB down
+   a phone connection to look at the first screenful, and it TRUNCATED anyway — the grid
+   just said "showing the first 500". Same 50 as the Transactions screen, same pager, and
+   the ✓ CSV button below pays for the full table only when you actually ask for it. */
+var ADMIN_PAGE = 50;
+
 function renderAdmin(){
-  var t=adminTable();
-  if(!S.cache['table|'+t]) loading('table');
-  return cachedCall('table|'+t, function(){ return gs('api_listTable',{table:t,limit:500}); }, function(res){
+  var t=adminTable(), off=S.admin.offset||0;
+  var key='table|'+t+'|'+off;
+  if(!S.cache[key]) loading('table');
+  return cachedCall(key, function(et){ return gs('api_listTable',{table:t,limit:ADMIN_PAGE,offset:off},et); }, function(res){
     var w=el('div','screen');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Admin · '+t));
@@ -2050,7 +2101,15 @@ function renderAdmin(){
       actions.appendChild(add);
     }
     var csv=el('button','btn sm','↓ CSV');
-    csv.onclick=function(){ downloadCsv(t+'.csv', res.cols, res.rows); };
+    // The visible page is 50 rows; a backup file of 50 rows would be a lie. Pull every
+    // page first (listTable caps a request at 1000), so the file is the whole table —
+    // which the old limit:500 grid never was either.
+    csv.onclick=function(){
+      csv.disabled=true; csv.textContent='Exporting…';
+      adminFetchAll(t).then(function(all){ downloadCsv(t+'.csv', res.cols, all); })
+        .catch(function(e){ toast(e.message||e,'err'); })
+        .then(function(){ csv.disabled=false; csv.textContent='↓ CSV'; });
+    };
     actions.appendChild(csv);
     head.appendChild(actions);
     w.appendChild(head);
@@ -2060,7 +2119,7 @@ function renderAdmin(){
     var picker=el('div','btn-row'); picker.style.marginBottom='14px';
     (res.tables||[]).forEach(function(name){
       var b=el('button','btn sm'+(name===t?' primary':''),esc(name));
-      b.onclick=function(){ S.admin.table=name; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
+      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
       picker.appendChild(b);
     });
     w.appendChild(picker);
@@ -2078,8 +2137,17 @@ function renderAdmin(){
     var tb=el('tbody');
     res.rows.forEach(function(row){ tb.appendChild(adminRowTr(row,res,editable)); });
     tbl.appendChild(tb); wrap.appendChild(tbl); card.appendChild(wrap); w.appendChild(card);
-    if(res.total>res.rows.length)
-      w.appendChild(el('div','dim','Showing the first '+res.rows.length+' of '+res.total+' rows.'));
+    if(res.total>ADMIN_PAGE){
+      var pg=el('div','row-between'); pg.style.marginTop='12px';
+      var prev=el('button','btn sm','← Prev'); prev.disabled=off<=0;
+      prev.onclick=function(){ S.admin.offset=Math.max(0,off-ADMIN_PAGE); render(); };
+      var next=el('button','btn sm','Next →'); next.disabled=off+ADMIN_PAGE>=res.total;
+      next.onclick=function(){ S.admin.offset=off+ADMIN_PAGE; render(); };
+      var info=el('div','dim','Showing '+(off+1)+'–'+Math.min(off+ADMIN_PAGE,res.total)+' of '+res.total);
+      info.style.fontSize='12px';
+      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
+      w.appendChild(pg);
+    }
     paint(w);
   }).catch(showErr);
 }
@@ -2157,6 +2225,19 @@ function adminDeleteRow(res,pk){
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
   openModal(modalShell('Delete '+res.table+' row '+pk+'?',
     el('div','dim','This removes the row permanently. D1 Time Travel can restore the database for 7 days.'), [no,yes]));
+}
+
+/* Every row of a table, one 1000-row page at a time (listTable's server-side cap).
+   Only the CSV export needs this — the grid itself never holds more than one page. */
+function adminFetchAll(t){
+  var all=[];
+  function page(off){
+    return gs('api_listTable',{table:t,limit:1000,offset:off}).then(function(r){
+      all=all.concat(r.rows||[]);
+      return (all.length<r.total && r.rows && r.rows.length) ? page(off+r.rows.length) : all;
+    });
+  }
+  return page(0);
 }
 
 /* Backup layer 2b: the table you are looking at, as a file. (Layer 1 is the nightly
