@@ -23,11 +23,48 @@ import { snapshotNetWorth } from './api.js';
 // REQUIRES a User-Agent header and answers 403 to a bare request.
 const FLEX_SEND = 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest';
 const FLEX_UA = { 'User-Agent': 'FinanceTracker/2.0 (personal finance tracker)' };
-const FLEX_TRIES = 8, FLEX_WAIT = 5000;   // ~35s budget; IBKR is slow some mornings
+const FLEX_TRIES = 8, FLEX_WAIT = 5000;   // ~37s budget; IBKR is slow some mornings
+// The first GetStatement waits too. IBKR allows ONE request per second per token and
+// SendRequest has just spent this one, and the statement is built asynchronously, so an
+// instant ask can only ever be "not ready".
+const FLEX_FIRST = 2000;
 
+/**
+ * Which GetStatement errors are worth another poll.
+ *
+ * IBKR's own table splits cleanly: these all end "Please try again shortly" — the
+ * request was accepted, the statement is simply not there yet. 1020 ("Invalid request
+ * or unable to validate request") is the catch-all, and it belongs here for one
+ * reason: SendRequest has already succeeded on this same token seconds earlier, so
+ * every condition that needs a human (1011 inactive, 1012 expired, 1013 IP, 1014 query,
+ * 1015 token, 1017 reference code) is ruled out by that success. What is left is a
+ * refusal that clears on its own. Anything NOT in this set is the owner's to fix, and
+ * polling it just burns the budget and delays the Telegram message.
+ */
+const FLEX_RETRY = new Set(['1001', '1004', '1005', '1006', '1007', '1008',
+                            '1009', '1018', '1019', '1020', '1021']);
+export const flexRetryable = (code) => FLEX_RETRY.has(String(code).trim());
+
+/** What the owner must DO about a code that will not clear by itself. */
+const FLEX_FIX = {
+  1003: 'Check the Flex query still has an Open Positions section.',
+  1010: 'The Flex query is legacy. Build it again as an Activity Flex query.',
+  1011: 'Enable the Flex Web Service again in Client Portal.',
+  1012: 'Make a new Flex token and set IBKR_FLEX_TOKEN.',
+  1013: 'IBKR refuses this address. Remove the IP restriction from the token.',
+  1014: 'Check IBKR_FLEX_QUERY_ID.',
+  1015: 'Make a new Flex token and set IBKR_FLEX_TOKEN.',
+  1016: 'The IBKR account is in an invalid state. Open Client Portal.',
+  1017: 'The reference code was refused. Run the job again.',
+};
+
+// Tolerant on purpose: IBKR may pretty-print, and a tag it decides to give an
+// attribute must not read as absent. The trim matters twice — an untrimmed <Url> goes
+// straight into fetch() and cannot be validated, and an untrimmed <ErrorCode> misses
+// every code comparison below, so a plain "still generating" would read as a fault.
 const xmlTag = (xml, tag) => {
-  const m = new RegExp('<' + tag + '>([^<]*)</' + tag + '>').exec(xml);
-  return m ? m[1] : '';
+  const m = new RegExp('<' + tag + '\\b[^>]*>([^<]*)</' + tag + '>').exec(xml);
+  return m ? m[1].trim() : '';
 };
 const xmlAttr = (frag, name) => {
   const m = new RegExp(name + '="([^"]*)"').exec(frag);
@@ -74,18 +111,22 @@ export async function pricesJob(env) {
   const url = xmlTag(sent, 'Url');
   if (!ref || !url) throw new Error('Flex SendRequest failed: ' + sent.slice(0, 300));
 
-  // Poll: the statement is generated asynchronously and answers ErrorCode 1019
-  // ("statement generation in progress") until it is ready. This is I/O wait, which
-  // does not count against the CPU limit.
+  // Poll: the statement is generated asynchronously and answers a "try again shortly"
+  // code until it is ready. This is I/O wait, which does not count against the CPU
+  // limit. Only a code IBKR will not clear by itself ends the job early — the job used
+  // to stop on every code but 1019, so one transient 1020 or 1021 cost a whole night of
+  // prices (2026-08-31).
   let xml = '', last = '';
   for (let i = 0; i < FLEX_TRIES; i++) {
-    if (i) await sleep(FLEX_WAIT);
+    await sleep(i ? FLEX_WAIT : FLEX_FIRST);
     const res = await fetch(url + '?q=' + encodeURIComponent(ref) + '&t=' + encodeURIComponent(t) + '&v=3',
       { headers: FLEX_UA });
     xml = await res.text();
     if (xml.indexOf('<FlexQueryResponse') !== -1) break;
     const code = xmlTag(xml, 'ErrorCode');
-    if (code && code !== '1019') throw new Error('Flex GetStatement error ' + code + ': ' + xmlTag(xml, 'ErrorMessage'));
+    if (code && !flexRetryable(code))
+      throw new Error('Flex GetStatement error ' + code + ': ' + xmlTag(xml, 'ErrorMessage') +
+        (FLEX_FIX[code] ? ' — ' + FLEX_FIX[code] : ''));
     last = flexWhy(res.status, xml);
   }
   // The body goes into the message: a poll that ends without <FlexQueryResponse> and

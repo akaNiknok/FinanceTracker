@@ -263,7 +263,7 @@ The code and the database do not go back together. Undo the code first.
 | The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
 | The app asks for the passphrase frequently. | A person changed `APP_PASS`, or the cookie is more than one year old. |
 | The app starts, but each request fails. | `npm run tail`. Usually the D1 binding or a secret is absent. |
-| The share values are 0 or absent. | The Telegram message from the price job. Then the IBKR token, because it expires. Then the `symbol` column of the account on the Admin screen. |
+| The share values are 0 or absent. | The Telegram message from the price job. It names the IBKR error code, and it states the repair for a code that needs a person. A code that IBKR clears by itself is retried for 40 seconds first, so one message is one real fault. Then the `symbol` column of the account on the Admin screen. |
 | A balance in pesos is absent, but the native balance is correct. | The exchange rate. Examine `usd_php_fallback` in the `meta` table. |
 | A change is not in the live system. | You did not deploy. `npm run release` deploys the Worker. |
 | The app shows data that is too old. | Push the refresh button. The app compares the data version on each navigation, not continuously. |

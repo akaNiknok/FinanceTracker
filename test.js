@@ -191,6 +191,34 @@ describe('Apps Script (vm)', () => {
       assert.strictEqual(jobs.flexWhy(502, ''), '502 (empty body)');
     });
 
+    test('the prices poll retries what IBKR says to retry, and only that', () => {
+      // 2026-08-31: the poll stopped on every code but 1019, so one 1020 ("Invalid
+      // request or unable to validate request") killed a whole night of prices. IBKR's
+      // table splits by the message: "Please try again shortly" means poll again.
+      ['1001', '1004', '1005', '1006', '1007', '1008', '1009', '1018', '1019', '1021']
+        .forEach((c) => assert.ok(jobs.flexRetryable(c), c + ' says "try again shortly" and must be polled'));
+      // The catch-all. SendRequest has already passed on this token, so the codes that
+      // need a human are ruled out and what is left clears by itself.
+      assert.ok(jobs.flexRetryable('1020'));
+      // These need the owner. Polling them only delays the Telegram message.
+      ['1003', '1010', '1011', '1012', '1013', '1014', '1015', '1016', '1017']
+        .forEach((c) => assert.ok(!jobs.flexRetryable(c), c + ' needs a human and must fail fast'));
+      assert.ok(!jobs.flexRetryable(''));
+      assert.ok(jobs.flexRetryable(1019));            // a number reads the same as its string
+      assert.ok(jobs.flexRetryable('\n  1019\n'));    // and so does a pretty-printed one
+    });
+
+    test('a padded or attributed Flex tag still reads as its error code', () => {
+      // xmlTag tolerates an attribute and trims the value, and it must: a code read as
+      // ' 1020 ' matches nothing in the retry set, so a transient fault would abort the
+      // job, and a tag carrying an attribute would read as absent — which is worse, as
+      // the poll then reports "not ready" and hides the code entirely.
+      assert.strictEqual(jobs.flexWhy(200, '<ErrorCode> 1020 </ErrorCode>' +
+        '<ErrorMessage>  Invalid request.  </ErrorMessage>'), '200 1020 Invalid request.');
+      assert.strictEqual(jobs.flexWhy(200, '<ErrorCode type="int">1021</ErrorCode>' +
+        '<ErrorMessage lang="en">Try again shortly.</ErrorMessage>'), '200 1021 Try again shortly.');
+    });
+
     test('telegram undo payloads round-trip inside the 64-byte cap', () => {
       assert.deepStrictEqual(tg.undoIds(tg.undoData('tg-90210', [0, 2])), ['tg-90210-0', 'tg-90210-2']);
       const gm = tg.undoData('gm-198f2a3b4c5d6e7f', [0]);
@@ -264,6 +292,15 @@ describe('Apps Script (vm)', () => {
         assert.ok(READY.test(a), "read action '" + a + "' must be named get…/list…"));
       Object.keys(worker.ROUTES_WRITE).forEach((a) =>
         assert.ok(!READY.test(a), "write action '" + a + "' reads as a get…/list… name, so the SPA will GET it"));
+    });
+
+    test('the Flex poll branches on flexRetryable, not on one hard-coded code', () => {
+      // Silent failure: comparing the code against a literal looks correct and passes
+      // every day the statement is simply slow. It only shows up as a lost night of
+      // prices the first morning IBKR answers with a different transient code.
+      const src = jobs.pricesJob.toString();
+      assert.ok(src.includes('flexRetryable'), 'pricesJob no longer classifies the error code');
+      assert.ok(!/code\s*!==\s*'\d+'/.test(src), 'pricesJob is back to testing the code against one literal');
     });
 
     test('every write handler bumps the data version in its own batch', () => {
