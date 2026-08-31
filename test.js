@@ -294,13 +294,16 @@ describe('Apps Script (vm)', () => {
         assert.ok(!READY.test(a), "write action '" + a + "' reads as a get…/list… name, so the SPA will GET it"));
     });
 
-    test('the Flex poll branches on flexRetryable, not on one hard-coded code', () => {
+    test('the Flex poll classifies the error code and never compares it to a literal', () => {
       // Silent failure: comparing the code against a literal looks correct and passes
       // every day the statement is simply slow. It only shows up as a lost night of
-      // prices the first morning IBKR answers with a different transient code.
-      const src = jobs.pricesJob.toString();
-      assert.ok(src.includes('flexRetryable'), 'pricesJob no longer classifies the error code');
-      assert.ok(!/code\s*!==\s*'\d+'/.test(src), 'pricesJob is back to testing the code against one literal');
+      // prices the first morning IBKR answers with a different transient code. Asserted
+      // over the module text, not one function, so moving the poll does not fake a pass.
+      const src = fs.readFileSync(path.join(__dirname, 'worker', 'src', 'jobs.js'), 'utf8');
+      assert.ok(src.includes('flexRetryable('), 'jobs.js no longer classifies the error code');
+      assert.ok(!/\bcode\s*[!=]==\s*'\d+'/.test(src), 'jobs.js is back to testing the code against one literal');
+      // The pace exists for the tests; production must never be handed a faster one.
+      assert.ok(/pricesJob\(env\)/.test(src), 'runCron must call pricesJob with the real pace');
     });
 
     test('every write handler bumps the data version in its own batch', () => {

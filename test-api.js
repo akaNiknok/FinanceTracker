@@ -56,6 +56,7 @@ function d1(db) {
   const load = (p) => import(pathToFileURL(path.join(__dirname, 'worker', p)).href);
   const api = await load('src/api.js');
   const dbm = await load('src/db.js');
+  const jobsMod = await load('src/jobs.js');
 
   const sqlite = new DatabaseSync(':memory:');
   const env = {
@@ -674,6 +675,88 @@ function d1(db) {
       assert.strictEqual(rows[0].amount_php_u, -9500000);       // ROUND-before-CAST, still signed
       assert.strictEqual(rows[1].amount_php_u, 50000000);
       sqlite.exec("DELETE FROM transactions WHERE id LIKE 'ck-ok-%';");
+    });
+  });
+
+  await describe('The IBKR prices job', () => {
+    // A real fetch is the only thing stubbed. The statement is parsed for real and the
+    // rows land in the real prices table, so this covers the SQL as well as the
+    // orchestration. Pace is zeroed — the point is the sequence, not the 50s of sleeps.
+    const jobs = jobsMod;
+    const PACE = { first: 0, wait: 0, tries: 6, retryTries: 2 };
+    const jobEnv = { DB: env.DB, IBKR_FLEX_TOKEN: '253000000000000000000640', IBKR_FLEX_QUERY_ID: '987654321' };
+    const GET = 'https://gdcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement';
+    const sendOk = (ref) => '<FlexStatementResponse><Status>Success</Status>' +
+      '<ReferenceCode>' + ref + '</ReferenceCode><Url>' + GET + '</Url></FlexStatementResponse>';
+    const err = (code, msg) => '<FlexStatementResponse><Status>Fail</Status><ErrorCode>' + code +
+      '</ErrorCode><ErrorMessage>' + msg + '</ErrorMessage></FlexStatementResponse>';
+    const statement = '<FlexQueryResponse><FlexStatement fromDate="20260828" toDate="20260828">' +
+      '<OpenPositions><OpenPosition symbol="VWRA" position="12.5" markPrice="122.4" currency="USD" />' +
+      '</OpenPositions></FlexStatement></FlexQueryResponse>';
+
+    // Each case is a script: a function of the request URL returning the body to answer.
+    const withFetch = async (reply, fn) => {
+      const real = globalThis.fetch;
+      const calls = [];
+      globalThis.fetch = async (u) => {
+        calls.push(String(u));
+        return { status: 200, text: async () => reply(String(u), calls.length) };
+      };
+      try { return { out: await fn(), calls }; } finally { globalThis.fetch = real; }
+    };
+    const isSend = (u) => u.includes('/SendRequest');
+    const refOf = (u) => (/[?&]q=(\d+)/.exec(u) || [])[1];
+
+    test('the happy path sends once and writes the statement it gets', async () => {
+      const { out, calls } = await withFetch(
+        (u) => isSend(u) ? sendOk('5761631802') : statement,
+        () => jobs.pricesJob(jobEnv, PACE));
+      assert.deepStrictEqual(out, { written: 1, pricedAt: '2026-08-28' });
+      assert.strictEqual(calls.filter(isSend).length, 1, 'one SendRequest is enough when the statement is ready');
+      const row = sqlite.prepare("SELECT * FROM prices WHERE symbol='VWRA' AND priced_at='2026-08-28'").get();
+      assert.strictEqual(row.price, 122.4);
+      assert.strictEqual(row.currency, 'USD');
+    });
+
+    test('a reference code that keeps drawing 1020 is REPLACED, not replayed', async () => {
+      // The 2026-08-31 failure. v2.8.2 polled the same code six times and gave up; the
+      // one thing that could not have helped. The second code must be a NEW one.
+      let sends = 0;
+      const { out, calls } = await withFetch((u) => {
+        if (isSend(u)) return sendOk(++sends === 1 ? '1111111111' : '2222222222');
+        return refOf(u) === '1111111111' ? err('1020', 'Invalid request or unable to validate request.') : statement;
+      }, () => jobs.pricesJob(jobEnv, PACE));
+      assert.strictEqual(out.written, 1);
+      assert.strictEqual(calls.filter(isSend).length, 2, 'the job never asked for a fresh reference code');
+      assert.ok(calls.some((u) => refOf(u) === '2222222222'), 'the retry reused the stale code');
+      // Bounded: one send + 6 polls, then one send + at most 2 polls. IBKR allows ten
+      // requests per minute per token and a breach is its own failure (1018).
+      assert.ok(calls.length <= 10, 'the recovery path makes ' + calls.length + ' calls, over IBKR\'s 10/min');
+    });
+
+    test('1017 gets a fresh code immediately, without polling a code IBKR already refused', async () => {
+      let sends = 0;
+      const { out, calls } = await withFetch((u) => {
+        if (isSend(u)) return sendOk(++sends === 1 ? '3333333333' : '4444444444');
+        return refOf(u) === '3333333333' ? err('1017', 'Reference code is invalid.') : statement;
+      }, () => jobs.pricesJob(jobEnv, PACE));
+      assert.strictEqual(out.written, 1);
+      assert.strictEqual(calls.filter((u) => !isSend(u) && refOf(u) === '3333333333').length, 1,
+        '1017 says the code is dead — polling it again is wasted budget');
+    });
+
+    test('a code that needs a person fails fast, with the repair, and never re-sends', async () => {
+      const { calls } = await withFetch((u) => isSend(u) ? sendOk('5555555555') : err('1012', 'Token has expired.'),
+        async () => { await assert.rejects(() => jobs.pricesJob(jobEnv, PACE),
+          /1012.*Token has expired.*Make a new Flex token/s); });
+      assert.strictEqual(calls.filter(isSend).length, 1, 'an expired token is not fixed by a second reference code');
+      assert.strictEqual(calls.length, 2, 'a fatal code must not be polled');
+    });
+
+    test('two dead reference codes report the last reply, not a bare "not ready"', async () => {
+      await withFetch((u) => isSend(u) ? sendOk('6666666666') : err('1020', 'Invalid request or unable to validate request.'),
+        async () => { await assert.rejects(() => jobs.pricesJob(jobEnv, PACE),
+          /two reference codes.*1020 Invalid request/s); });
     });
   });
 
