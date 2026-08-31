@@ -9,7 +9,10 @@
  * gs() sees a real failure and can queue the write.
  */
 const CACHE = 'ft-shell';
-const SHELL = ['/', '/app.css', '/app.js', '/manifest.json'];
+// The two Inter subsets are shell files now, not a Google Fonts round trip: that is
+// what makes the app render in its own typeface offline instead of the fallback stack.
+const SHELL = ['/', '/app.css', '/app.js', '/manifest.json',
+               '/fonts/inter-latin.woff2', '/fonts/inter-latin-ext.woff2'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE)
@@ -37,6 +40,11 @@ self.addEventListener('fetch', function (e) {
   // app version into asset URLs from release.js and drop ignoreSearch below.
   e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(function (hit) {
     // ignoreSearch so a deep link (/?screen=budgets&tx=…) matches the cached "/".
+    // Data Saver on: a cached hit is served and NOT revalidated. Every launch otherwise
+    // spends six conditional requests to learn the shell did not change, and on a cell
+    // connection the radio wake-up costs more than the 304s do. Refresh still clears
+    // this cache, so a deploy is one tap away — the same escape hatch as above.
+    if (hit && navigator.connection && navigator.connection.saveData) return hit;
     const fresh = fetch(e.request).then(function (res) {
       if (res.ok) caches.open(CACHE).then(function (c) { c.put(e.request, res.clone()); });
       return res;

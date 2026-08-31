@@ -72,6 +72,8 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 
 **The Gmail ingest uses the bot.** The courier has no parser for each bank. The Worker sends the email text to the function that reads a Telegram message, then to the same write function. Thus an email gives the same receipt and the same **Undo** button as a message that you typed.
 
+**The application carries its own typeface.** The first version asked Google Fonts for the font Inter. A measurement gave 146 kilobytes on a first installation, which was 72 percent of the total. The style sheet had a cache time of one day, so a phone requested it again each day. The font also failed when the phone had no connection. The two font files are now in the repository, and the service worker holds them.
+
 **Infrastructure that the project removed.** The first client was an n8n workflow on a laptop, and a migration to a virtual machine started, then stopped. The bot moved into Apps Script, then into the Worker. The project has no virtual machine, no web server, no TLS certificates, no dynamic DNS name and no container stack.
 
 **A feature that the data removed.** A job calculated the daily interest. The bank gave 24.50 pesos, and the job gave 25.83 pesos, because the bank does not use the daily balance multiplied by the rate. The project stopped the job for that bank, then removed the job completely in v2.0.1. A calculation that does not agree with the bank is worse than no calculation.
@@ -82,11 +84,11 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 | --- | --- |
 | Backend | approximately 2 000 lines of JavaScript in the Worker |
 | Database schema | 156 lines of SQL, 11 tables and 1 view |
-| Frontend | approximately 3 020 lines, no framework and no bundler |
+| Frontend | approximately 3 450 lines, no framework and no bundler |
 | Apps Script | approximately 510 lines in 4 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 48 tests operate offline with `npm test`, and 25 of them use a real SQLite database |
-| Releases | 35 tagged versions, each one from one command |
+| Tests | 87 tests operate offline with `npm test`, and 57 of them use a real SQLite database |
+| Releases | 57 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
 
@@ -96,6 +98,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 - **The share prices are one day old.** A nightly job writes them. No page reads a price service.
 - **The language model can read an email incorrectly.** Each receipt has an **Undo** button and a button that shows the source email.
 - **A screen that stays open does not refresh itself.** The app compares the data version when you go to a screen.
+- **The Tax screen shows one year.** Use the year list at the top of the screen to see an earlier year.
 
 ---
 

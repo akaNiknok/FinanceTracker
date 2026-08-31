@@ -430,6 +430,28 @@ function d1(db) {
       await api.deleteLedgerRow({ row: row.__row }, env);
       assert.strictEqual((await api.getLedger({}, env)).rows.length, 0);
     });
+
+    // The payload is one tax year wide, because the ledger only ever grows and BIR
+    // files per year. The date-less row is the case that must survive the filter: it
+    // is a link to a deleted transaction, and a year must never be the reason a broken
+    // row goes quiet.
+    test('getLedger returns one year, and always the date-less rows', async () => {
+      await api.createTransaction({ ID: 't-2024', Date: '2024-03-15', Category: 'Expense: Food',
+                                    Account: 'Maya', Amount: 100 }, env);
+      const old24 = (await api.appendLedgerRow({ 'Transaction ID': 't-2024' }, env)).row;
+      const orphan = (await api.appendLedgerRow({ 'Transaction ID': 'no-such-tx' }, env)).row;
+
+      const y24 = await api.getLedger({ year: '2024' }, env);
+      assert.deepStrictEqual(y24.rows.map((r) => r.__row).sort(), [old24, orphan].sort());
+      assert.strictEqual(y24.year, '2024');
+
+      const y25 = await api.getLedger({ year: '2025' }, env);
+      assert.deepStrictEqual(y25.rows.map((r) => r.__row), [orphan], 'only the broken row crosses years');
+
+      assert.ok(y24.years.includes('2024'), 'the picker is drawn from the years present');
+      assert.strictEqual((await api.getLedger({}, env)).year, dbm.manilaToday().slice(0, 4),
+        'no year argument means this year, in Manila');
+    });
   });
 
   await describe('Admin grid and export', () => {
