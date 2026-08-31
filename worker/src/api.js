@@ -618,17 +618,33 @@ function shapeLedger(v) {
   };
 }
 
+/**
+ * ONE TAX YEAR, not the whole ledger. BIR files per year and the screen sorts newest
+ * first, so every row before January was payload the phone downloaded to scroll past.
+ * The set only grows — it is one row per payslip, forever — so an unbounded read was a
+ * bill that went up every month.
+ *
+ * A row with NO date is always included, whatever the year: that is a link to a deleted
+ * transaction (the view's tx_deleted), and a year filter must never be the reason a
+ * broken row stops being visible. `years` is what the client's picker is drawn from.
+ */
 export async function getLedger(args, env) {
   const r = await refs(env);
   const cat = r.catByName[LEDGER_TX_CATEGORY];
-  const [view, unlinked] = await env.DB.batch([
-    env.DB.prepare('SELECT * FROM ledger_view ORDER BY id'),
+  const [years, view, unlinked] = await env.DB.batch([
+    env.DB.prepare("SELECT DISTINCT substr(date_received,1,4) AS y FROM ledger_view " +
+      "WHERE date_received IS NOT NULL AND date_received <> '' ORDER BY y DESC"),
+    env.DB.prepare("SELECT * FROM ledger_view WHERE substr(date_received,1,4) = ? " +
+      "OR date_received IS NULL OR date_received = '' ORDER BY id")
+      .bind(String(args.year || manilaToday().slice(0, 4))),
     env.DB.prepare('SELECT t.* FROM transactions t WHERE t.category_id = ? ' +
       'AND t.id NOT IN (SELECT tx_id FROM ledger WHERE tx_id IS NOT NULL) ' +
       'ORDER BY t.date DESC, t.rowid DESC').bind(cat ? cat.id : -1)
   ]);
   return {
     status: 'success', version: await dataVersion(env),
+    year: String(args.year || manilaToday().slice(0, 4)),
+    years: years.results.map((x) => x.y),
     rows: view.results.map(shapeLedger),
     cols: LEDGER_COLS, derived: LEDGER_DERIVED, txIdCol: LEDGER_TXID,
     unlinked: unlinked.results.map((row) => shapeTx(row, r))

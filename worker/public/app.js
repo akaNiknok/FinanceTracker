@@ -183,7 +183,12 @@ function unlock(){
  * api_getDataVersion is only a fallback for composite payloads), and a version
  * checked within VER_TTL is trusted, which kills the duplicate pings from a
  * re-render or a quick tab flip back and forth. */
-var VER_TTL = 3000;
+// Data Saver on: trust a checked version for a minute instead of 3 seconds. The ping
+// itself is ~200 bytes, but on a cell connection the cost is the RADIO WAKE-UP, and
+// walking four screens used to spend four of them. Refresh drops _verAt, so a forced
+// check is still one tap. `connection` is Chromium-only; everywhere else falls through
+// to 3000 unchanged.
+var VER_TTL = (navigator.connection && navigator.connection.saveData) ? 60000 : 3000;
 function verKnown(){ return S._verAt && (Date.now() - S._verAt) < VER_TTL; }
 /* Post-write invalidation: drop every payload AND the "version just checked"
  * stamp, since the write bumped the version server-side. */
@@ -271,7 +276,8 @@ var S = {
   tx:{ rows:[], total:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
        pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },
   // admin: which whitelisted table the Admin grid is showing (sticky, like the screen)
-  admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })() }
+  admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })(), offset:0 },
+  taxYear:null          // the Tax screen's year; null = the current one
 };
 
 var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
@@ -1734,7 +1740,8 @@ function renderBudgets(){
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTax(){
   if(!S.cache['tax']) loading('table');
-  return cachedCall('tax', function(){return gs('api_getLedger');}, function(res){
+  var yr=S.taxYear||String(new Date().getFullYear());
+  return cachedCall('tax|'+yr, function(){return gs('api_getLedger',{year:yr});}, function(res){
     var rows=(res.rows||[]).slice();
     var cols=ledgerCols(res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]));
     var derived={}; (res.derived||[]).forEach(function(h){derived[h]=true;});
@@ -1750,9 +1757,16 @@ function renderTax(){
     var w=el('div','screen');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Tax · BIR Ledger'));
+    var acts=el('div','btn-row');
+    // BIR files per year and the payload is now one year wide, so the year is a control,
+    // not a scroll. Native <select> for the same reason quarterSelect is one: a dozen
+    // fixed options. `years` comes from the server; the current year is always offered
+    // even before it has its first payslip.
+    acts.appendChild(ledgerYearSelect(res.year, res.years));
     var addBtn=el('button','btn sm primary','+ Add row');
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
-    head.appendChild(addBtn);
+    acts.appendChild(addBtn);
+    head.appendChild(acts);
     w.appendChild(head);
     w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only) · '+
       // The BSP reference rate is hand-typed per payslip, so link its source here.
@@ -1821,6 +1835,17 @@ function quarterOptions(keep){
   while(y>=LEDGER_FIRST_YEAR){ out.push(y+'-Q'+q); if(--q===0){ q=4; y--; } }
   if(keep && out.indexOf(keep)<0) out.unshift(keep);
   return out;
+}
+/* Tax-year picker. Same native-select reasoning as quarterSelect below. */
+function ledgerYearSelect(cur, years){
+  var now=String(new Date().getFullYear()), list=(years||[]).slice();
+  if(list.indexOf(now)<0) list.unshift(now);
+  if(cur && list.indexOf(String(cur))<0) list.unshift(String(cur));
+  var s=el('select','q-select');
+  list.forEach(function(y){ var o=el('option',null,esc(y)); o.value=y; s.appendChild(o); });
+  s.value=String(cur||now);
+  s.onchange=function(){ S.taxYear=s.value; renderTax(); };
+  return s;
 }
 /* Filed? picker — a dozen fixed options, so a native <select>, not the fuzzy combobox. */
 function quarterSelect(val, onPick){
@@ -2036,10 +2061,17 @@ function exCalc(){
    landing table — the one name we need before we can ask the first question. */
 function adminTable(){ return S.admin.table||'accounts'; }
 
+/* One page, not the whole table. 500 rows of `transactions` was a few hundred KB down
+   a phone connection to look at the first screenful, and it TRUNCATED anyway — the grid
+   just said "showing the first 500". Same 50 as the Transactions screen, same pager, and
+   the ✓ CSV button below pays for the full table only when you actually ask for it. */
+var ADMIN_PAGE = 50;
+
 function renderAdmin(){
-  var t=adminTable();
-  if(!S.cache['table|'+t]) loading('table');
-  return cachedCall('table|'+t, function(){ return gs('api_listTable',{table:t,limit:500}); }, function(res){
+  var t=adminTable(), off=S.admin.offset||0;
+  var key='table|'+t+'|'+off;
+  if(!S.cache[key]) loading('table');
+  return cachedCall(key, function(){ return gs('api_listTable',{table:t,limit:ADMIN_PAGE,offset:off}); }, function(res){
     var w=el('div','screen');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Admin · '+t));
@@ -2050,7 +2082,15 @@ function renderAdmin(){
       actions.appendChild(add);
     }
     var csv=el('button','btn sm','↓ CSV');
-    csv.onclick=function(){ downloadCsv(t+'.csv', res.cols, res.rows); };
+    // The visible page is 50 rows; a backup file of 50 rows would be a lie. Pull every
+    // page first (listTable caps a request at 1000), so the file is the whole table —
+    // which the old limit:500 grid never was either.
+    csv.onclick=function(){
+      csv.disabled=true; csv.textContent='Exporting…';
+      adminFetchAll(t).then(function(all){ downloadCsv(t+'.csv', res.cols, all); })
+        .catch(function(e){ toast(e.message||e,'err'); })
+        .then(function(){ csv.disabled=false; csv.textContent='↓ CSV'; });
+    };
     actions.appendChild(csv);
     head.appendChild(actions);
     w.appendChild(head);
@@ -2060,7 +2100,7 @@ function renderAdmin(){
     var picker=el('div','btn-row'); picker.style.marginBottom='14px';
     (res.tables||[]).forEach(function(name){
       var b=el('button','btn sm'+(name===t?' primary':''),esc(name));
-      b.onclick=function(){ S.admin.table=name; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
+      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
       picker.appendChild(b);
     });
     w.appendChild(picker);
@@ -2078,8 +2118,17 @@ function renderAdmin(){
     var tb=el('tbody');
     res.rows.forEach(function(row){ tb.appendChild(adminRowTr(row,res,editable)); });
     tbl.appendChild(tb); wrap.appendChild(tbl); card.appendChild(wrap); w.appendChild(card);
-    if(res.total>res.rows.length)
-      w.appendChild(el('div','dim','Showing the first '+res.rows.length+' of '+res.total+' rows.'));
+    if(res.total>ADMIN_PAGE){
+      var pg=el('div','row-between'); pg.style.marginTop='12px';
+      var prev=el('button','btn sm','← Prev'); prev.disabled=off<=0;
+      prev.onclick=function(){ S.admin.offset=Math.max(0,off-ADMIN_PAGE); render(); };
+      var next=el('button','btn sm','Next →'); next.disabled=off+ADMIN_PAGE>=res.total;
+      next.onclick=function(){ S.admin.offset=off+ADMIN_PAGE; render(); };
+      var info=el('div','dim','Showing '+(off+1)+'–'+Math.min(off+ADMIN_PAGE,res.total)+' of '+res.total);
+      info.style.fontSize='12px';
+      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
+      w.appendChild(pg);
+    }
     paint(w);
   }).catch(showErr);
 }
@@ -2157,6 +2206,19 @@ function adminDeleteRow(res,pk){
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
   openModal(modalShell('Delete '+res.table+' row '+pk+'?',
     el('div','dim','This removes the row permanently. D1 Time Travel can restore the database for 7 days.'), [no,yes]));
+}
+
+/* Every row of a table, one 1000-row page at a time (listTable's server-side cap).
+   Only the CSV export needs this — the grid itself never holds more than one page. */
+function adminFetchAll(t){
+  var all=[];
+  function page(off){
+    return gs('api_listTable',{table:t,limit:1000,offset:off}).then(function(r){
+      all=all.concat(r.rows||[]);
+      return (all.length<r.total && r.rows && r.rows.length) ? page(off+r.rows.length) : all;
+    });
+  }
+  return page(0);
 }
 
 /* Backup layer 2b: the table you are looking at, as a file. (Layer 1 is the nightly
