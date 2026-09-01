@@ -111,18 +111,54 @@ jobs:
             | gh release create "$TAG" --title "$TAG" --notes-file -
 
   # A merge into main leaves develop behind by the merge commit (or, in the hotfix
-  # flow, by the bump commit). develop is an ancestor of main in both cases, so this
-  # is a fast-forward. It runs on every push to main, released or not, and is
+  # flow, by the bump commit). It runs on every push to main, released or not, and is
   # deliberately independent of the release job: develop must catch up even when the
-  # deploy fails. A diverged develop fails the job instead of forcing anything.
+  # deploy fails.
+  #
+  # The fast-forward is tried first, because a develop -> main release PR makes
+  # develop an ancestor of main. THE HOTFIX FLOW DOES NOT: a hotfix branches off main
+  # and merges to main, so develop never sees it, and any commit already sitting on
+  # develop makes the two diverge. That is the common case, not an exception — it
+  # failed on v2.9.1 with one merged PR waiting on develop, and the old job could
+  # only stop and ask for the repair by hand.
+  #
+  # So a refused fast-forward now MERGES main into develop and pushes that, which is
+  # the same repair a person did by hand. Nothing is ever forced: no rebase, no
+  # force-push, no history rewrite. A real content conflict still stops the job,
+  # because only a person can decide which side wins.
+  #
+  # This push carries GITHUB_TOKEN, so it starts no CI run of its own (GitHub does
+  # not re-trigger workflows on a token push). Two green branches can still break
+  # each other when merged, so the merge commit's first real check is the CI on the
+  # next develop -> main release PR, which is the gate before main either way.
   backmerge:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Fast-forward develop to main
+      - name: Bring develop up to main
         run: |
-          if git push origin HEAD:develop; then exit 0; fi
-          echo "::error::develop has diverged from main. Merge main into develop by hand."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git push origin "$GITHUB_SHA":refs/heads/develop; then
+            echo "::notice::develop fast-forwarded to main."
+            exit 0
+          fi
+          # develop has its own commits. Merge, and retry if it moves under us.
+          for i in 1 2 3; do
+            git fetch origin develop
+            git checkout -B backmerge origin/develop
+            if ! git merge --no-edit -m "Back-merge main into develop" "$GITHUB_SHA"; then
+              git merge --abort || true
+              echo "::error::main and develop changed the same lines. Merge main into develop by hand."
+              exit 1
+            fi
+            if git push origin HEAD:refs/heads/develop; then
+              echo "::notice::Merged main into develop."
+              exit 0
+            fi
+            echo "::warning::develop moved while the back-merge ran. Retry $i of 3."
+          done
+          echo "::error::develop kept moving under the back-merge. Merge main into develop by hand."
           exit 1
