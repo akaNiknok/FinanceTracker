@@ -396,9 +396,22 @@ function d1(db) {
       const by = Object.fromEntries((await api.getAccounts({}, env)).accounts.map((a) => [a.name, a]));
       const expected = Math.round((by.Maya.balancePhp + by.Wise.balancePhp - by.Card.balancePhp) * 100) / 100;
       assert.strictEqual(inv.runway.efPhp, expected);
-      assert.strictEqual(inv.runway.avgMonthlyExpensePhp, 100);   // 300 over 3 closed months
-      assert.strictEqual(inv.runway.targetPhp, 400);
-      assert.strictEqual(inv.runway.months, Math.round(expected / 100 * 10) / 10);
+      // The average window is the last THREE CLOSED months and the fixture's dates are
+      // absolute, so which fixture rows sit inside it moves with the real calendar. A
+      // hard-coded 300/3 went red on its own on 2026-09-01, when July and August rolled
+      // into the window. Sum the same window here instead: the figure has no shelf life
+      // and the assertion still says what it always said.
+      const win = [3, 2, 1].map((i) => {
+        const w = dbm.shiftMonth(now.y, now.m, -i); return dbm.monthKey(w.y, w.m);
+      });
+      const spent = dbm.fromU(sqlite.prepare(
+        "SELECT SUM(t.amount_php_u) AS s FROM transactions t JOIN categories c ON c.id = t.category_id " +
+        "WHERE c.type = 'Expense' AND t.month IN (?,?,?)").get(...win).s || 0);
+      const avg = dbm.q2(spent / win.length);
+      assert.ok(spent >= 300, 't-rw fell outside the window the runway averages');
+      assert.strictEqual(inv.runway.avgMonthlyExpensePhp, avg);
+      assert.strictEqual(inv.runway.targetPhp, dbm.q2(avg * 4));
+      assert.strictEqual(inv.runway.months, Math.round(expected / avg * 10) / 10);
       // Sums to 85, not 100: Stability came out in v2.3.0 and the missing 15 is the EF
       // residue the runway card measures instead. The assertion is the guard against it
       // being "fixed" back to 100 or the dead segment creeping in again.
@@ -877,6 +890,39 @@ function d1(db) {
 
       // No predecessor snapshot, no bridge: history only accrues forward.
       assert.strictEqual((await api.getDashboard({ month: '2025-Feb' }, env)).bridge, null);
+    });
+
+    test('the quarterly pulse counts growth tickers only, never an EF park', async () => {
+      const before = await api.getInvestments({}, env);
+      // A share-priced account filed under a CASH-LIKE subtype: the treasury ETF the
+      // owner parks the emergency fund in (IB01 in the real ledger). It is a holding,
+      // and the runway counts it as cash — but topping it up is not investing.
+      sqlite.exec("INSERT INTO account_types (subtype, type) VALUES ('EF','Asset');" +
+        "INSERT INTO accounts (id,name,currency,subtype,symbol,starting_balance_u) " +
+        "VALUES (8,'TBILL','Shares','EF','TBILL',0);" +
+        "INSERT INTO prices (symbol,priced_at,price,currency) VALUES ('TBILL','2026-08-22',55,'USD');");
+      // Tagged Investment: Growth on purpose — the exclusion is by ACCOUNT SUBTYPE, so
+      // it must hold even when the category says otherwise.
+      await api.createTransfer({ ID: 'tb-b1', Date: '2026-05-20', Category: 'Investment: Growth',
+                                 Account: 'Wise', ToAccount: 'TBILL', Amount: 50, ToAmount: 1 }, env);
+      const inv = await api.getInvestments({}, env);
+
+      // Out of the pulse: no leg, and the quarter's dollars did not move.
+      assert.ok(!inv.pulse.quarters.some((q) => q.buys.some((b) => b.symbol === 'TBILL')),
+                'an EF park landed in the quarterly pulse');
+      const q2q = inv.pulse.quarters.find((x) => x.quarter === '2026-Q2');
+      assert.strictEqual(q2q.totalUsd, 100 + 240 - 150, 'the EF park inflated the quarter');
+
+      // Still a holding, cost basis and all: the Holdings card is the broad set.
+      const p = inv.positions.find((x) => x.name === 'TBILL');
+      assert.strictEqual(p.quantity, 1);
+      assert.strictEqual(p.avgCostNative, 50);
+      assert.strictEqual(p.costPhp, 2500);
+      assert.strictEqual(p.valuePhp, 55 * 50);
+
+      // And the runway is where it DOES count — the same peso, measured once. $50 left
+      // Wise (also cash-like) and came back as a 2750-peso holding.
+      assert.strictEqual(inv.runway.efPhp, dbm.q2(before.runway.efPhp + 2750 - 2500));
     });
   });
 
