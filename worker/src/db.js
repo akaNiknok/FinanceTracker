@@ -218,6 +218,14 @@ export const isInvestmentAcct = (a) =>
  * same as isInvestmentAcct: the Holdings card still shows such a holding as a
  * position, while the net-worth chart and the Invested tile treat it as liquid. */
 export const isInvestedNetWorth = (a) => /share|stock|invest|etf/i.test(String(a.subtype || ''));
+/** "A growth holding, not an EF park" — the QUARTERLY PULSE's account set, and the
+ * narrowest of the three. Share-priced AND filed under an investment subtype, so a
+ * treasury ETF held as an emergency fund (IB01, subtype EF) is out: the pulse asks
+ * "did I park money into growth this quarter", and topping up the EF is not that.
+ * It is the same split the runway makes from the other side — an account the runway
+ * counts as cash-like is never a pulse buy, and the two can never double-count. The
+ * Holdings card (isInvestmentAcct) and the cost basis still carry such a holding. */
+export const isPulseAcct = (a) => isSharesAcct(a) && isInvestedNetWorth(a);
 
 /**
  * The api_getAccounts row shape, byte for byte as v1 emitted it. `fx` is a

@@ -1539,8 +1539,9 @@ function loadInvestments(){
     });
     card.appendChild(l); host.appendChild(card);
 
-    // Quarterly pulse: buys per quarter (transfers into share-priced accounts,
-    // derived server-side — no category discipline needed). One stacked bar per
+    // Quarterly pulse: buys per quarter (transfers into the GROWTH ticker accounts,
+    // derived server-side — no category discipline needed; an EF park like IB01 is a
+    // share account but never a pulse buy, the runway card measures it). One bar per
     // quarter on a COMMON scale (width = share of the biggest quarter), segments
     // colored per ticker with the SAME posColor as Holdings, so identity carries
     // across the two cards. Identity is never color-alone: the detail line names

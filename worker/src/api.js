@@ -28,7 +28,7 @@ import {
   refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
   toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
   monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, manilaYesterday, BASE_CURRENCY,
-  isInvestedNetWorth, isSharesAcct, NOT_SHARES_SRC, resolveAccount, resolveCategory
+  isInvestedNetWorth, isPulseAcct, isSharesAcct, NOT_SHARES_SRC, resolveAccount, resolveCategory
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
 
@@ -456,14 +456,16 @@ export async function getInvestments(args, env) {
   const total = positions.reduce((s, p) => s + (p.valuePhp || 0), 0);
   positions.forEach((p) => { p.weightPct = total ? Math.round((p.valuePhp || 0) / total * 1000) / 10 : 0; });
 
-  // Quarterly pulse: the trade legs ARE transfers into and out of share-priced
-  // accounts, so the history needs no category discipline — it is derived from account
-  // subtypes and works retroactively. Funding legs (Wise→IBKR) never appear here: IBKR
-  // itself is not share-priced. A BUY runs cash→ticker, a SELL runs ticker→cash, and
-  // the two sides swap meaning: on a sell, amount_u is the QUANTITY and to_amount_u is
-  // the money. One UNION ALL normalises them to (cash, qty, side). A ticker→ticker move
-  // is neither and is excluded from both arms, so nothing is counted twice.
-  // Newest quarter first; the SPA flags the current quarter when it has no buys yet.
+  // The trade legs ARE transfers into and out of share-priced accounts, so the history
+  // needs no category discipline — it is derived from account subtypes and works
+  // retroactively. Funding legs (Wise→IBKR) never appear here: IBKR itself is not
+  // share-priced. A BUY runs cash→ticker, a SELL runs ticker→cash, and the two sides
+  // swap meaning: on a sell, amount_u is the QUANTITY and to_amount_u is the money. One
+  // UNION ALL normalises them to (cash, qty, side). A ticker→ticker move is neither and
+  // is excluded from both arms, so nothing is counted twice.
+  // This set is the BROAD one (isSharesAcct) because it also feeds the cost basis, which
+  // every holding needs. The quarterly pulse takes a narrower slice of the same rows —
+  // see pulseSymbols below.
   const shareIds = r.accounts.filter(isSharesAcct).map((a) => a.id);
   const ids = shareIds.length ? list(shareIds.length) : 'NULL';
   const monthKeys = [];   // last 3 CLOSED months, for the runway's average spend
@@ -528,8 +530,16 @@ export async function getInvestments(args, env) {
   });
   const totalCostPhp = positions.reduce((s, p) => s + (p.costPhp || 0), 0);
 
+  // Quarterly pulse: GROWTH holdings only. A leg into or out of a share-priced account
+  // filed under a cash-like subtype (IB01, subtype EF) is EF parking, not investing, and
+  // the runway card already measures it — counting it here reported the same peso twice
+  // and inflated the quarter. Symbol is the ticker account's name on both arms, so one
+  // name set filters the rows the pulse may see; the cost basis above still walks all of
+  // them. Newest quarter first; the SPA flags the current quarter when it has no buys.
+  const pulseSymbols = new Set(r.accounts.filter(isPulseAcct).map((a) => a.name));
   const quarters = [];
   legsQ.results.forEach((x) => {
+    if (!pulseSymbols.has(x.symbol)) return;
     const q = quarterOf(x.d);
     let row = quarters[quarters.length - 1];
     if (!row || row.quarter !== q) { row = { quarter: q, totalUsd: 0, buys: [] }; quarters.push(row); }
