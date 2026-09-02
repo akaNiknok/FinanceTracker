@@ -128,7 +128,7 @@ async function route(env, update) {
   const r = await refs(env);
   let parsed;
   try {
-    parsed = await parse(env, r, text, msg.date);
+    parsed = await whileSlow(env, chat, replyTo, parse(env, r, text, msg.date));
   } catch (err) {
     return send(env, chat, '❌ *Failed to add transaction*\n› ' + msgOf(err), replyTo);
   }
@@ -144,6 +144,41 @@ async function route(env, update) {
   const items = parsed.items || [];
   if (!items.length) return send(env, chat, '❌ *Failed to add transaction*\n› Nothing to log.', replyTo);
   await logItems(env, chat, 'tg-' + update.update_id, items, replyTo);
+}
+
+/**
+ * How long the whole turn may take, and how long it may stay quiet.
+ *
+ * /tg holds Telegram's webhook connection open until the turn finishes (v2.11.0), so
+ * the limit is Telegram's patience for a reply, not Cloudflare's waitUntil allowance.
+ * Telegram does not document that number, so TURN_CEILING_MS is deliberately
+ * conservative rather than tuned: the parse budget plus the writes plus the send must
+ * fit inside it, and a contract guard in test.js fails the build if they stop fitting.
+ * Being wrong costs one redelivery, which seen() dedups — not a duplicated row.
+ */
+export const TURN_CEILING_MS = 25000;
+export const SLOW_NOTICE_MS = 6000;
+
+/**
+ * Run `work`, and if it is still going after SLOW_NOTICE_MS, tell the owner ONCE that
+ * the turn is alive — then keep waiting for it.
+ *
+ * This is the thing waitUntil could never do. A cancelled waitUntil task is torn down
+ * mid-flight, so there was no "still working" to send and nothing left to wait with;
+ * the owner's only signal was silence. Now the invocation survives, so a slow model
+ * costs a wait with a progress note instead of a lost transaction.
+ *
+ * The notice is fire-and-forget on purpose: it is a courtesy, and awaiting it would
+ * make a failed courtesy able to sink the receipt behind it. The timer is always
+ * cleared, so a fast turn sends nothing extra.
+ */
+export async function whileSlow(env, chat, replyTo, work, afterMs = SLOW_NOTICE_MS) {
+  let timer = setTimeout(() => {
+    Promise.resolve(send(env, chat, '⏳ *Still working…*\n› _The parser is slow right now. Hold on._', replyTo))
+      .catch((err) => console.error('telegram: slow notice failed: ' + msgOf(err)));
+  }, afterMs);
+  try { return await work; }
+  finally { clearTimeout(timer); timer = null; }
 }
 
 // ── log (one or many transactions per message) ───────────────────────────────
