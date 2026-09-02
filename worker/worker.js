@@ -9,8 +9,8 @@
  *
  * Routes (everything else is a static asset from public/, free and unmetered):
  *   POST /tg     — the Telegram webhook. Same URL as before, so no setWebhook re-run.
- *                  Answers 200 immediately and does the work in waitUntil, because a
- *                  Gemini round trip is slower than Telegram's patience.
+ *                  Does the work FIRST and answers after (v2.11.0); a turn that dies
+ *                  anyway is re-run from D1 by the 2-minute drain cron (v2.12.0).
  *   POST /login  — passphrase -> sha256(APP_PASS) cookie (HttpOnly/Secure/Lax, 1yr).
  *   GET|POST /api — the JSON API. GET = reads, POST = writes; the split comes from the
  *                  handler name's get…/list… prefix, which is also how the SPA's gs()
@@ -41,7 +41,7 @@ import {
   deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
 } from './src/api.js';
 import { handleUpdate, ingestEmail } from './src/telegram.js';
-import { runCron } from './src/jobs.js';
+import { runScheduled } from './src/jobs.js';
 
 const COOKIE = 'ft_auth';
 
@@ -82,8 +82,12 @@ export default {
     return new Response('not found', { status: 404 });   // assets never reach here
   },
 
+  // AWAITED, not handed to ctx.waitUntil — same reason as /tg below. The runtime keeps
+  // a scheduled invocation alive for the promise this handler returns, so awaiting is
+  // the shape that cannot be cancelled mid-job. `event.cron` picks the job: there are
+  // two schedules now, and the drain must never fire the IBKR pull.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runCron(env));
+    await runScheduled(env, event && event.cron);
   }
 };
 
