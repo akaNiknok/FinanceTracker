@@ -39,6 +39,7 @@ describe('Apps Script (vm)', () => {
   const jobs = await load('src/jobs.js');
   const tg = await load('src/telegram.js');
   const worker = await load('worker.js');
+  const api = await load('src/api.js');
 
   // ── 2. units ──────────────────────────────────────────────────────────────
   describe('Worker units', () => {
@@ -292,6 +293,39 @@ describe('Apps Script (vm)', () => {
         assert.ok(READY.test(a), "read action '" + a + "' must be named get…/list…"));
       Object.keys(worker.ROUTES_WRITE).forEach((a) =>
         assert.ok(!READY.test(a), "write action '" + a + "' reads as a get…/list… name, so the SPA will GET it"));
+    });
+
+    test('fireEta solves the annuity, and its date holds still inside the month', () => {
+      const eta = (o) => api.fireEta(Object.assign(
+        { netWorthPhp: 500000, monthlyExpensePhp: 20000, monthlySavingsPhp: 25000,
+          realReturnPct: 5, today: '2026-09-02' }, o));
+
+      // 25 x annual spend is the target, and the 4% rule is what that multiple IS.
+      assert.strictEqual(eta({}).targetPhp, 6000000);
+      assert.strictEqual(eta({}).withdrawalRatePct, 4);
+
+      // The compound answer must beat the linear one, or the model is not compounding:
+      // (6000000 - 500000) / 25000 = 220 months of pure saving, ~6694 days.
+      const days = eta({}).days;
+      assert.ok(days > 0 && days < 6694, 'growth must shorten the wait, got ' + days);
+      // ...and a higher real return must shorten it further.
+      assert.ok(eta({ realReturnPct: 8 }).days < days, 'a better return must pull the date in');
+      // With no return at all it IS the linear answer.
+      assert.ok(Math.abs(eta({ realReturnPct: 0 }).days - 6694) < 40);
+
+      // THE POINT OF THE WHOLE FEATURE: the inputs are closed months, so the projected
+      // DATE is identical on every day of the month and the countdown falls by one day
+      // a day. Anchor the projection to `today` instead and both of these break.
+      const a = eta({ today: '2026-09-02' }), b = eta({ today: '2026-09-27' });
+      assert.strictEqual(a.date, b.date, 'the ETA date must not move inside the month');
+      assert.strictEqual(a.days - b.days, 25, 'the countdown must fall one day per day');
+
+      // Already there, and never.
+      assert.strictEqual(eta({ netWorthPhp: 9000000 }).days, 0);
+      assert.strictEqual(eta({ monthlySavingsPhp: 0, realReturnPct: 0 }).days, null);
+      assert.strictEqual(eta({ monthlySavingsPhp: -5000, realReturnPct: 0 }).days, null);
+      // No spend history means no target to aim at — no card, not a zero.
+      assert.strictEqual(eta({ monthlyExpensePhp: 0 }), null);
     });
 
     test('the Flex poll classifies the error code and never compares it to a literal', () => {

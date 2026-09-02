@@ -16,6 +16,7 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 - **Progressive web app.** Seven screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
 - **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
 - **Net worth history.** Each day the app records the total net worth for the month. The Dashboard shows the history as a line on the cash-flow chart.
+- **Retirement countdown.** The Dashboard shows the time to financial independence as years and months, with a progress bar. The target is 25 times the yearly expenses. The app calculates the date one time each month, at the month close, thus the count goes down each day.
 - **Two more parts.** A nightly job reads the share prices from Interactive Brokers. A Tax screen collects the data for the Philippine BIR 8 percent regime.
 
 ## Architecture
@@ -163,6 +164,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | --- | --- |
 | `monthly_income_php` | The income that the percentage budget targets use. |
 | `usd_php_fallback` | The exchange rate to use if the live rate is not available. |
+| `fire_real_return` | The return each year, as a percent, after inflation. The Dashboard countdown uses it. |
 | `owner_email` | It identifies the owner. |
 | `tg_last_ids` | The code writes this value. Do not change it manually. |
 | `data_version` | Not in use since v2.9.0. A later version removes the row. Do not change it. |

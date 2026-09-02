@@ -249,4 +249,5 @@ INSERT OR REPLACE INTO meta (key, value) VALUES
   ('usd_php_fallback',   '61'),
   ('owner_email',        'dev@example.com'),
   ('ledger_first_year',  '2026'),
+  ('fire_real_return',   '5'),
   ('tg_last_ids',        '[]');

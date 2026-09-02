@@ -347,6 +347,41 @@ function d1(db) {
       assert.ok(Math.abs(d.netWorth - (d.assets + d.liabilities)) < 0.01, 'liabilities are already negative');
     });
 
+    test('getDashboard: the FI countdown reads closed months, whatever month is browsed', async () => {
+      // Built relative to the wall clock, because the handler is: it always looks at the
+      // three months before the LIVE one, so a fixture pinned to 2026-Aug would drop out
+      // of the window in December and quietly stop testing anything.
+      const ref = dbm.parseMonthKey(dbm.manilaMonth());
+      const closed = [1, 2, 3].map((i) => dbm.shiftMonth(ref.y, ref.m, -i));
+      const on = (s) => s.y + '-' + String(s.m + 1).padStart(2, '0') + '-05';
+      const ids = [];
+      sqlite.exec("INSERT INTO nw_snapshots (month,net_worth_u,assets_u,liabilities_u,shares_u,taken_at) " +
+        "VALUES ('" + dbm.monthKey(closed[0].y, closed[0].m) + "',500000000000,500000000000,0,0,'x')");
+      try {
+        for (const m of closed) {
+          for (const [id, cat, amt] of [['fi-e-', 'Expense: Food', 20000], ['fi-i-', 'Income: Salary', 45000]]) {
+            const ID = id + on(m);
+            ids.push(ID);
+            await api.createTransaction({ ID, Date: on(m), Category: cat, Account: 'Maya', Amount: amt }, env);
+          }
+        }
+        const f = (await api.getDashboard({}, env)).fire;
+        assert.ok(f, 'the FI countdown is missing from getDashboard');
+        assert.ok(Math.abs(f.targetPhp - f.monthlyExpensePhp * 12 * 25) < 0.01, '25x annual spend is the target');
+        assert.strictEqual(f.withdrawalRatePct, 4);
+        assert.ok(f.monthlyExpensePhp >= 20000, 'the three closed months are what it averages');
+        assert.ok(f.progressPct >= 0 && f.progressPct <= 100);
+        assert.ok(f.days > 0 && /^\d{4}-\d{2}-\d{2}$/.test(f.date), 'a reachable target names a date');
+
+        // The countdown is about NOW. Browsing back a month, or asking for a wider chart,
+        // must not re-date the owner's retirement — both would if it read `month`/`months`.
+        assert.deepStrictEqual((await api.getDashboard({ month: '2026-Mar', months: 24 }, env)).fire, f);
+      } finally {
+        sqlite.exec("DELETE FROM nw_snapshots WHERE taken_at = 'x'");
+        for (const ID of ids) await api.deleteTransaction({ ID }, env);
+      }
+    });
+
     test('getDashboard: the chart window is client-chosen and clamped', async () => {
       const wide = await api.getDashboard({ month: '2026-Aug', months: 12 }, env);
       assert.strictEqual(wide.cashflow.length, 12);
