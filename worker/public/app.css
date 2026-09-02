@@ -217,6 +217,8 @@ button{font-family:inherit;cursor:pointer}
 .list-date{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-faint);
   padding:16px 4px 6px;border-bottom:1px solid var(--border)}
 .list-date:first-child{padding-top:2px}
+.list-date .ld-date{cursor:pointer}
+.list-date .ld-date:hover,.list-date .ld-date.on{color:var(--accent-2)}
 .list-date .ld-sum{font-variant-numeric:tabular-nums;letter-spacing:0;text-transform:none;font-weight:600}
 .litem{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border)}
 .litem:last-child{border-bottom:none}

@@ -140,6 +140,7 @@ export async function listTransactions(args, env) {
   const add = (sql, ...v) => { where.push(sql); bind.push(...v); };
   if (args.id) add('t.id = ?', String(args.id));
   if (args.month) add('t.month = ?', String(args.month));
+  if (args.date) add('t.date = ?', String(args.date));
   if (args.account) add('(a.name = ? OR ta.name = ?)', String(args.account), String(args.account));
   if (args.category) add('c.name = ?', String(args.category));
   if (args.segment) add('c.segment = ?', String(args.segment));

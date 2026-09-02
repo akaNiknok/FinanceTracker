@@ -276,7 +276,7 @@ function fetchTxPage(st,etag){
   var fl=st.filters||{};
   if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
   if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
-  if(fl.type)args.type=fl.type;
+  if(fl.type)args.type=fl.type; if(fl.date)args.date=fl.date;
   return gs('api_listTransactions',args,etag);
 }
 
@@ -1123,9 +1123,13 @@ function renderTransactions(){
   var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
   fAcc.id='fAcc';   // the account rail writes the picked account back into this combo
   var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
+  var fDate=inputEl('date', S.tx.filters.date||''); fDate.title='Filter by date';
   [fMonth,fType,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
+  // A day and a month are two ways to say the same thing, so a picked date drops the
+  // month rather than silently AND-ing with it (a date outside the month = no rows).
+  fDate.onchange=function(){ if(fDate.value) fMonth.value='(all months)'; applyFilters(); };
   var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
-  f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fType); f.appendChild(fCat); f.appendChild(fAcc);
+  f.appendChild(fSearch); f.appendChild(fDate); f.appendChild(fMonth); f.appendChild(fType); f.appendChild(fCat); f.appendChild(fAcc);
   w.appendChild(f);
 
   function applyFilters(){
@@ -1134,6 +1138,7 @@ function renderTransactions(){
       type: fType.value.indexOf('(all')===0?'':fType.value,
       category: fCat.value.indexOf('(all')===0?'':fCat.value,
       account: fAcc.value.indexOf('(all')===0?'':fAcc.value,
+      date: fDate.value,
       search: fSearch.value.trim()
     };
     S.tx.offset=0; loadTx(w);
@@ -1188,8 +1193,9 @@ function pickRailAccount(name){
 function acctRailRow(a){
   var sel=S.tx.filters.account===a.name;
   var r=el('div','litem click rail'+(sel?' sel':''));
+  var avail=a.creditLimit?'<div class="t2">'+money(a.availableCredit)+' avail</div>':'';
   r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
-    '<div class="grow"><div class="t1">'+esc(a.name)+'</div></div>'+
+    '<div class="grow"><div class="t1">'+esc(a.name)+'</div>'+avail+'</div>'+
     acctAmtHtml(a);
   if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
     var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
@@ -1230,8 +1236,21 @@ function groupByDay(rows){
 function dayHeadEl(g){
   var dt=parseDate(g.date), day=dt?DAYS[dt.getDay()]+' · ':'';
   var net=Math.round(g.net*100)/100;
-  return el('div','list-date','<span>'+esc(day+g.label)+'</span>'+
+  var iso=isoDate(g.date), on=iso&&S.tx.filters.date===iso;
+  var h=el('div','list-date','<span class="ld-date'+(on?' on':'')+'">'+esc(day+g.label)+'</span>'+
     (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
+  var d=$('.ld-date',h);
+  d.title=on?'Show every date again':'Show only this date';
+  d.onclick=function(){ pickTxDate(on?'':iso); };
+  return h;
+}
+// Re-render the whole screen, not just the list: the date input and the month combo
+// both have to show what the click just did.
+function pickTxDate(iso){
+  S.tx.filters.date=iso;
+  if(iso) S.tx.filters.month='';
+  S.tx.offset=0;
+  renderTransactions();
 }
 
 /* The FAB, the row modal and the Telegram deep link can all write from any screen,
@@ -1266,6 +1285,7 @@ function matchesTxFilters(t){
   // an optimistic transfer may not carry its derived Type yet
   if(f.type && (txIsXfer(t)?'Transfer':String(t.Type||''))!==f.type) return false;
   if(f.month && (t.Period||(d?monthKey(d):''))!==f.month) return false;
+  if(f.date && isoDate(t.Date)!==f.date) return false;
   if(f.search && ((t.Description||'')+' '+(t.Category||'')).toLowerCase()
                    .indexOf(f.search.toLowerCase())<0) return false;
   return true;
