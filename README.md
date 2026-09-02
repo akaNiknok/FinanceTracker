@@ -30,7 +30,7 @@ flowchart TB
     subgraph CF["Cloudflare Worker — free plan"]
         WK["/tg · /api · /login<br/>and the static app files"]
         SV["Handlers<br/>validation · one transactional batch"]
-        JB["Cron job<br/>IBKR prices · net worth"]
+        JB["Cron jobs<br/>IBKR prices · net worth · message rescue"]
         AI["Gemini<br/>structured output"]
     end
 
@@ -90,7 +90,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 | Frontend | approximately 3 470 lines, no framework and no bundler |
 | Apps Script | approximately 510 lines in 4 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 110 tests operate offline with `npm test`, and 69 of them use a real SQLite database |
+| Tests | 119 tests operate offline with `npm test`, and 74 of them use a real SQLite database |
 | Releases | 57 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
@@ -167,6 +167,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | `fire_real_return` | The return each year, as a percent, after inflation. The Dashboard countdown uses it. |
 | `owner_email` | It identifies the owner. |
 | `tg_last_ids` | The code writes this value. Do not change it manually. |
+| `app_url` | The address of the app. The code writes this value. The rescue cron reads it to build the Edit button. Do not change it manually. |
 | `data_version` | Not in use since v2.9.0. A later version removes the row. Do not change it. |
 
 ### Triggers and schedules
@@ -177,6 +178,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | `backup_run` | Apps Script, run `backup_install()` one time | Each day, approximately 03:00 |
 | IBKR prices | Cloudflare cron, in `wrangler.toml` | 06:00 Manila time |
 | Net worth snapshot | The same Cloudflare cron, after the prices | 06:00 Manila time |
+| Telegram message rescue | A second Cloudflare cron, in `wrangler.toml` | Each 2 minutes |
 
 Cloudflare does not do a job again after a failure. Thus each job sends a Telegram message if it fails. Apps Script disables a trigger after a number of failures.
 
@@ -264,7 +266,8 @@ The code and the database do not go back together. Undo the code first.
 
 | Indication | What to examine, in this sequence |
 | --- | --- |
-| The bot sends no message at all. | First read `getWebhookInfo`, after you send a new test message. Do not set the webhook again first, because that action erases the last error. An error there means that the message did not arrive. A 403 points to the secret `SECRET_TOKEN`, which must be the same as the script property `TELEGRAM_SECRET_TOKEN`. **If the webhook is clean, run `npm run tail` and send a message.** Since v2.11.0 the bot answers Telegram only after the work, thus Cloudflare no longer stops a slow turn. A slow parse now sends "Still working" and continues. If you see the old line `waitUntil() tasks did not complete`, the Worker is a version before v2.11.0. |
+| The bot sends no message at all. | **Wait 4 minutes first.** Since v2.12.0 a cron re-runs a turn that died, thus a late receipt is normal and the message is not lost. If nothing arrives, read `getWebhookInfo`, after you send a new test message. Do not set the webhook again first, because that action erases the last error. An error there means that the message did not arrive. A 403 points to the secret `SECRET_TOKEN`, which must be the same as the script property `TELEGRAM_SECRET_TOKEN`. **If the webhook is clean, run `npm run tail` and send a message.** Since v2.11.0 the bot answers Telegram only after the work, thus Cloudflare no longer stops a slow turn. A slow parse sends "Still working" and continues. If you see the old line `waitUntil() tasks did not complete`, the Worker is a version before v2.11.0. |
+| The bot answers late, or the same message arrives twice. | The rescue cron did the turn again. Read `npm run tail` for the line `rescuing update`. A second receipt says "Already logged", thus no transaction is double. If every message is late, the first turn always fails: examine the Gemini quota. |
 | The bot answers, but the answer is an error. | `npm run tail` while you send a message. Then the Gemini quota in AI Studio. An answer of "Unauthorized" indicates the secret `TELEGRAM_USER_ID`. |
 | The error "Wrong response from the webhook: 302". | The webhook address. It must be the Worker address, and it must end with `/tg`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |

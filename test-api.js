@@ -970,6 +970,150 @@ function d1(db) {
       assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9003-%'").get().n, 1,
         'the row id is not idempotent — a released claim can now double-write');
     });
+
+    // ── the rescue drain ──────────────────────────────────────────────────────
+    // What v2.11.0 could NOT fix. Awaiting the turn removed Cloudflare's waitUntil
+    // cancellation, but it put the ceiling on Telegram's webhook patience instead, and
+    // Telegram does not document that number. A turn cut off there dies the same way:
+    // nothing throws, so nothing above reports it, and the claim taken up front makes
+    // the redelivery a no-op. The claim now carries the update, so an unfinished row is
+    // work — and this is the cron that finishes it.
+    const queued = (id) => sqlite.prepare('SELECT payload, done, attempts FROM seen_updates WHERE update_id = ?').get(id);
+    const GEMINI_OK = { candidates: [{ content: { parts: [{ text: JSON.stringify({
+      intent: 'log', error: null, query: null,
+      items: [{ Date: '2026-08-20', Category: 'Expense: Food', Description: 'Mobile data 60GB',
+                Account: 'Maya', Amount: 749 }] }) }] } }] };
+    const tick = async (until) => {
+      for (let i = 0; i < 200 && !until(); i++) await new Promise((r) => setTimeout(r, 1));
+    };
+
+    test('a finished turn closes its row and forgets the message', async () => {
+      await turn(9101);
+      const row = queued(9101);
+      assert.strictEqual(row.done, 1, 'a finished turn left its row pending — the drain will replay it');
+      assert.strictEqual(row.payload, null,
+        'the message text outlived the turn that needed it');
+      const tgEnv = Object.assign({}, env, { TELEGRAM_USER_ID: String(CHAT), TELEGRAM_BOT_TOKEN: 'x' });
+      assert.strictEqual(await tgMod.drainUpdates(tgEnv, Date.now() + tgMod.STALE_MS + 1), 0,
+        'the drain found work in a turn that finished');
+    });
+
+    test('a turn that dies mid-flight leaves recoverable work, and the drain finishes it', async () => {
+      // A torn-down invocation cannot be raised from a test — throwing nothing is the
+      // whole problem. Abandoning the promise has the same shape: the turn stops where
+      // it stands, no catch runs, and the row stays exactly as seen() left it.
+      const real = globalThis.fetch;
+      const sent = [];
+      let release = null, held = false;
+      const gate = new Promise((r) => { release = r; });
+      globalThis.fetch = async (u, init) => {
+        if (String(u).includes('generativelanguage')) {
+          if (!held) { held = true; await gate; }              // the first parse never returns
+          return new Response(JSON.stringify(GEMINI_OK), { status: 200 });
+        }
+        sent.push(JSON.parse(init.body));
+        return new Response('{"ok":true}', { status: 200 });
+      };
+      const tgEnv = Object.assign({}, env, { TELEGRAM_USER_ID: String(CHAT), TELEGRAM_BOT_TOKEN: 'x',
+                                             GEMINI_API_KEY: 'x', APP_URL: 'https://example.dev' });
+      try {
+        const abandoned = tgMod.handleUpdate(tgEnv, update(9102));
+        abandoned.catch(() => {});
+        await tick(() => held);
+        const pending = queued(9102);
+        assert.strictEqual(pending.done, 0, 'the dead turn closed its own row');
+        assert.ok(pending.payload && JSON.parse(pending.payload).message.text,
+          'the claim carries no payload, so there is nothing to rescue — the message is lost');
+
+        // A cron has no request and therefore no origin, which is the shape the drain
+        // really runs in. seen() stored it, so the rescued receipt must still carry the
+        // ✎ Edit button — a rescue the owner can tell apart is only half a rescue.
+        const cronEnv = Object.assign({}, tgEnv);
+        delete cronEnv.APP_URL;
+
+        // A live turn is not dead work. The drain must not race one it is merely slow.
+        assert.strictEqual(await tgMod.drainUpdates(cronEnv, Date.now()), 0,
+          'the drain started a second turn while the first was still inside its ceiling');
+
+        assert.strictEqual(await tgMod.drainUpdates(cronEnv, Date.now() + tgMod.STALE_MS + 1), 1,
+          'the drain left a dead turn unfinished — this is the lost message, again');
+        assert.strictEqual(sent.length, 1, 'the rescue sent no receipt');
+        assert.match(sent[0].text, /Logged/);
+        assert.match(JSON.stringify(sent[0].reply_markup), /example\.dev.*screen=transactions/,
+          'the rescued receipt lost its ✎ Edit button — the drain never recovered the app origin');
+        assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9102-%'").get().n, 1);
+        const closed = queued(9102);
+        assert.strictEqual(closed.done, 1, 'the rescued row stayed pending and will be replayed forever');
+        assert.strictEqual(closed.attempts, 1);
+
+        // And if the turn was only slow, its late resumption cannot double-write: the
+        // row ids are idempotent, so the worst a race costs is a second receipt.
+        release();
+        await abandoned;
+        assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9102-%'").get().n, 1,
+          'a rescue that raced a live turn wrote the transaction twice');
+        assert.match(sent[1].text, /Already logged/);
+      } finally { globalThis.fetch = real; }
+    });
+
+    test('an update that fails every rescue ends in one message, not a loop', async () => {
+      // The drain runs every two minutes. A payload that can never succeed would
+      // otherwise fail 720 times a day and say nothing, which is the old bug with a
+      // clock attached.
+      const real = globalThis.fetch;
+      const sent = [];
+      globalThis.fetch = async (u, init) => {
+        if (String(u).includes('generativelanguage')) throw new Error('Gemini is down');
+        sent.push(JSON.parse(init.body));
+        return new Response('{"ok":true}', { status: 200 });
+      };
+      const tgEnv = Object.assign({}, env, { TELEGRAM_USER_ID: String(CHAT), TELEGRAM_BOT_TOKEN: 'x',
+                                             GEMINI_API_KEY: 'x', APP_URL: 'https://example.dev' });
+      // route() answers a failed parse itself, so break the read BEFORE its try block.
+      tgEnv.DB = breakOn(/FROM accounts a JOIN/);
+      try {
+        sqlite.prepare('INSERT INTO seen_updates (update_id, at, payload, done) VALUES (?, ?, ?, 0)')
+          .run(9103, Date.now(), JSON.stringify(update(9103)));
+        // Each rescue re-stamps `at`, so the clock has to walk past STALE_MS again for
+        // the next one to be eligible — that back-off is the point of the re-stamp.
+        let clock = Date.now();
+        const at = () => (clock += tgMod.STALE_MS + 1);
+        for (let i = 1; i < tgMod.MAX_ATTEMPTS; i++) {
+          assert.strictEqual(await tgMod.drainUpdates(tgEnv, at()), 0);
+          assert.strictEqual(queued(9103).done, 0, 'attempt ' + i + ' of ' + tgMod.MAX_ATTEMPTS + ' gave up early');
+          assert.strictEqual(sent.length, 0, 'the drain complained before it ran out of attempts');
+        }
+        assert.strictEqual(await tgMod.drainUpdates(tgEnv, at()), 0);
+        assert.strictEqual(sent.length, 1, 'the last attempt gave up in silence');
+        assert.match(sent[0].text, /Something went wrong/);
+        assert.strictEqual(queued(9103).done, 1, 'a hopeless update stayed in the queue');
+        assert.strictEqual(queued(9103).attempts, tgMod.MAX_ATTEMPTS);
+        assert.strictEqual(await tgMod.drainUpdates(tgEnv, at()), 0, 'the closed row came back');
+      } finally { globalThis.fetch = real; }
+    });
+
+    test('the drain reports a broken queue instead of throwing into the cron', async () => {
+      // runScheduled has no catch of its own for the drain: the daily job reports to
+      // Telegram, and a rescue that cannot even read D1 has no chat to report into.
+      const tgEnv = Object.assign({}, env, { DB: breakOn(/FROM seen_updates/) });
+      assert.strictEqual(await tgMod.drainUpdates(tgEnv, Date.now()), 0);
+    });
+
+    test('the cron dispatch never runs the IBKR job on the drain schedule', async () => {
+      // Two schedules, one handler. Sending the daily pull to the 2-minute clock would
+      // trip IBKR's ten-per-minute ceiling and cost the prices job outright.
+      const jobsMod = await import('./worker/src/jobs.js');
+      const tgEnv = Object.assign({}, env, { TELEGRAM_USER_ID: String(CHAT), TELEGRAM_BOT_TOKEN: 'x' });
+      const real = globalThis.fetch;
+      let calls = 0;
+      globalThis.fetch = async () => { calls++; return new Response('{"ok":true}', { status: 200 }); };
+      try {
+        await jobsMod.runScheduled(tgEnv, jobsMod.CRON_DRAIN);
+        assert.strictEqual(calls, 0, 'the drain schedule reached out to the network — that is the IBKR job');
+        await jobsMod.runScheduled(tgEnv, 'if * * * *');
+        assert.strictEqual(calls, 0, 'an unknown schedule guessed a job instead of running none');
+      } finally { globalThis.fetch = real; }
+    });
   });
 
   await describe('Investments: sell legs, cost basis, the net-worth bridge', () => {
