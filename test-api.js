@@ -272,6 +272,9 @@ function d1(db) {
       assert.strictEqual((await api.listTransactions({ account: 'IBKR' }, env)).total, 1, 'ToAccount must match too');
       assert.strictEqual((await api.listTransactions({ search: 'grocer' }, env)).total, 1);
       assert.strictEqual((await api.listTransactions({ id: 't1' }, env)).total, 1);
+      const day = await api.listTransactions({ date: '2026-08-12' }, env);
+      assert.ok(day.total > 0 && day.transactions.every((t) => t.Date === '2026-08-12'),
+                'the date filter is not one exact day');
     });
 
     test('getBudgets: percent of income, a USD cap at live FX, transfers counted', async () => {
