@@ -11,7 +11,9 @@ import { manilaToday } from './db.js';
 
 // Tried in order; the next is used if the previous errors (overload, 5xx, a model id
 // that stopped existing). Cheapest-capable first.
-export const MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'];
+// ponytail: no Pro model here — free tier gives Pro 0 RPD, so it is a guaranteed 429
+// that masks flash-lite's real failure (2026-09-02). Add one back only on a paid key.
+export const MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
 
 /**
  * The parse carries its own clock, and this is why.
