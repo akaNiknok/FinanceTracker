@@ -347,6 +347,18 @@ function d1(db) {
       assert.ok(Math.abs(d.netWorth - (d.assets + d.liabilities)) < 0.01, 'liabilities are already negative');
     });
 
+    test('getDashboard: the chart window is client-chosen and clamped', async () => {
+      const wide = await api.getDashboard({ month: '2026-Aug', months: 12 }, env);
+      assert.strictEqual(wide.cashflow.length, 12);
+      assert.strictEqual(wide.cashflow[11].month, '2026-Aug');
+      assert.strictEqual(wide.cashflow[0].month, '2025-Sep');
+      // Junk falls back to 6; anything out of range is clamped, never trusted into the SQL.
+      assert.strictEqual((await api.getDashboard({ month: '2026-Aug', months: 'x' }, env)).cashflow.length, 6);
+      assert.strictEqual((await api.getDashboard({ month: '2026-Aug', months: 999 }, env)).cashflow.length, 24);
+      // The bridge needs the previous month in the window, so 1 clamps up to 2.
+      assert.strictEqual((await api.getDashboard({ month: '2026-Aug', months: 1 }, env)).cashflow.length, 2);
+    });
+
     test('snapshotNetWorth records this month; getDashboard serves the history', async () => {
       const snap = await api.snapshotNetWorth(env);
       const now = dbm.manilaMonth();

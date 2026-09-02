@@ -355,8 +355,11 @@ export async function getDashboard(args, env) {
   const { accounts, fx } = await accountsList(env, r);
   const totals = netWorthTotals(accounts);
 
+  // Chart window, client-chosen (6 on a phone, 12 on a big screen, 24 on request).
+  // Clamped because every key becomes a bound parameter in two queries below.
+  const months = Math.min(24, Math.max(2, Math.round(Number(args.months)) || 6));
   const flowKeys = [];
-  for (let i = 5; i >= 0; i--) { const s = shiftMonth(ref.y, ref.m, -i); flowKeys.push(monthKey(s.y, s.m)); }
+  for (let i = months - 1; i >= 0; i--) { const s = shiftMonth(ref.y, ref.m, -i); flowKeys.push(monthKey(s.y, s.m)); }
 
   // Aggregation in SQL, not JS: the 10ms CPU budget is the one real constraint on
   // this handler, and a full-table scan in JS is what would break it.
