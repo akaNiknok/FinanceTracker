@@ -17,7 +17,9 @@
  *     answer, and one Gemini round trip is slow enough to lose that race. /tg answers
  *     200 immediately and the work runs in waitUntil, but a redelivery would still
  *     start a SECOND parse and a second receipt. The claim is durable (D1 meta), not
- *     cached, because there is no CacheService here.
+ *     cached, because there is no CacheService here. It is RELEASED when the turn dies
+ *     without reporting itself — a claim that outlives its execution turns one bad
+ *     minute into a message that is gone for good.
  *   * the glyph rule. A text variation selector does not stop Telegram emoji-fying a
  *     codepoint, so the buttons use ↻ ⌕ ✎ (outside the emoji set) and never ↩ ✉ ✏.
  *     Guarded by test.js.
@@ -35,6 +37,12 @@ const HELP = '✦ Just send a transaction in plain language.\n' +
 /**
  * Never throws to the caller: a non-2xx tells Telegram to redeliver, and a message we
  * already failed to parse will fail again. Problems are reported in the chat.
+ *
+ * EVERY failure ends in a message or in a released claim — never in silence. route()
+ * answers its own errors, but the work around them did not: a D1 read, the send itself
+ * or the Worker being cut off mid-waitUntil left console.error as the only trace, and a
+ * log nobody tails is the same as nothing. The owner then has no way to tell a message
+ * the bot refused from one it never received (2026-09-02).
  */
 export async function handleUpdate(env, update) {
   try {
@@ -42,6 +50,30 @@ export async function handleUpdate(env, update) {
     await route(env, update);
   } catch (err) {
     console.error('telegram: ' + (err && err.stack ? err.stack : err));
+    // Say what broke. If even that cannot be delivered, drop the claim instead, so
+    // Telegram's own redelivery gets a real second attempt — the row ids are
+    // idempotent (tg-<update_id>-<i>), so a retry cannot write a transaction twice.
+    if (!await report(env, update, err)) await unsee(env, update && update.update_id);
+  }
+}
+
+/**
+ * Tell the owner the turn died, in the chat where it died. Returns false when the
+ * message could not be delivered at all — which is the only case that may release the
+ * claim, and is safe precisely because nothing was said.
+ */
+async function report(env, update, err) {
+  const msg = (update && update.message) || {};
+  const cq = update && update.callback_query;
+  const chat = (msg.chat && msg.chat.id) || (cq && cq.message && cq.message.chat && cq.message.chat.id)
+               || env.TELEGRAM_USER_ID;
+  if (!chat) return false;
+  try {
+    return await send(env, chat, '❌ *Something went wrong*\n› ' + msgOf(err) +
+                      '\n› _Nothing was logged. Send it again._', msg.message_id) !== false;
+  } catch (e) {
+    console.error('telegram: report failed: ' + msgOf(e));
+    return false;
   }
 }
 
@@ -49,8 +81,9 @@ export async function handleUpdate(env, update) {
  * Claim an update_id, returning true if it was already claimed. Durable (D1) rather
  * than cached — there is no CacheService here, and the claim only has to outlive
  * Telegram's retry window.
- * ponytail: claimed up front, so an execution that dies mid-way is not retried either
- * — you resend the message. Better than the retry storm that not claiming produces.
+ * Claimed UP FRONT, so a redelivery cannot start a second parse while the first is
+ * still running — that is the retry storm this exists to stop. An execution that dies
+ * releases its own claim through unsee(), so "claimed" never means "lost".
  */
 async function seen(env, updateId) {
   if (!updateId) return false;
@@ -61,6 +94,17 @@ async function seen(env, updateId) {
     env.DB.prepare('DELETE FROM seen_updates WHERE at < ?').bind(now - 86400000)   // sweep, same trip
   ]);
   return !res.meta.changes;
+}
+
+/**
+ * Release an update_id claim. Only handleUpdate calls it, and only when the failure
+ * could not even be reported: Telegram redelivers an update it has not heard back
+ * about, and that redelivery is the last chance the message has.
+ */
+async function unsee(env, updateId) {
+  if (!updateId) return;
+  try { await env.DB.prepare('DELETE FROM seen_updates WHERE update_id = ?').bind(updateId).run(); }
+  catch (err) { console.error('telegram: could not release update ' + updateId + ': ' + msgOf(err)); }
 }
 
 async function route(env, update) {
@@ -402,12 +446,17 @@ function edit(env, chatId, messageId, text) {
   return call(env, 'editMessageText', { chat_id: chatId, message_id: messageId, text });
 }
 
-/** Bot API call with the Markdown -> plain retry above. */
+/**
+ * Bot API call with the Markdown -> plain retry above. Returns whether Telegram
+ * accepted it; still THROWS when the network does, which is what makes the Gmail
+ * courier hold the mail and re-ingest rather than trash a receipt nobody saw.
+ */
 async function call(env, method, payload) {
   const post = (p) => fetch(API + env.TELEGRAM_BOT_TOKEN + '/' + method,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
   const res = await post(Object.assign({ parse_mode: 'Markdown' }, payload));
-  if (!res.ok) await post(payload);       // markdown rejected -> plain text
+  if (res.ok) return true;
+  return (await post(payload)).ok;        // markdown rejected -> plain text
 }
 
 /** Best-effort owner alert. Cron failures use this — the free plan does not retry them. */
