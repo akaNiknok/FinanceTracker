@@ -961,12 +961,15 @@ function periodPace(period,monthStr){
   return day/days;
 }
 
-/* Days remaining as "X years, X days" — the FI countdown's only format.
- * 365.2425 is the same Gregorian mean the Worker projects with, so the two agree. */
-function yearsDays(days){
-  var y=Math.floor(days/365.2425), rest=Math.round(days-y*365.2425);
-  if(rest>=365){y++;rest=0;}   // the rounding can push a remainder up to a full year
-  return y+' year'+(y===1?'':'s')+', '+rest+' day'+(rest===1?'':'s');
+/* Days remaining as "X years, X months" — the FI countdown's only format. Rounded to
+ * WHOLE MONTHS first and split after, so 11.6 months reads "1 year, 0 months" and not
+ * "0 years, 12 months". 365.2425 is the same Gregorian mean the Worker projects with.
+ * The payload keeps the exact day count; only the display is this coarse. */
+function yearsMonths(days){
+  var mo=Math.round(days/(365.2425/12));
+  if(mo<1) return 'Under a month';
+  var y=Math.floor(mo/12); mo-=y*12;
+  return y+' year'+(y===1?'':'s')+', '+mo+' month'+(mo===1?'':'s');
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -994,13 +997,18 @@ function renderDashboard(){
     var f=d.fire;
     if(f){
       var fc=el('div','stat hero');
-      var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsDays(f.days));
+      var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsMonths(f.days));
       var sub=f.days==null
         ?'Saving '+money(f.monthlySavingsPhp,true)+'/mo is not enough to reach '+money(f.targetPhp,true)
         :money(f.netWorthPhp,true)+' of '+money(f.targetPhp,true)+' · '+f.progressPct+'%'+
          (f.date?' · on track for '+MONTHS[+f.date.slice(5,7)-1]+' '+f.date.slice(0,4):'');
+      // Same split bar the net-worth hero uses, so the two cards read as one system.
+      // The flex floors stop a 0% or 100% side collapsing the bar to nothing.
+      var pct=Math.max(0,Math.min(100,f.progressPct||0));
       fc.innerHTML='<div class="stat-label">Financial independence in</div>'+
         '<div class="stat-value">'+esc(lead)+'</div>'+
+        '<div class="split-bar"><div class="split-a" style="flex:'+Math.max(pct,0.0001)+'"></div>'+
+        '<div class="split-r" style="flex:'+Math.max(100-pct,0.0001)+'"></div></div>'+
         '<div class="stat-sub">'+sub+'</div>'+
         '<div class="stat-sub">'+f.withdrawalRatePct+'% rule · '+money(f.monthlyExpensePhp,true)+
         '/mo spend · saving '+money(f.monthlySavingsPhp,true)+'/mo at '+f.realReturnPct+'% real</div>';

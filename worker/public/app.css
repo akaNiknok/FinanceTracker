@@ -147,6 +147,7 @@ button{font-family:inherit;cursor:pointer}
 .split-bar>div{border-radius:4px;min-width:6px}
 .split-a{background:var(--chart-income)}
 .split-l{background:var(--chart-neg)}
+.split-r{background:var(--border)}   /* the unfilled remainder of a progress bar */
 .split-legend{display:flex;gap:18px;font-size:12.5px;color:var(--text-dim);flex-wrap:wrap}
 .split-legend b{color:var(--text);font-weight:650}
 .lg-key{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:baseline}
