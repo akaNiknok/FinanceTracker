@@ -14,7 +14,7 @@
  * day staler (the read path never fetches, by design).
  */
 import { manilaToday } from './db.js';
-import { notifyOwner, msgOf } from './telegram.js';
+import { notifyOwner, msgOf, drainUpdates } from './telegram.js';
 import { snapshotNetWorth } from './api.js';
 
 // ── IBKR Flex: share prices ──────────────────────────────────────────────────
@@ -196,6 +196,25 @@ export async function pricesJob(env, pace = FLEX_PACE) {
 }
 
 // ── cron dispatch ────────────────────────────────────────────────────────────
+/**
+ * The two schedules, as strings, because the dispatch below compares against them and
+ * wrangler.toml is the only other place they exist. A contract guard in test.js fails
+ * the build if the two lists ever disagree — a drifted string would silently turn the
+ * drain off AND run the IBKR job every two minutes, which its rate limit would refuse.
+ */
+export const CRON_DAILY = '0 22 * * *';
+export const CRON_DRAIN = '*/2 * * * *';
+
+/**
+ * Route a cron firing to its job. Unknown schedules run NOTHING on purpose: guessing
+ * would put the daily IBKR pull on whatever cadence the typo named.
+ */
+export async function runScheduled(env, cron) {
+  if (cron === CRON_DRAIN) return drainUpdates(env);
+  if (cron === CRON_DAILY || !cron) return runCron(env);
+  console.warn('cron: no job is registered for "' + cron + '"');
+}
+
 /**
  * The job, wrapped. The free plan does not retry a failed cron, so the only failure
  * signal that exists is the Telegram message this sends.

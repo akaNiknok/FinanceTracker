@@ -13,13 +13,13 @@
  * Undo state moved from the TG_LAST_IDS Script Property to meta.tg_last_ids.
  *
  * Two things that look removable and are not:
- *   * the update_id dedup (tg_seen_). Telegram redelivers until it gets a timely
- *     answer, and one Gemini round trip is slow enough to lose that race. /tg answers
- *     200 immediately and the work runs in waitUntil, but a redelivery would still
- *     start a SECOND parse and a second receipt. The claim is durable (D1 meta), not
- *     cached, because there is no CacheService here. It is RELEASED when the turn dies
- *     without reporting itself — a claim that outlives its execution turns one bad
- *     minute into a message that is gone for good.
+ *   * the update_id dedup (tg_seen_), which is now a QUEUE. Telegram redelivers until
+ *     it gets a timely answer, and one Gemini round trip is slow enough to lose that
+ *     race; without a claim, a redelivery starts a SECOND parse and posts a second
+ *     receipt. The claim is durable (D1), not cached, because there is no CacheService
+ *     here. It carries the update itself (v2.12.0), so an unfinished row is work the
+ *     drain cron can re-run — a claim that outlives its execution used to turn one bad
+ *     minute into a message that was gone for good.
  *   * the glyph rule. A text variation selector does not stop Telegram emoji-fying a
  *     codepoint, so the buttons use ↻ ⌕ ✎ (outside the emoji set) and never ↩ ✉ ✏.
  *     Guarded by test.js.
@@ -45,15 +45,20 @@ const HELP = '✦ Just send a transaction in plain language.\n' +
  * the bot refused from one it never received (2026-09-02).
  */
 export async function handleUpdate(env, update) {
+  const updateId = update && update.update_id;
   try {
-    if (await seen(env, update && update.update_id)) return;
+    if (await seen(env, update)) return;
     await route(env, update);
+    await settle(env, updateId);
   } catch (err) {
     console.error('telegram: ' + (err && err.stack ? err.stack : err));
-    // Say what broke. If even that cannot be delivered, drop the claim instead, so
-    // Telegram's own redelivery gets a real second attempt — the row ids are
-    // idempotent (tg-<update_id>-<i>), so a retry cannot write a transaction twice.
-    if (!await report(env, update, err)) await unsee(env, update && update.update_id);
+    // Say what broke, and close the row: the owner has been told, so a redelivery must
+    // not repeat the complaint and the drain must not replay the work. If even that
+    // cannot be delivered, drop the claim instead, so Telegram's own redelivery gets a
+    // real second attempt — the row ids are idempotent (tg-<update_id>-<i>), so a
+    // retry cannot write a transaction twice.
+    if (await report(env, update, err)) await settle(env, updateId);
+    else await unsee(env, updateId);
   }
 }
 
@@ -78,33 +83,148 @@ async function report(env, update, err) {
 }
 
 /**
- * Claim an update_id, returning true if it was already claimed. Durable (D1) rather
- * than cached — there is no CacheService here, and the claim only has to outlive
- * Telegram's retry window.
+ * Claim an update, returning true if it was already claimed. Durable (D1) rather than
+ * cached — there is no CacheService here.
+ *
  * Claimed UP FRONT, so a redelivery cannot start a second parse while the first is
- * still running — that is the retry storm this exists to stop. An execution that dies
- * releases its own claim through unsee(), so "claimed" never means "lost".
+ * still running — that is the retry storm this exists to stop. The claim CARRIES THE
+ * UPDATE (v2.12.0): a claim on its own says "someone took this", which is
+ * indistinguishable from "this was lost", and that ambiguity is what let one torn-down
+ * turn destroy a transaction for good. With the payload stored, an unfinished row is
+ * recoverable work and drainUpdates() re-runs it.
  */
-async function seen(env, updateId) {
+async function seen(env, update, now = Date.now()) {
+  const updateId = update && update.update_id;
   if (!updateId) return false;
-  const now = Date.now();
   const [res] = await env.DB.batch([
-    env.DB.prepare('INSERT INTO seen_updates (update_id, at) VALUES (?, ?) ON CONFLICT(update_id) DO NOTHING')
-      .bind(updateId, now),
-    env.DB.prepare('DELETE FROM seen_updates WHERE at < ?').bind(now - 86400000)   // sweep, same trip
+    env.DB.prepare('INSERT INTO seen_updates (update_id, at, payload, done) VALUES (?, ?, ?, 0) ' +
+                   'ON CONFLICT(update_id) DO NOTHING')
+      .bind(updateId, now, JSON.stringify(update)),
+    // Sweep FINISHED rows only. A pending row is unfinished work, and the drain is what
+    // retires it — deleting one here would be the silent loss this table now prevents.
+    env.DB.prepare('DELETE FROM seen_updates WHERE done = 1 AND at < ?').bind(now - 86400000),
+    // Remember the origin for the drain. env.APP_URL is the request's own origin, so a
+    // cron firing has none, and a rescued receipt would silently lose its ✎ Edit button.
+    // Riding this batch keeps it to zero extra round trips, and it self-heals per
+    // environment — staging stores staging's origin.
+    env.DB.prepare("INSERT INTO meta (key, value) VALUES ('app_url', ?) " +
+                   'ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .bind(env.APP_URL || '')
   ]);
   return !res.meta.changes;
 }
 
 /**
- * Release an update_id claim. Only handleUpdate calls it, and only when the failure
- * could not even be reported: Telegram redelivers an update it has not heard back
- * about, and that redelivery is the last chance the message has.
+ * Release an update claim. Only handleUpdate calls it, and only when the failure could
+ * not even be reported: Telegram redelivers an update it has not heard back about, and
+ * that redelivery is the last chance the message has. Deleting rather than settling is
+ * deliberate — the drain would work too, but Telegram's own retry is faster and the
+ * two must not both run the turn.
  */
 async function unsee(env, updateId) {
   if (!updateId) return;
   try { await env.DB.prepare('DELETE FROM seen_updates WHERE update_id = ?').bind(updateId).run(); }
   catch (err) { console.error('telegram: could not release update ' + updateId + ': ' + msgOf(err)); }
+}
+
+/**
+ * Close a row: the turn ended, in a receipt or in a reported error. The payload goes
+ * with it — it has served its purpose, and the bot should not keep the owner's message
+ * text a day longer than the retry window needs.
+ *
+ * A settle that FAILS leaves the row pending, so the drain re-runs a turn that already
+ * finished. That is the safe direction to be wrong in: the row ids are idempotent, so
+ * the rescue re-sends the receipt as "Already logged" and writes nothing.
+ */
+async function settle(env, updateId) {
+  if (!updateId) return;
+  try {
+    await env.DB.prepare('UPDATE seen_updates SET done = 1, payload = NULL WHERE update_id = ?')
+      .bind(updateId).run();
+  } catch (err) { console.error('telegram: could not settle update ' + updateId + ': ' + msgOf(err)); }
+}
+
+// ── the rescue drain (cron) ──────────────────────────────────────────────────
+/**
+ * How long a claimed turn may stay unfinished before the drain assumes it is dead, how
+ * many rescues one update gets, and how many rows one drain may take.
+ *
+ * STALE_MS sits far above TURN_CEILING_MS on purpose. The cost of calling a turn dead
+ * too early is a second turn beside the first: no duplicate row (the ids are
+ * idempotent) but a duplicate receipt, and a receipt the owner did not expect is the
+ * confusion this whole area exists to remove. Nothing on Cloudflare survives two
+ * minutes of wall clock, so a row that old is not running.
+ */
+export const STALE_MS = 120000;
+export const MAX_ATTEMPTS = 3;
+export const DRAIN_LIMIT = 5;
+
+/**
+ * Re-run the turns that never finished. Returns how many it completed.
+ *
+ * This is the floor under everything else. /tg reports what it can see going wrong; the
+ * drain answers what it cannot — an invocation cut off mid-turn, which throws nothing
+ * and so reaches no catch. A message the owner sent now ends in a receipt or in an
+ * error message, and the worst case is that it arrives a few minutes late.
+ *
+ * It calls route() and NOT handleUpdate(), because handleUpdate claims first and the
+ * row is already claimed — the rescue would see its own claim and return.
+ *
+ * `at` is re-stamped BEFORE the work, so an overlapping drain leaves the row alone for
+ * another STALE_MS and two rescues cannot run the same turn side by side. That write
+ * also spends the attempt: a rescue that dies the same way its turn did must not retry
+ * forever, and MAX_ATTEMPTS is what turns a poisonous update into one error message.
+ */
+export async function drainUpdates(env, now = Date.now()) {
+  let rows;
+  try {
+    rows = (await env.DB.prepare(
+      'SELECT update_id, payload, attempts FROM seen_updates ' +
+      'WHERE done = 0 AND payload IS NOT NULL AND at <= ? ORDER BY update_id LIMIT ?'
+    ).bind(now - STALE_MS, DRAIN_LIMIT).all()).results || [];
+  } catch (err) {
+    console.error('telegram: the drain could not read the queue: ' + msgOf(err));
+    return 0;
+  }
+  if (!rows.length) return 0;
+  // A cron has no request, so no origin. seen() stored the last one it saw; without it
+  // the receipt still lands, only without its ✎ Edit button.
+  const runEnv = env.APP_URL ? env
+    : Object.assign({}, env, { APP_URL: await metaGet(env, 'app_url').catch(() => '') });
+  let rescued = 0;
+  for (const row of rows) {
+    const attempt = (row.attempts || 0) + 1;
+    try {
+      await env.DB.prepare('UPDATE seen_updates SET attempts = ?, at = ? WHERE update_id = ?')
+        .bind(attempt, now, row.update_id).run();
+    } catch (err) {
+      // The claim cannot be re-stamped, so a second drain would run this row beside us.
+      console.error('telegram: could not claim update ' + row.update_id + ' for rescue: ' + msgOf(err));
+      continue;
+    }
+    let update = null;
+    try { update = JSON.parse(row.payload); } catch (err) { /* not recoverable, closed below */ }
+    if (!update) {
+      console.error('telegram: update ' + row.update_id + ' has an unreadable payload');
+      await settle(env, row.update_id);
+      continue;
+    }
+    console.warn('telegram: rescuing update ' + row.update_id + ', attempt ' + attempt);
+    try {
+      await route(runEnv, update);
+      await settle(env, row.update_id);
+      rescued++;
+    } catch (err) {
+      console.error('telegram: rescue of ' + row.update_id + ' failed: ' + msgOf(err));
+      // Out of attempts: say so once and close the row. Leaving it open would repeat
+      // the same failure every two minutes for a day.
+      if (attempt >= MAX_ATTEMPTS) {
+        await report(runEnv, update, err);
+        await settle(env, row.update_id);
+      }
+    }
+  }
+  return rescued;
 }
 
 async function route(env, update) {

@@ -388,6 +388,68 @@ describe('Apps Script (vm)', () => {
         '/tg hands the turn to waitUntil again; Cloudflare cancels that without an error and the message is lost');
     });
 
+    test('the scheduled handler awaits its job and dispatches on event.cron', () => {
+      // Same trap as /tg, on the other entry point: a cancelled waitUntil task is torn
+      // down without throwing, so a cut-off cron reports nothing at all. There are two
+      // schedules now, and dispatching on the wrong one would run the IBKR pull every
+      // two minutes — its rate limit refuses that, so the prices job would simply stop.
+      const code = fs.readFileSync(path.join(__dirname, 'worker', 'worker.js'), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      const fn = /async scheduled\(([\s\S]*?)\n  }/.exec(code);
+      assert.ok(fn, 'the scheduled handler moved — re-point this guard');
+      assert.ok(!/waitUntil/.test(fn[1]),
+        'scheduled hands its job to waitUntil; Cloudflare cancels that without an error');
+      assert.ok(/event\s*&&\s*event\.cron|event\.cron/.test(fn[1]),
+        'scheduled ignores event.cron — every schedule would run the same job');
+    });
+
+    test('wrangler.toml schedules exactly the crons jobs.js can dispatch', () => {
+      // The two lists are the same fact written twice, and nothing at deploy time
+      // compares them. A drifted string is silent in both directions: the drain never
+      // runs (messages go back to being lost) and runScheduled falls through to a
+      // warning, so the daily job never runs either.
+      const toml = fs.readFileSync(path.join(__dirname, 'worker', 'wrangler.toml'), 'utf8');
+      const block = /\[triggers\][\s\S]*?crons\s*=\s*\[([^\]]*)\]/.exec(toml);
+      assert.ok(block, '[triggers] crons is gone — the Worker now has no schedule at all');
+      const scheduled = (block[1].match(/"([^"]*)"/g) || []).map((x) => x.slice(1, -1));
+      assert.deepStrictEqual(scheduled.slice().sort(), [jobs.CRON_DAILY, jobs.CRON_DRAIN].sort(),
+        'wrangler.toml schedules ' + JSON.stringify(scheduled) + ', which is not what runScheduled() dispatches');
+    });
+
+    test('the rescue drain waits out a live turn before it starts a second one', () => {
+      // STALE_MS decides when an unfinished row counts as dead work. Set it below the
+      // turn ceiling and the drain races turns that are merely slow: no duplicate row
+      // (the ids are idempotent) but a duplicate receipt for a message the owner is
+      // still waiting on, which is the confusion this whole area exists to remove.
+      assert.ok(tg.STALE_MS > tg.TURN_CEILING_MS * 2,
+        'the drain calls a turn dead at ' + tg.STALE_MS + 'ms, too close to the ' +
+        tg.TURN_CEILING_MS + 'ms a live turn may take');
+      assert.ok(tg.MAX_ATTEMPTS >= 1 && tg.DRAIN_LIMIT >= 1,
+        'a drain that rescues nothing per firing is not a drain');
+    });
+
+    test('the claim carries the update, and the sweep spares unfinished work', () => {
+      // The two halves of option ②, in the two statements that can quietly undo it.
+      // seen() must store the payload — a claim with no payload is indistinguishable
+      // from a lost message, which is exactly the ambiguity that destroyed one.
+      // The sweep must skip pending rows: deleting one is the silent loss, restored.
+      const src = fs.readFileSync(path.join(__dirname, 'worker', 'src', 'telegram.js'), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      const seen = /async function seen\(([\s\S]*?)\n}/.exec(src);
+      assert.ok(seen, 'seen() moved — re-point this guard');
+      assert.ok(/INSERT INTO seen_updates[^;]*payload/.test(seen[1]),
+        'seen() claims the update without storing it — an unfinished turn is unrecoverable again');
+      assert.ok(/DELETE FROM seen_updates WHERE done = 1/.test(seen[1]),
+        'the sweep no longer spares pending rows — it will delete work the drain has not run yet');
+
+      // The drain must call route(), not handleUpdate(): handleUpdate claims first, and
+      // the row it would find claimed is its own, so every rescue would return at once.
+      const drain = /export async function drainUpdates\(([\s\S]*?)\n}/.exec(src);
+      assert.ok(drain, 'drainUpdates() moved — re-point this guard');
+      assert.ok(/await route\(/.test(drain[1]) && !/handleUpdate\(/.test(drain[1]),
+        'the drain goes through handleUpdate, which will see its own claim and rescue nothing');
+    });
+
     test('read routes are named get…/list…, write routes are not', () => {
       // worker/public/app.js picks GET vs POST off this prefix instead of shipping a
       // second copy of the table. Break the rule and the symptom is remote: a write
