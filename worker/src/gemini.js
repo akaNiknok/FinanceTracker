@@ -16,20 +16,23 @@ export const MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemin
 /**
  * The parse carries its own clock, and this is why.
  *
- * A chat turn runs inside ctx.waitUntil: /tg answers Telegram 200 first, then does the
- * work. Cloudflare CANCELS waitUntil work that outlives its allowance, and a cancelled
- * task is torn down — it does not throw, so no catch runs, nothing is sent, and the
- * owner gets pure silence (2026-09-02). An unbounded parse is therefore not a slow
- * turn, it is a LOST one.
+ * These are model ids that FLOAT: `-latest` is whatever Google points it at this week,
+ * so a parse that took two seconds last month can take thirty today with no change in
+ * this repo. Left unbounded, three tries in a row spend about 21s — which in v2.10.1
+ * outlived the waitUntil allowance and lost the message in silence (2026-09-02).
  *
- * These are model ids that float: `-latest` is whatever Google points it at this week,
- * so a parse that took two seconds last month can take thirty today with no change
- * here. The budget is what makes that a reported failure instead of a disappearance.
- * It is set well inside the allowance on purpose — the time left over is what sends
- * the error message.
+ * Since v2.11.0 the turn runs inside a PENDING REQUEST rather than waitUntil, so the
+ * ceiling is no longer Cloudflare's allowance but Telegram's patience for a webhook
+ * reply. That is a bigger room, so the budget grew — but it is still a room. The
+ * numbers are chosen so the whole turn fits under TURN_CEILING_MS (src/telegram.js)
+ * with the D1 writes and the send that follow.
+ *
+ * A per-attempt cap AND a whole-chain budget, because they stop different things: the
+ * cap stops one model hanging forever, the budget stops the FALLBACK from adding three
+ * caps together.
  */
-export const MODEL_TIMEOUT_MS = 7000;    // one attempt
-export const PARSE_BUDGET_MS = 12000;    // the whole fallback chain
+export const MODEL_TIMEOUT_MS = 9000;    // one attempt
+export const PARSE_BUDGET_MS = 20000;    // the whole fallback chain
 
 // Structured-output schema (OpenAPI subset: nullable, not union types). Only
 // intent/error are required — a non-transaction message must be able to come back as
