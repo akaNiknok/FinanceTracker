@@ -57,6 +57,7 @@ function d1(db) {
   const api = await load('src/api.js');
   const dbm = await load('src/db.js');
   const jobsMod = await load('src/jobs.js');
+  const tgMod = await load('src/telegram.js');
 
   const sqlite = new DatabaseSync(':memory:');
   const env = {
@@ -845,6 +846,91 @@ function d1(db) {
       await withFetch((u) => isSend(u) ? sendOk('6666666666') : err('1020', 'Invalid request or unable to validate request.'),
         async () => { await assert.rejects(() => jobs.pricesJob(jobEnv, PACE),
           /two reference codes.*1020 Invalid request/s); });
+    });
+  });
+
+  await describe('The Telegram update path (silence is the bug)', () => {
+    // The 2026-09-02 report: a message was sent, nothing was logged, and NO reply came
+    // back — so the owner could not tell a bot that refused the message from a webhook
+    // that never delivered it. route() answers its own errors; everything AROUND it
+    // (the seen_updates claim, refs(), the send itself) only reached console.error, and
+    // the claim was taken BEFORE the work, so Telegram's redelivery was dropped too.
+    // One bad minute lost the message for good. These four pin the contract that
+    // replaced it: every turn ends in a message, or in a claim released for the retry.
+    const tg = tgMod;
+    const CHAT = 424242;
+    const update = (id) => ({ update_id: id, message: { message_id: 7, date: 1788000000,
+      chat: { id: CHAT }, from: { id: CHAT }, text: '749 maribank Mobile data 60gb' } });
+
+    // A whole turn with only the network stubbed: Gemini answers, Telegram records.
+    // `db` lets a case break one D1 statement, which is how the real failures arrived.
+    const turn = async (id, { db, telegram = 'ok' } = {}) => {
+      const real = globalThis.fetch;
+      const sent = [];
+      globalThis.fetch = async (u, init) => {
+        if (String(u).includes('generativelanguage')) {
+          return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+            intent: 'log', error: null, query: null,
+            items: [{ Date: '2026-08-20', Category: 'Expense: Food', Description: 'Mobile data 60GB',
+                      Account: 'Maya', Amount: 749 }] }) }] } }] }), { status: 200 });
+        }
+        if (telegram === 'down') throw new Error('network unreachable');
+        sent.push(JSON.parse(init.body));
+        return new Response('{"ok":true}', { status: 200 });
+      };
+      const tgEnv = Object.assign({}, env, { TELEGRAM_USER_ID: String(CHAT), TELEGRAM_BOT_TOKEN: 'x',
+                                             GEMINI_API_KEY: 'x', APP_URL: 'https://example.dev' });
+      if (db) tgEnv.DB = breakOn(db);
+      try { await tg.handleUpdate(tgEnv, update(id)); return sent; }
+      finally { globalThis.fetch = real; }
+    };
+    // The real shim, with one statement made to throw the way D1 reports a storage error.
+    const breakOn = (re) => ({
+      prepare: (sql) => { if (re.test(sql)) throw new Error('D1_ERROR: storage'); return env.DB.prepare(sql); },
+      batch: async (stmts) => env.DB.batch(stmts)
+    });
+    const claimed = (id) => !!sqlite.prepare('SELECT 1 FROM seen_updates WHERE update_id = ?').get(id);
+
+    test('a healthy message is logged once, and a redelivery stays quiet', async () => {
+      const first = await turn(9001);
+      assert.strictEqual(first.length, 1, 'the receipt did not go out');
+      assert.match(first[0].text, /Logged/);
+      assert.ok(claimed(9001), 'the update_id was not claimed');
+      // The claim is the whole point: Telegram redelivers anything slow, and a second
+      // parse would cost a second Gemini call and a second receipt.
+      assert.strictEqual((await turn(9001)).length, 0, 'a redelivery was answered twice');
+      assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9001-%'").get().n, 1);
+    });
+
+    test('a failure OUTSIDE route() still reaches the owner', async () => {
+      // refs() is the one read route() makes before its own try block. It used to take
+      // the turn down in silence.
+      const sent = await turn(9002, { db: /FROM accounts a JOIN/ });
+      assert.strictEqual(sent.length, 1, 'a broken D1 read said nothing at all');
+      assert.match(sent[0].text, /Something went wrong/);
+      assert.match(sent[0].text, /Nothing was logged/);
+      // Reported, so the claim STAYS: a redelivery must not repeat the same complaint.
+      assert.ok(claimed(9002), 'a reported failure released its claim and will now say it twice');
+    });
+
+    test('a failure that could not be reported releases the claim for the retry', async () => {
+      const sent = await turn(9003, { telegram: 'down' });
+      assert.strictEqual(sent.length, 0, 'nothing can be sent when Telegram is unreachable');
+      assert.strictEqual(claimed(9003), false,
+        'the claim outlived the execution — Telegram will redeliver and the bot will drop it');
+    });
+
+    test('the released message really does land on the redelivery', async () => {
+      // The end of the 2026-09-02 story. Same update_id, Telegram healthy again.
+      const sent = await turn(9003);
+      assert.strictEqual(sent.length, 1, 'the retry of a released update was dropped');
+      // "Already logged", not "Logged": the row went in BEFORE the send failed, so the
+      // retry hits ON CONFLICT DO NOTHING and reports the duplicate. That is the whole
+      // reason releasing a claim is safe — the row id carries the idempotency, so the
+      // retry can only ever add the receipt the owner never got.
+      assert.match(sent[0].text, /Already logged/);
+      assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9003-%'").get().n, 1,
+        'the row id is not idempotent — a released claim can now double-write');
     });
   });
 
