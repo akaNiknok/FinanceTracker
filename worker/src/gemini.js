@@ -13,6 +13,24 @@ import { manilaToday } from './db.js';
 // that stopped existing). Cheapest-capable first.
 export const MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'];
 
+/**
+ * The parse carries its own clock, and this is why.
+ *
+ * A chat turn runs inside ctx.waitUntil: /tg answers Telegram 200 first, then does the
+ * work. Cloudflare CANCELS waitUntil work that outlives its allowance, and a cancelled
+ * task is torn down — it does not throw, so no catch runs, nothing is sent, and the
+ * owner gets pure silence (2026-09-02). An unbounded parse is therefore not a slow
+ * turn, it is a LOST one.
+ *
+ * These are model ids that float: `-latest` is whatever Google points it at this week,
+ * so a parse that took two seconds last month can take thirty today with no change
+ * here. The budget is what makes that a reported failure instead of a disappearance.
+ * It is set well inside the allowance on purpose — the time left over is what sends
+ * the error message.
+ */
+export const MODEL_TIMEOUT_MS = 7000;    // one attempt
+export const PARSE_BUDGET_MS = 12000;    // the whole fallback chain
+
 // Structured-output schema (OpenAPI subset: nullable, not union types). Only
 // intent/error are required — a non-transaction message must be able to come back as
 // {error:"..."} without the model inventing a Category to satisfy the schema.
@@ -50,7 +68,7 @@ const SCHEMA = {
   required: ['intent', 'error']
 };
 
-/** Message text -> the structured object. Throws on API/parse failure. */
+/** Message text -> the structured object. Throws on API/parse failure, or on timeout. */
 export async function parse(env, refs, text, unixDate) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not set.');
@@ -59,17 +77,29 @@ export async function parse(env, refs, text, unixDate) {
     contents: [{ role: 'user', parts: [{ text }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: SCHEMA }
   });
-  return JSON.parse(await tryModels(MODELS, (model) => generate(model, key, payload)));
+  return JSON.parse(await tryModels(MODELS, (model, ms) => generate(model, key, payload, ms)));
 }
 
 /**
  * Call `fn` with each model until one returns; the last failure surfaces if none do.
+ * `fn` receives the milliseconds still left, so a slow first model shortens the second
+ * attempt rather than adding to it — three unbounded tries in a row is how a turn ran
+ * past its waitUntil allowance and vanished.
+ *
+ * The chain STOPS when the budget is spent, and the failure that stopped it is the one
+ * that surfaces. Falling back with no time left just trades one silent loss for
+ * another; a reported timeout is the useful outcome.
+ *
  * ponytail: retries the whole call, so a 503 on the primary costs one extra round
  * trip. No per-status logic — a bad response is a bad response either way.
  */
-export async function tryModels(models, fn) {
+export async function tryModels(models, fn, budgetMs = PARSE_BUDGET_MS, now = () => Date.now()) {
+  const until = now() + budgetMs;
   for (let i = 0; i < models.length; i++) {
-    try { return await fn(models[i]); }
+    const left = until - now();
+    if (left <= 0) throw new Error('Gemini ran out of time after ' + i + ' of ' +
+                                   models.length + ' models (' + Math.round(budgetMs / 1000) + 's budget).');
+    try { return await fn(models[i], Math.min(MODEL_TIMEOUT_MS, left)); }
     catch (err) {
       console.warn('gemini ' + models[i] + ' failed: ' + (err && err.message ? err.message : err));
       if (i === models.length - 1) throw err;
@@ -77,12 +107,26 @@ export async function tryModels(models, fn) {
   }
 }
 
-/** One generateContent call -> the model's raw text. Throws on non-200/empty. */
-async function generate(model, key, payload) {
-  const res = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/' + model +
-      ':generateContent?key=' + encodeURIComponent(key),
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload });
+/**
+ * One generateContent call -> the model's raw text. Throws on non-200/empty, and on a
+ * model that does not answer in `timeoutMs`. The abort is translated into a plain
+ * message: a bare DOMException reads as a bug in this code, and this text goes
+ * straight into the owner's chat.
+ */
+async function generate(model, key, payload, timeoutMs = MODEL_TIMEOUT_MS) {
+  let res;
+  try {
+    res = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + model +
+        ':generateContent?key=' + encodeURIComponent(key),
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload,
+        signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error('Gemini ' + model + ' did not answer within ' + Math.round(timeoutMs / 1000) + 's.');
+    }
+    throw err;
+  }
   const body = await res.text();
   if (!res.ok) throw new Error('Gemini ' + res.status + ': ' + body.slice(0, 200));
   return textOf(JSON.parse(body));

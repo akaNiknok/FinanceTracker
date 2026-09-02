@@ -58,6 +58,7 @@ function d1(db) {
   const dbm = await load('src/db.js');
   const jobsMod = await load('src/jobs.js');
   const tgMod = await load('src/telegram.js');
+  const gem = await load('src/gemini.js');
 
   const sqlite = new DatabaseSync(':memory:');
   const env = {
@@ -911,6 +912,43 @@ function d1(db) {
       assert.match(sent[0].text, /Nothing was logged/);
       // Reported, so the claim STAYS: a redelivery must not repeat the same complaint.
       assert.ok(claimed(9002), 'a reported failure released its claim and will now say it twice');
+    });
+
+    test('a Gemini that times out reports it instead of vanishing', async () => {
+      // THE 2026-09-02 ROOT CAUSE. /tg answers Telegram 200, then works in waitUntil.
+      // Cloudflare cancels waitUntil work that outlives its allowance, and a cancelled
+      // task is TORN DOWN — it does not throw, so handleUpdate's catch never runs and
+      // nothing is sent. The seen_updates row was written (seen() had already
+      // finished), the transaction never was, and the log held one runtime warning and
+      // no stack. The parse now bounds ITSELF, and this is the reply that proves it.
+      //
+      // The abort is raised directly rather than by waiting out a real 7s timer: what
+      // matters here is that a TimeoutError becomes a sentence the owner can read. That
+      // the CHAIN is bounded is a timing property, and test.js pins it with an
+      // injected clock instead of 12 real seconds.
+      const real = globalThis.fetch;
+      const sent = [];
+      let attempts = 0;
+      globalThis.fetch = async (u, init) => {
+        if (String(u).includes('generativelanguage')) {
+          attempts++;
+          assert.ok(init.signal, 'the Gemini call carries no AbortSignal — nothing can bound it');
+          throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+        }
+        sent.push(JSON.parse(init.body));
+        return new Response('{"ok":true}', { status: 200 });
+      };
+      const tgEnv = Object.assign({}, env, { TELEGRAM_USER_ID: String(CHAT), TELEGRAM_BOT_TOKEN: 'x',
+                                             GEMINI_API_KEY: 'x', APP_URL: 'https://example.dev' });
+      try { await tg.handleUpdate(tgEnv, update(9004)); }
+      finally { globalThis.fetch = real; }
+
+      assert.strictEqual(sent.length, 1, 'a timed-out model produced silence, which is the bug');
+      assert.match(sent[0].text, /did not answer within \d+s/,
+        'the reply must name the timeout in words, not leak a DOMException');
+      assert.strictEqual(attempts, gem.MODELS.length, 'an instant failure should still walk the whole chain');
+      assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9004-%'").get().n, 0,
+        'a timed-out parse must write nothing');
     });
 
     test('a failure that could not be reported releases the claim for the retry', async () => {

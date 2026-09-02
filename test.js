@@ -40,6 +40,7 @@ describe('Apps Script (vm)', () => {
   const tg = await load('src/telegram.js');
   const worker = await load('worker.js');
   const api = await load('src/api.js');
+  const gemini = await load('src/gemini.js');
 
   // ── 2. units ──────────────────────────────────────────────────────────────
   describe('Worker units', () => {
@@ -283,6 +284,42 @@ describe('Apps Script (vm)', () => {
 
   // ── 3. contract guards ────────────────────────────────────────────────────
   describe('Contract guards', () => {
+
+    test('the model fallback chain is bounded as a WHOLE, not per model', () => {
+      // The 2026-09-02 loss. A chat turn runs in ctx.waitUntil; Cloudflare cancels
+      // waitUntil work that outlives its allowance and the task is torn down, so no
+      // catch runs and nothing is sent. Three unbounded tries in a row is how the parse
+      // outlived it. A per-model cap alone does not fix that — 3 x 7s still overruns —
+      // so the budget must span the chain and stop it when the time is gone.
+      const models = ['a', 'b', 'c'];
+      let clock = 0;
+      const now = () => clock;
+      const asked = [];
+      // Every model burns most of the budget, then fails.
+      const slow = (m, ms) => { asked.push([m, ms]); clock += ms; return Promise.reject(new Error('slow ' + m)); };
+      return gemini.tryModels(models, slow, 10000, now).then(
+        () => assert.fail('a chain that never succeeds must throw'),
+        (err) => {
+          assert.ok(asked.length < models.length,
+            'the chain tried every model with no time left — it is not bounded as a whole');
+          // Each attempt is capped, and a later one may only use what is still left.
+          asked.forEach(([m, ms]) => assert.ok(ms <= gemini.MODEL_TIMEOUT_MS,
+            'model ' + m + ' was given ' + ms + 'ms, over the per-attempt cap'));
+          assert.ok(clock <= 10000 + gemini.MODEL_TIMEOUT_MS, 'the chain spent ' + clock + 'ms of a 10000ms budget');
+          assert.ok(/slow|ran out of time/.test(err.message), err.message);
+        });
+    });
+
+    test('the parse budget leaves room to report the failure', () => {
+      // The budget is useless if it equals the allowance: the message that says
+      // "Gemini timed out" is sent AFTER the parse gives up, so the slack is the
+      // feature. Pin both numbers, because raising either one silently re-creates the
+      // failure this whole change exists to remove.
+      assert.ok(gemini.MODEL_TIMEOUT_MS <= gemini.PARSE_BUDGET_MS,
+        'one attempt may not outlast the whole chain');
+      assert.ok(gemini.PARSE_BUDGET_MS <= 20000,
+        'the parse budget is ' + gemini.PARSE_BUDGET_MS + 'ms, too close to the waitUntil allowance to report a failure');
+    });
 
     test('read routes are named get…/list…, write routes are not', () => {
       // worker/public/app.js picks GET vs POST off this prefix instead of shipping a
