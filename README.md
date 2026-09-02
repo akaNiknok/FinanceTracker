@@ -90,7 +90,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 | Frontend | approximately 3 470 lines, no framework and no bundler |
 | Apps Script | approximately 510 lines in 4 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 106 tests operate offline with `npm test`, and 69 of them use a real SQLite database |
+| Tests | 110 tests operate offline with `npm test`, and 69 of them use a real SQLite database |
 | Releases | 57 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
@@ -264,7 +264,7 @@ The code and the database do not go back together. Undo the code first.
 
 | Indication | What to examine, in this sequence |
 | --- | --- |
-| The bot sends no message at all. | First read `getWebhookInfo`, after you send a new test message. Do not set the webhook again first, because that action erases the last error. An error there means that the message did not arrive. A 403 points to the secret `SECRET_TOKEN`, which must be the same as the script property `TELEGRAM_SECRET_TOKEN`. **If the webhook is clean, run `npm run tail` and send a message.** The line `waitUntil() tasks did not complete` means that Cloudflare stopped the work after the reply to Telegram. Cloudflare stops such a task without an error, thus the bot cannot report it. The usual cause is a slow parse. |
+| The bot sends no message at all. | First read `getWebhookInfo`, after you send a new test message. Do not set the webhook again first, because that action erases the last error. An error there means that the message did not arrive. A 403 points to the secret `SECRET_TOKEN`, which must be the same as the script property `TELEGRAM_SECRET_TOKEN`. **If the webhook is clean, run `npm run tail` and send a message.** Since v2.11.0 the bot answers Telegram only after the work, thus Cloudflare no longer stops a slow turn. A slow parse now sends "Still working" and continues. If you see the old line `waitUntil() tasks did not complete`, the Worker is a version before v2.11.0. |
 | The bot answers, but the answer is an error. | `npm run tail` while you send a message. Then the Gemini quota in AI Studio. An answer of "Unauthorized" indicates the secret `TELEGRAM_USER_ID`. |
 | The error "Wrong response from the webhook: 302". | The webhook address. It must be the Worker address, and it must end with `/tg`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |

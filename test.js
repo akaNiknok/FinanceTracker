@@ -283,6 +283,48 @@ describe('Apps Script (vm)', () => {
   });
 
   // ── 3. contract guards ────────────────────────────────────────────────────
+  describe('The slow-turn notice', () => {
+    // The owner's actual ask on 2026-09-02: "send the notification AND still wait for
+    // Gemini to eventually respond". waitUntil could never do that — a cancelled task
+    // is torn down, so there is no notice to send and nothing left to wait with. The
+    // turn now runs inside a pending request, so both halves are possible, and these
+    // two tests are the halves.
+    const withFetch = async (fn) => {
+      const real = globalThis.fetch;
+      const sent = [];
+      globalThis.fetch = async (u, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; };
+      try { return { out: await fn(), sent }; } finally { globalThis.fetch = real; }
+    };
+    const env = { TELEGRAM_BOT_TOKEN: 'x' };
+    const after = (ms, v) => new Promise((r) => setTimeout(() => r(v), ms));
+
+    test('a fast turn says nothing extra', async () => {
+      const { out, sent } = await withFetch(() => tg.whileSlow(env, 1, 2, after(5, 'parsed'), 60));
+      assert.strictEqual(out, 'parsed');
+      assert.strictEqual(sent.length, 0, 'a quick parse sent a "still working" notice nobody needed');
+    });
+
+    test('a slow turn says so ONCE, and still returns the answer', async () => {
+      const { out, sent } = await withFetch(() => tg.whileSlow(env, 1, 2, after(90, 'parsed'), 20));
+      // The half that makes it worth having: the work was NOT abandoned.
+      assert.strictEqual(out, 'parsed', 'the turn stopped waiting after warning — that is the old bug with extra steps');
+      assert.strictEqual(sent.length, 1, 'expected exactly one notice, got ' + sent.length);
+      assert.match(sent[0].text, /Still working/);
+      assert.strictEqual(sent[0].chat_id, 1);
+      assert.strictEqual(sent[0].reply_to_message_id, 2, 'the notice must thread onto the message it is about');
+    });
+
+    test('a notice that cannot be delivered never sinks the turn', async () => {
+      // It is a courtesy, not the receipt. Awaiting it would let a failed courtesy
+      // take down the transaction behind it.
+      const real = globalThis.fetch;
+      globalThis.fetch = async () => { throw new Error('telegram unreachable'); };
+      try {
+        assert.strictEqual(await tg.whileSlow(env, 1, 2, after(60, 'parsed'), 10), 'parsed');
+      } finally { globalThis.fetch = real; }
+    });
+  });
+
   describe('Contract guards', () => {
 
     test('the model fallback chain is bounded as a WHOLE, not per model', () => {
@@ -310,15 +352,40 @@ describe('Apps Script (vm)', () => {
         });
     });
 
-    test('the parse budget leaves room to report the failure', () => {
-      // The budget is useless if it equals the allowance: the message that says
-      // "Gemini timed out" is sent AFTER the parse gives up, so the slack is the
-      // feature. Pin both numbers, because raising either one silently re-creates the
-      // failure this whole change exists to remove.
+    test('the whole turn fits inside its ceiling, with room to speak', () => {
+      // Three numbers that only mean anything together. Since v2.11.0 the turn holds
+      // Telegram's webhook connection, so TURN_CEILING_MS is the room and the parse
+      // must leave enough of it for the D1 writes and the send that follow — the
+      // message saying "Gemini timed out" is sent AFTER the parse gives up, so the
+      // slack IS the feature. Raise the budget without raising the ceiling and the
+      // silence comes straight back, with nothing else failing.
       assert.ok(gemini.MODEL_TIMEOUT_MS <= gemini.PARSE_BUDGET_MS,
         'one attempt may not outlast the whole chain');
-      assert.ok(gemini.PARSE_BUDGET_MS <= 20000,
-        'the parse budget is ' + gemini.PARSE_BUDGET_MS + 'ms, too close to the waitUntil allowance to report a failure');
+      assert.ok(gemini.PARSE_BUDGET_MS + 4000 <= tg.TURN_CEILING_MS,
+        'the parse may run ' + gemini.PARSE_BUDGET_MS + 'ms of a ' + tg.TURN_CEILING_MS +
+        'ms turn, leaving too little to write the rows and send the receipt');
+      // A notice that fires after the parse has already given up is not a notice.
+      assert.ok(tg.SLOW_NOTICE_MS < gemini.PARSE_BUDGET_MS,
+        'the "still working" notice fires at ' + tg.SLOW_NOTICE_MS + 'ms, after the parse gives up at ' +
+        gemini.PARSE_BUDGET_MS + 'ms — it would never be seen');
+    });
+
+    test('/tg AWAITS the turn and never hands it to waitUntil', () => {
+      // The 2026-09-02 loss, as a guard. Cloudflare cancels waitUntil work that
+      // outlives its allowance and tears the task down WITHOUT throwing, so no catch
+      // runs, nothing is sent, and the transaction is gone with a runtime warning as
+      // its only trace. Handing the turn back to waitUntil looks like a harmless
+      // latency win and silently restores that.
+      // Comments are stripped first: this handler EXPLAINS the waitUntil trap at
+      // length, and a guard that reads prose would fail on its own documentation.
+      const code = fs.readFileSync(path.join(__dirname, 'worker', 'worker.js'), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      const fn = /async function telegram\(([\s\S]*?)\n}/.exec(code);
+      assert.ok(fn, 'the /tg handler is not called telegram() any more — re-point this guard');
+      assert.ok(/await handleUpdate\(/.test(fn[1]),
+        '/tg no longer awaits handleUpdate — a slow turn will be cancelled in silence');
+      assert.ok(!/waitUntil/.test(fn[1]),
+        '/tg hands the turn to waitUntil again; Cloudflare cancels that without an error and the message is lost');
     });
 
     test('read routes are named get…/list…, write routes are not', () => {

@@ -76,7 +76,7 @@ export default {
     // never reaches this script, because assets match before the Worker and only serve
     // GET/HEAD. Verified with `wrangler dev`; undocumented either way, so do not
     // re-derive it.
-    if (request.method === 'POST' && url.pathname === '/tg') return telegram(request, env, ctx);
+    if (request.method === 'POST' && url.pathname === '/tg') return telegram(request, env);
     if (url.pathname === '/login') return login(request, env);
     if (url.pathname === '/api') return api(request, env, url);
     return new Response('not found', { status: 404 });   // assets never reach here
@@ -87,16 +87,32 @@ export default {
   }
 };
 
-async function telegram(request, env, ctx) {
+async function telegram(request, env) {
   if (env.SECRET_TOKEN &&
       request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.SECRET_TOKEN) {
     return new Response('forbidden', { status: 403 });
   }
   const update = await request.json().catch(() => null);
-  // Answer first, work after: Telegram redelivers anything it has not heard back from,
-  // and a Gemini parse plus a few D1 round trips is well inside waitUntil but not
-  // inside Telegram's patience. handleUpdate never throws.
-  ctx.waitUntil(handleUpdate(env, update));
+  // WORK FIRST, ANSWER AFTER — the opposite of what this did until v2.11.0, and the
+  // reason is a failure that cost real transactions (2026-09-02).
+  //
+  // The old shape answered 200 and handed the turn to ctx.waitUntil. Cloudflare
+  // CANCELS waitUntil work that outlives its allowance, and a cancelled task is torn
+  // down rather than rejected: it throws nothing, so no catch runs, nothing is sent,
+  // and the message is gone with only a runtime warning in a log nobody tails. The
+  // owner sent a transaction and got silence.
+  //
+  // Awaiting instead puts the turn inside a PENDING REQUEST, which that allowance does
+  // not govern — the same reason ingestEmail never suffered this, since Apps Script
+  // holds its connection open. It also buys the one thing waitUntil could not: the
+  // invocation survives long enough to say "still working" and KEEP waiting.
+  //
+  // The comment this replaces said a parse is "not inside Telegram's patience". A
+  // healthy parse is a few seconds, and the whole turn is now bounded well under any
+  // plausible webhook timeout (see TURN_CEILING_MS in src/telegram.js). If Telegram
+  // does give up first it redelivers, and seen() dedups that — so the cost of being
+  // wrong is one wasted redelivery, not a duplicated row.
+  await handleUpdate(env, update);
   return new Response('ok');
 }
 
