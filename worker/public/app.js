@@ -961,6 +961,14 @@ function periodPace(period,monthStr){
   return day/days;
 }
 
+/* Days remaining as "X years, X days" — the FI countdown's only format.
+ * 365.2425 is the same Gregorian mean the Worker projects with, so the two agree. */
+function yearsDays(days){
+  var y=Math.floor(days/365.2425), rest=Math.round(days-y*365.2425);
+  if(rest>=365){y++;rest=0;}   // the rounding can push a remainder up to a full year
+  return y+' year'+(y===1?'':'s')+', '+rest+' day'+(rest===1?'':'s');
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  *  DASHBOARD — hierarchy: hero number → KPI row → cash flow → budgets →
  *  expenses by category → recent. One glance answers "am I okay?".
@@ -978,6 +986,26 @@ function renderDashboard(){
     var cf=d.cashflow||[];
     var cur=cf.length?cf[cf.length-1]:null, prev=cf.length>1?cf[cf.length-2]:null;
     var prevLbl=prev?('vs '+String(prev.month).split('-')[1]):null;
+
+    // ── FI countdown: the top line, above net worth ──
+    // Every input is a closed month (api.js fireEta), so the target DATE holds still
+    // for the whole month and this number falls by exactly one day a day. It is here
+    // to be read first, before the balance it is made of.
+    var f=d.fire;
+    if(f){
+      var fc=el('div','stat hero');
+      var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsDays(f.days));
+      var sub=f.days==null
+        ?'Saving '+money(f.monthlySavingsPhp,true)+'/mo is not enough to reach '+money(f.targetPhp,true)
+        :money(f.netWorthPhp,true)+' of '+money(f.targetPhp,true)+' · '+f.progressPct+'%'+
+         (f.date?' · on track for '+MONTHS[+f.date.slice(5,7)-1]+' '+f.date.slice(0,4):'');
+      fc.innerHTML='<div class="stat-label">Financial independence in</div>'+
+        '<div class="stat-value">'+esc(lead)+'</div>'+
+        '<div class="stat-sub">'+sub+'</div>'+
+        '<div class="stat-sub">'+f.withdrawalRatePct+'% rule · '+money(f.monthlyExpensePhp,true)+
+        '/mo spend · saving '+money(f.monthlySavingsPhp,true)+'/mo at '+f.realReturnPct+'% real</div>';
+      w.appendChild(fc);
+    }
 
     // ── hero: net worth + asset/liability split bar ──
     var hero=el('div','stat hero');

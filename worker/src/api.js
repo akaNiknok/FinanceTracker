@@ -48,6 +48,16 @@ const TX_CLIENT_FIELDS = ['Date', 'Period', 'Category', 'Description', 'Account'
 // ── shared helpers ───────────────────────────────────────────────────────────
 const list = (n) => new Array(n).fill('?').join(',');
 
+// The FI countdown's two fixed constants. 25x annual spend IS the 4% rule — the
+// multiple is the rule's definition, not a preference, so it is not a meta key; the
+// expected real return is, because that one is a genuine judgement call
+// (`fire_real_return`, percent per year). DAYS_PER_YEAR is the Gregorian mean, so the
+// projected date does not drift a day every leap year.
+// ponytail: make FIRE_MULTIPLE a meta key only if a withdrawal rate other than 4% is
+// ever actually wanted.
+const FIRE_MULTIPLE = 25;
+const DAYS_PER_YEAR = 365.2425;
+
 /**
  * Invariant, unchanged from tx_assertShape_: a Transfer-type category iff the row
  * carries a destination. A mismatch makes the balance math and the budgets read the
@@ -364,19 +374,38 @@ export async function getDashboard(args, env) {
   // Aggregation in SQL, not JS: the 10ms CPU budget is the one real constraint on
   // this handler, and a full-table scan in JS is what would break it.
   // Signed sums, no ABS: a refund is a negative expense row and nets its category down.
-  const [spend, flow, recent, snaps] = await env.DB.batch([
-    env.DB.prepare(
-      // Single quotes only: SQLite reads "" as an identifier, not an empty string.
-      "SELECT COALESCE(NULLIF(TRIM(c.segment), ''), 'Unsegmented') AS seg, c.name AS cat, " +
-      'SUM(t.amount_php_u) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
-      "WHERE t.month = ? AND c.type = 'Expense' GROUP BY seg, cat").bind(month),
-    env.DB.prepare(
-      'SELECT t.month AS m, c.type AS type, SUM(t.amount_php_u) AS s FROM transactions t ' +
-      'JOIN categories c ON c.id = t.category_id ' +
-      "WHERE t.month IN (" + list(flowKeys.length) + ") AND c.type IN ('Income','Expense') " +
-      'GROUP BY m, type').bind(...flowKeys),
-    env.DB.prepare('SELECT * FROM transactions ORDER BY date DESC, rowid DESC LIMIT 10'),
-    env.DB.prepare('SELECT month, net_worth_u, shares_u FROM nw_snapshots WHERE month IN (' + list(flowKeys.length) + ')').bind(...flowKeys)
+  //
+  // The FI countdown reads CLOSED months only, and always the three before the LIVE
+  // month — never `ref`. Browsing the Dashboard back to March must not re-date your
+  // retirement, and the chart window (2-24, client-chosen) must not resize its inputs.
+  const now = parseMonthKey(manilaMonth());
+  const closedKeys = [1, 2, 3].map((i) => { const p = shiftMonth(now.y, now.m, -i); return monthKey(p.y, p.m); });
+
+  const [[spend, flow, recent, snaps, closed, lastSnap], fireReturn] = await Promise.all([
+    env.DB.batch([
+      env.DB.prepare(
+        // Single quotes only: SQLite reads "" as an identifier, not an empty string.
+        "SELECT COALESCE(NULLIF(TRIM(c.segment), ''), 'Unsegmented') AS seg, c.name AS cat, " +
+        'SUM(t.amount_php_u) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
+        "WHERE t.month = ? AND c.type = 'Expense' GROUP BY seg, cat").bind(month),
+      env.DB.prepare(
+        'SELECT t.month AS m, c.type AS type, SUM(t.amount_php_u) AS s FROM transactions t ' +
+        'JOIN categories c ON c.id = t.category_id ' +
+        "WHERE t.month IN (" + list(flowKeys.length) + ") AND c.type IN ('Income','Expense') " +
+        'GROUP BY m, type').bind(...flowKeys),
+      env.DB.prepare('SELECT * FROM transactions ORDER BY date DESC, rowid DESC LIMIT 10'),
+      env.DB.prepare('SELECT month, net_worth_u, shares_u FROM nw_snapshots WHERE month IN (' + list(flowKeys.length) + ')').bind(...flowKeys),
+      env.DB.prepare(
+        'SELECT c.type AS type, SUM(t.amount_php_u) AS s FROM transactions t ' +
+        'JOIN categories c ON c.id = t.category_id ' +
+        "WHERE t.month IN (" + list(closedKeys.length) + ") AND c.type IN ('Income','Expense') " +
+        'GROUP BY c.type').bind(...closedKeys),
+      // The last CLOSED month's snapshot, never the live figure: the cron re-stamps the
+      // current month every morning, so reading that row would put the market's daily
+      // noise straight into the countdown.
+      env.DB.prepare('SELECT net_worth_u FROM nw_snapshots WHERE month = ?').bind(closedKeys[0])
+    ]),
+    metaGet(env, 'fire_real_return', '5')
   ]);
 
   const spendBySegment = {}, spendByCategory = {};
@@ -404,8 +433,23 @@ export async function getDashboard(args, env) {
     sharesHistory[s.month] = q2(fromU(s.shares_u));
   });
 
+  // FI countdown. Progress is the closed month's net worth minus money lent out; a
+  // NEGATIVE receivable is a debt the snapshot already carries, so only positive ones
+  // come off. Averages are over the three closed months, signed (a refund nets down).
+  let inc = 0, exp = 0;
+  closed.results.forEach((x) => { if (x.type === 'Income') inc = fromU(x.s) || 0; else exp = fromU(x.s) || 0; });
+  const lentOut = accounts.reduce((s, a) => s + (isReceivable(a) ? Math.max(0, a.balancePhp || 0) : 0), 0);
+  const nwAtClose = lastSnap.results[0] ? fromU(lastSnap.results[0].net_worth_u) : null;
+  const fire = nwAtClose == null ? null : fireEta({
+    netWorthPhp: nwAtClose - lentOut,
+    monthlyExpensePhp: exp / closedKeys.length,
+    monthlySavingsPhp: (inc - exp) / closedKeys.length,
+    realReturnPct: Number(fireReturn) || 0,
+    today: manilaToday()
+  });
+
   return {
-    status: 'success', month,
+    status: 'success', month, fire,
     netWorth: q2(totals.netWorth), assets: q2(totals.assets), liabilities: q2(totals.liabilities),
     sharesValue: q2(totals.sharesValue),
     spendBySegment, spendByCategory,
@@ -443,6 +487,60 @@ export function nwBridge(month, snapNw, byMonth, ref, liveNetWorth) {
     deltaNetWorth: q2(end - start),
     savings,
     residual: q2(end - start - savings)
+  };
+}
+
+/**
+ * The financial-independence countdown, the Dashboard's top line.
+ *
+ * Target is the 4% rule: 25 x annual spend. Progress is net worth minus money LENT
+ * OUT — a receivable is not a pile you can retire on, the same asymmetry the
+ * emergency runway makes. The path is the standard future-value-of-an-annuity solve:
+ * the pile compounds at `realReturnPct` while `monthlySavingsPhp` goes in every
+ * month. A linear "gap / savings" answer would be simpler and wrong by years —
+ * over a 15-year horizon the compounding IS most of the answer.
+ *
+ * EVERY INPUT IS A CLOSED MONTH, and the projection is anchored to the FIRST DAY OF
+ * THE CURRENT MONTH, never to today. That is the whole design. The inputs only move
+ * at a month close, so the ETA date holds still for the month and the countdown
+ * falls by exactly one day every day. Anchor it to today instead and the date walks
+ * forward with you — the number never moves, and a countdown that never moves is
+ * not a spur.
+ *
+ * Returns null when there is no spend history to build a target from. `days` is null
+ * (not Infinity) when the inputs never reach the target: no savings and no growth is
+ * a real state, and "never" is the honest word for it.
+ */
+export function fireEta({ netWorthPhp, monthlyExpensePhp, monthlySavingsPhp, realReturnPct, today }) {
+  if (!(monthlyExpensePhp > 0)) return null;
+  const targetPhp = q2(monthlyExpensePhp * 12 * FIRE_MULTIPLE);
+  const out = {
+    targetPhp, netWorthPhp: q2(netWorthPhp),
+    monthlyExpensePhp: q2(monthlyExpensePhp), monthlySavingsPhp: q2(monthlySavingsPhp),
+    realReturnPct, withdrawalRatePct: q2(100 / FIRE_MULTIPLE),
+    progressPct: Math.max(0, Math.min(100, Math.round(netWorthPhp / targetPhp * 1000) / 10))
+  };
+  if (netWorthPhp >= targetPhp) return { ...out, date: today, days: 0 };
+
+  // (1+r)^n * (NW + P/r) - P/r = T, solved for n. A non-positive base means the pile
+  // shrinks faster than it grows, and the log has nothing to say about that.
+  const r = Math.pow(1 + realReturnPct / 100, 1 / 12) - 1;
+  let n = Infinity;
+  if (r <= 0) { if (monthlySavingsPhp > 0) n = (targetPhp - netWorthPhp) / monthlySavingsPhp; }
+  else {
+    const c = monthlySavingsPhp / r, base = netWorthPhp + c;
+    if (base > 0 && targetPhp + c > 0) n = Math.log((targetPhp + c) / base) / Math.log(1 + r);
+  }
+  // 1200 months is a century. Past that the model is not projecting, it is dividing by
+  // a rounding error — so it says "never" instead of naming a date in the year 2400.
+  if (!(n > 0) || !isFinite(n) || n > 1200) return { ...out, date: null, days: null };
+
+  const anchor = Date.parse(today.slice(0, 8) + '01T00:00:00Z');
+  const eta = anchor + n * (DAYS_PER_YEAR / 12) * 86400000;
+  return {
+    ...out,
+    date: new Date(eta).toISOString().slice(0, 10),
+    days: Math.max(0, Math.ceil((eta - Date.parse(today + 'T00:00:00Z')) / 86400000))
   };
 }
 
