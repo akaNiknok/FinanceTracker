@@ -276,7 +276,7 @@ function fetchTxPage(st,etag){
   var fl=st.filters||{};
   if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
   if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
-  if(fl.type)args.type=fl.type;
+  if(fl.type)args.type=fl.type; if(fl.date)args.date=fl.date;
   return gs('api_listTransactions',args,etag);
 }
 
@@ -293,7 +293,11 @@ var S = {
        pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },
   // admin: which whitelisted table the Admin grid is showing (sticky, like the screen)
   admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })(), offset:0 },
-  taxYear:null          // the Tax screen's year; null = the current one
+  taxYear:null,         // the Tax screen's year; null = the current one
+  // Dashboard cash-flow window, in months. Sticky per device; the default follows
+  // the screen's SHORT edge, so a phone gets 6 bars and an iPad/desktop 12 in both
+  // orientations (innerWidth would call a landscape phone a tablet).
+  cfMonths:({6:6,12:12,24:24})[+prefGet('cfMonths')] || (typeof screen!=='undefined'&&Math.min(screen.width,screen.height)>=700?12:6)
 };
 
 var PHP = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2});
@@ -385,6 +389,18 @@ function monthPickerEl(){
     Promise.resolve(render()).then(function(){ var n=$('.month-picker'); if(n) n.focus(); });
   };
   return mp;
+}
+// Chart window picker. A native <select> on purpose — same control, same styling
+// and same keyboard behaviour as the month picker beside it.
+function rangePickerEl(){
+  var sel=el('select','month-picker range-picker'); sel.title='Chart range';
+  [6,12,24].forEach(function(n){ var o=el('option'); o.value=n; o.textContent=n+'m'; sel.appendChild(o); });
+  sel.value=S.cfMonths;
+  sel.onchange=function(){
+    S.cfMonths=+sel.value; prefSet('cfMonths',sel.value);
+    Promise.resolve(render()).then(function(){ var n=$('.range-picker'); if(n) n.focus(); });
+  };
+  return sel;
 }
 function buildMonthList(){
   var out=[], now=new Date();
@@ -669,6 +685,9 @@ function netWorthSeries(cf,current,snaps,roll){
 // `ns` (netWorthSeries output) omitted → plain cash-flow chart, no right axis.
 // `width` = the host's real pixel width, so SVG text renders at 1:1 scale
 // (a fixed viewBox scaled down would shrink labels below legibility).
+// Months to skip between x-axis labels so a 24-month window does not smear them
+// into each other. ~34px is a 3-letter month plus air.
+function labelStep(n,pw){ return Math.ceil(n/Math.max(1,Math.floor(pw/34))); }
 function cashflowChart(cf,width,ns){
   var wrap=el('div','chart-wrap');
   var legend=el('div','chart-legend');
@@ -691,17 +710,21 @@ function cashflowChart(cf,width,ns){
     if(ns){ var rt=svgEl('text',{x:W-R+8,y:y+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
       rt.textContent=compactPhp(lo+(hi-lo)*f); svg.appendChild(rt); }
   });
-  var band=pw/cf.length, bw=Math.min(20,band*0.26);
+  var band=pw/cf.length, bw=Math.min(20,band*0.26), lblStep=labelStep(cf.length,pw);
   var cx=cf.map(function(m,i){ return L+band*i+band/2; });
   var tip=el('div','chart-tip'); tip.hidden=true;
   cf.forEach(function(m,i){
     var hI=m.income/max*ph, hS=m.expense/max*ph;
     if(hI>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]-bw-1,T+ph-hI,bw,hI),fill:'var(--chart-income)'}));
     if(hS>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]+1,T+ph-hS,bw,hS),fill:'var(--chart-spend)'}));
-    var lbl=svgEl('text',{x:cx[i],y:H-8,'text-anchor':'middle'});
-    if(i===cf.length-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
-    lbl.textContent=String(m.month).split('-')[1]||m.month;
-    svg.appendChild(lbl);
+    // Long windows: label every Nth month, counting back from the newest, so the
+    // current month always keeps its (bold) label.
+    if((cf.length-1-i)%lblStep===0){
+      var lbl=svgEl('text',{x:cx[i],y:H-8,'text-anchor':'middle'});
+      if(i===cf.length-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
+      lbl.textContent=String(m.month).split('-')[1]||m.month;
+      svg.appendChild(lbl);
+    }
   });
   // Net-worth line + dots on top of the bars.
   var ly=ns?ns.map(function(p){ return T+ph-(p.nw-lo)/(hi-lo)*ph; }):null;
@@ -802,14 +825,16 @@ function netWorthAreaChart(liq,stk,width){
       fill:p.real?'var(--accent)':'var(--surface)',stroke:p.real?'var(--surface)':'var(--accent)','stroke-width':2}));
   });
   var tip=el('div','chart-tip'); tip.hidden=true;
-  var band=pw/Math.max(1,n-1);
+  var band=pw/Math.max(1,n-1), lblStep=labelStep(n,pw);
   liq.forEach(function(p,i){
     // First/last labels sit ON the axis ends — centred they collide with the
     // y-axis labels and overflow the right edge.
-    var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':i===0?'start':(i===n-1?'end':'middle')});
-    if(i===n-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
-    lbl.textContent=String(p.month).split('-')[1]||p.month;
-    svg.appendChild(lbl);
+    if((n-1-i)%lblStep===0){
+      var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':i===0?'start':(i===n-1?'end':'middle')});
+      if(i===n-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
+      lbl.textContent=String(p.month).split('-')[1]||p.month;
+      svg.appendChild(lbl);
+    }
     var hit=svgEl('rect',{x:i===0?L:x[i]-band/2,y:T,width:i===0||i===n-1?band/2:band,height:ph,fill:'transparent'});
     function show(){
       tip.innerHTML='<b>'+esc(monthLabel(p.month))+'</b><br>'+
@@ -936,14 +961,25 @@ function periodPace(period,monthStr){
   return day/days;
 }
 
+/* Days remaining as "X years, X months" — the FI countdown's only format. Rounded to
+ * WHOLE MONTHS first and split after, so 11.6 months reads "1 year, 0 months" and not
+ * "0 years, 12 months". 365.2425 is the same Gregorian mean the Worker projects with.
+ * The payload keeps the exact day count; only the display is this coarse. */
+function yearsMonths(days){
+  var mo=Math.round(days/(365.2425/12));
+  if(mo<1) return 'Under a month';
+  var y=Math.floor(mo/12); mo-=y*12;
+  return y+' year'+(y===1?'':'s')+', '+mo+' month'+(mo===1?'':'s');
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  *  DASHBOARD — hierarchy: hero number → KPI row → cash flow → budgets →
  *  expenses by category → recent. One glance answers "am I okay?".
  * ════════════════════════════════════════════════════════════════════════ */
 function renderDashboard(){
-  var key='dashboard|'+S.month;
+  var key='dashboard|'+S.month+'|'+S.cfMonths;
   if(!S.cache[key]) loading('dashboard');
-  return cachedCall(key, function(et){return gs('api_getDashboard',{month:S.month},et);}, function(d){
+  return cachedCall(key, function(et){return gs('api_getDashboard',{month:S.month,months:S.cfMonths},et);}, function(d){
     var w=el('div','screen');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Dashboard'));
@@ -953,6 +989,31 @@ function renderDashboard(){
     var cf=d.cashflow||[];
     var cur=cf.length?cf[cf.length-1]:null, prev=cf.length>1?cf[cf.length-2]:null;
     var prevLbl=prev?('vs '+String(prev.month).split('-')[1]):null;
+
+    // ── FI countdown: the top line, above net worth ──
+    // Every input is a closed month (api.js fireEta), so the target DATE holds still
+    // for the whole month and this number falls by exactly one day a day. It is here
+    // to be read first, before the balance it is made of.
+    var f=d.fire;
+    if(f){
+      var fc=el('div','stat hero');
+      var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsMonths(f.days));
+      var sub=f.days==null
+        ?'Saving '+money(f.monthlySavingsPhp,true)+'/mo is not enough to reach '+money(f.targetPhp,true)
+        :money(f.netWorthPhp,true)+' of '+money(f.targetPhp,true)+' · '+f.progressPct+'%'+
+         (f.date?' · on track for '+MONTHS[+f.date.slice(5,7)-1]+' '+f.date.slice(0,4):'');
+      // Same split bar the net-worth hero uses, so the two cards read as one system.
+      // The flex floors stop a 0% or 100% side collapsing the bar to nothing.
+      var pct=Math.max(0,Math.min(100,f.progressPct||0));
+      fc.innerHTML='<div class="stat-label">Financial independence in</div>'+
+        '<div class="stat-value">'+esc(lead)+'</div>'+
+        '<div class="split-bar"><div class="split-a" style="flex:'+Math.max(pct,0.0001)+'"></div>'+
+        '<div class="split-r" style="flex:'+Math.max(100-pct,0.0001)+'"></div></div>'+
+        '<div class="stat-sub">'+sub+'</div>'+
+        '<div class="stat-sub">'+f.withdrawalRatePct+'% rule · '+money(f.monthlyExpensePhp,true)+
+        '/mo spend · saving '+money(f.monthlySavingsPhp,true)+'/mo at '+f.realReturnPct+'% real</div>';
+      w.appendChild(fc);
+    }
 
     // ── hero: net worth + asset/liability split bar ──
     var hero=el('div','stat hero');
@@ -993,23 +1054,29 @@ function renderDashboard(){
     stats.appendChild(tInv);
     w.appendChild(stats);
 
-    // ── cash flow + net worth (last 6 months) — drawn after paint at the host's
-    // real width. The net-worth line only rides along on the live month, where
-    // d.netWorth ("now") is the correct anchor for rolling the flows backward. ──
+    // ── cash flow + net worth — drawn after paint at the host's real width.
     // Split net worth into liquid (cash, driven by the flow bars) and invested
     // (shares, market-driven). The cash-flow line rides the LIQUID series so bars
     // and line move together; the invested part gets its own stacked-area chart.
-    // Both only ride the live month, where d.netWorth ("now") anchors the roll-back.
+    // netWorthSeries rolls the flows BACKWARD from the newest month, so that month
+    // needs a real anchor: the live figures on the live month, and the month's own
+    // snapshot on a past one (netWorthHistory carries every month but the live one).
+    // Without the second case a past month drew no line at all.
     var liq=null, stk=null;
-    if(isLive && cf.length>=2){
-      var nwh=d.netWorthHistory||{}, sh=d.sharesHistory||{}, liqHist={};
+    if(cf.length>=2){
+      var nwh=d.netWorthHistory||{}, sh=d.sharesHistory||{}, liqHist={}, lastM=cf[cf.length-1].month;
       Object.keys(nwh).forEach(function(m){ liqHist[m]=nwh[m]-(sh[m]||0); });
-      liq=netWorthSeries(cf, (d.netWorth||0)-(d.sharesValue||0), liqHist, true);
-      stk=netWorthSeries(cf, d.sharesValue||0, sh, false);
+      var anchorNw=isLive?(d.netWorth||0):nwh[lastM], anchorSh=isLive?(d.sharesValue||0):sh[lastM];
+      if(anchorNw!=null){
+        liq=netWorthSeries(cf, anchorNw-(anchorSh||0), liqHist, true);
+        stk=netWorthSeries(cf, anchorSh||0, sh, false);
+      }
     }
     if(cf.length>=2){
-      var cc=el('div','card');
-      cc.appendChild(el('div','card-h',(liq?'Cash flow & liquid net worth':'Cash flow')+' · last 6 months'));
+      var cc=el('div','card'), ch=el('div','card-h card-h-row');
+      ch.appendChild(el('span','',(liq?'Cash flow & liquid net worth':'Cash flow')+' · last '+cf.length+' months'));
+      ch.appendChild(rangePickerEl());
+      cc.appendChild(ch);
       var cfHost=el('div'); cc.appendChild(cfHost);
       w.appendChild(cc);
       requestAnimationFrame(function(){
@@ -1041,7 +1108,7 @@ function renderDashboard(){
 
     if(liq){
       var nc=el('div','card');
-      nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last 6 months'));
+      nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last '+cf.length+' months'));
       var nwHost=el('div'); nc.appendChild(nwHost);
       w.appendChild(nc);
       requestAnimationFrame(function(){
@@ -1123,9 +1190,13 @@ function renderTransactions(){
   var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
   fAcc.id='fAcc';   // the account rail writes the picked account back into this combo
   var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
+  var fDate=inputEl('date', S.tx.filters.date||''); fDate.title='Filter by date';
   [fMonth,fType,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
+  // A day and a month are two ways to say the same thing, so a picked date drops the
+  // month rather than silently AND-ing with it (a date outside the month = no rows).
+  fDate.onchange=function(){ if(fDate.value) fMonth.value='(all months)'; applyFilters(); };
   var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
-  f.appendChild(fSearch); f.appendChild(fMonth); f.appendChild(fType); f.appendChild(fCat); f.appendChild(fAcc);
+  f.appendChild(fSearch); f.appendChild(fDate); f.appendChild(fMonth); f.appendChild(fType); f.appendChild(fCat); f.appendChild(fAcc);
   w.appendChild(f);
 
   function applyFilters(){
@@ -1134,6 +1205,7 @@ function renderTransactions(){
       type: fType.value.indexOf('(all')===0?'':fType.value,
       category: fCat.value.indexOf('(all')===0?'':fCat.value,
       account: fAcc.value.indexOf('(all')===0?'':fAcc.value,
+      date: fDate.value,
       search: fSearch.value.trim()
     };
     S.tx.offset=0; loadTx(w);
@@ -1188,8 +1260,9 @@ function pickRailAccount(name){
 function acctRailRow(a){
   var sel=S.tx.filters.account===a.name;
   var r=el('div','litem click rail'+(sel?' sel':''));
+  var avail=a.creditLimit?'<div class="t2">'+money(a.availableCredit)+' avail</div>':'';
   r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
-    '<div class="grow"><div class="t1">'+esc(a.name)+'</div></div>'+
+    '<div class="grow"><div class="t1">'+esc(a.name)+'</div>'+avail+'</div>'+
     acctAmtHtml(a);
   if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
     var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
@@ -1230,8 +1303,21 @@ function groupByDay(rows){
 function dayHeadEl(g){
   var dt=parseDate(g.date), day=dt?DAYS[dt.getDay()]+' · ':'';
   var net=Math.round(g.net*100)/100;
-  return el('div','list-date','<span>'+esc(day+g.label)+'</span>'+
+  var iso=isoDate(g.date), on=iso&&S.tx.filters.date===iso;
+  var h=el('div','list-date','<span class="ld-date'+(on?' on':'')+'">'+esc(day+g.label)+'</span>'+
     (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
+  var d=$('.ld-date',h);
+  d.title=on?'Show every date again':'Show only this date';
+  d.onclick=function(){ pickTxDate(on?'':iso); };
+  return h;
+}
+// Re-render the whole screen, not just the list: the date input and the month combo
+// both have to show what the click just did.
+function pickTxDate(iso){
+  S.tx.filters.date=iso;
+  if(iso) S.tx.filters.month='';
+  S.tx.offset=0;
+  renderTransactions();
 }
 
 /* The FAB, the row modal and the Telegram deep link can all write from any screen,
@@ -1266,6 +1352,7 @@ function matchesTxFilters(t){
   // an optimistic transfer may not carry its derived Type yet
   if(f.type && (txIsXfer(t)?'Transfer':String(t.Type||''))!==f.type) return false;
   if(f.month && (t.Period||(d?monthKey(d):''))!==f.month) return false;
+  if(f.date && isoDate(t.Date)!==f.date) return false;
   if(f.search && ((t.Description||'')+' '+(t.Category||'')).toLowerCase()
                    .indexOf(f.search.toLowerCase())<0) return false;
   return true;
