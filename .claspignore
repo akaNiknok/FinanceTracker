@@ -1,19 +1,17 @@
 # Ignore everything by default...
 **/**
 
-# ...then allow only the files Apps Script should receive.
+# ...then allow only what Apps Script actually runs. There is NO `!**/*.js` line, and
+# that is the point: every root .js here is local tooling (bootstrap, dev-pull,
+# stamp-version, release, test, test-api, icons), Apps Script would compile each one as
+# a .gs, and a shebang or an `import` fails the whole push. Naming them one by one is
+# how bootstrap.js broke `npm run push` on 2026-09-04 — the file was added, the list was
+# not. Allow nothing, and a new tool file needs no edit here.
 !appsscript.json
 !**/*.gs
-!**/*.js
-!**/*.html
 
-# ...but never push local tooling or nested checkouts to GAS.
-# (the !**/*.gs|js|html allows above are otherwise greedy — they'd sweep in
-#  node_modules and .claude/worktrees copies, duplicating every .gs → flat-namespace clash.)
-release.js
-test.js
-test-api.js
-icons.js
+# ...but never sweep in a nested checkout or a dependency. The allow above is greedy,
+# and a second copy of every .gs would clash in the GAS flat namespace.
 node_modules/**
 .claude/**
 worker/**
