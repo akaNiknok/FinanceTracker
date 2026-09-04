@@ -25,7 +25,7 @@
  *     Guarded by test.js.
  */
 import { refs, metaGet, metaSet, manilaToday, parseMonthKey, monthKey } from './db.js';
-import { parse, emailText } from './gemini.js';
+import { parse, emailText, EMAIL_TIMEOUT_MS, EMAIL_BUDGET_MS } from './gemini.js';
 import { createTransaction, createTransfer, deleteTransaction, listTransactions, getAccounts } from './api.js';
 
 const API = 'https://api.telegram.org/bot';
@@ -640,7 +640,9 @@ export async function ingestEmail(args, env) {
   const messageId = String(args.messageId || '');
   if (!messageId) throw new Error('ingestEmail requires messageId.');
   const r = await refs(env);
-  const parsed = await parse(env, r, emailText(args, args.hints), Math.floor(Date.parse(args.date) / 1000) || undefined);
+  // The chat turn's 9s/20s clock is Telegram's, not this path's — see EMAIL_BUDGET_MS.
+  const parsed = await parse(env, r, emailText(args, args.hints), Math.floor(Date.parse(args.date) / 1000) || undefined,
+                             { capMs: EMAIL_TIMEOUT_MS, budgetMs: EMAIL_BUDGET_MS });
   const items = parsed.error ? [] : (parsed.items || []);
   if (!items.length) return { status: 'success', logged: 0, total: 0, ids: [], skipped: parsed.error || 'no transactions' };
 
