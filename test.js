@@ -48,7 +48,7 @@ describe('Gmail courier watermark (vm)', () => {
     const props = { WORKER_URL: 'https://worker.example', INGEST_TOKEN: 't', GMAIL_LAST_TS: '0' };
     const trashed = [], posted = [];
     const box = {
-      console: { error: () => {} }, Logger: { log: () => {} },
+      console: { warn: () => {}, error: () => {} }, Logger: { log: () => {} },
       LockService: { getUserLock: () => ({ tryLock: () => true }) },
       PropertiesService: { getScriptProperties: () => ({
         getProperty: (k) => (k in props ? props[k] : null),
@@ -434,6 +434,18 @@ describe('Gmail courier watermark (vm)', () => {
       assert.ok(tg.SLOW_NOTICE_MS < gemini.PARSE_BUDGET_MS,
         'the "still working" notice fires at ' + tg.SLOW_NOTICE_MS + 'ms, after the parse gives up at ' +
         gemini.PARSE_BUDGET_MS + 'ms — it would never be seen');
+    });
+
+    test('the email courier parses on its own clock, under UrlFetchApp', () => {
+      // The email path is NOT a chat turn: Apps Script holds the connection and no human
+      // waits, so Telegram's 9s cap only manufactured failures on a 3000-char body
+      // (2026-09-04). Its ceiling is UrlFetchApp's ~60s instead.
+      assert.ok(gemini.EMAIL_TIMEOUT_MS > gemini.MODEL_TIMEOUT_MS,
+        'the email path gains nothing over the chat turn — the 9s cap is back');
+      assert.ok(gemini.EMAIL_TIMEOUT_MS <= gemini.EMAIL_BUDGET_MS,
+        'one attempt may not outlast the whole chain');
+      assert.ok(gemini.EMAIL_BUDGET_MS <= 55000,
+        'the parse may run ' + gemini.EMAIL_BUDGET_MS + 'ms, past what UrlFetchApp waits for');
     });
 
     test('/tg AWAITS the turn and never hands it to waitUntil', () => {

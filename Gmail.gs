@@ -114,8 +114,14 @@ function gmail_ingest() {
       } catch (err) {
         // Hold the mark below this message so the next tick tries again. Give up after
         // GMAIL_RETRY_MS_ — then the mail stays in the inbox as the visible to-do.
-        if (now - ts < GMAIL_RETRY_MS_) hold = Math.min(hold, ts - 1);
-        console.error("gmail_ingest " + msg.getId() + ": " + (err && err.stack ? err.stack : err));
+        const retrying = now - ts < GMAIL_RETRY_MS_;
+        if (retrying) hold = Math.min(hold, ts - 1);
+        // WARN while the message still has tries left, ERROR only when it is abandoned.
+        // Gemini answers 503 "high demand" or runs long often enough that an error per
+        // tick made the log unreadable, and a self-healing failure is not news — the
+        // next tick logs the same message again 5 minutes later (2026-09-04).
+        (retrying ? console.warn : console.error)(
+          "gmail_ingest " + msg.getId() + ": " + (err && err.stack ? err.stack : err));
       }
     });
   });

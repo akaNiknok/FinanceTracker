@@ -36,6 +36,16 @@ export const MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
 export const MODEL_TIMEOUT_MS = 9000;    // one attempt
 export const PARSE_BUDGET_MS = 20000;    // the whole fallback chain
 
+/**
+ * The Gmail courier is not a chat turn and must not inherit Telegram's clock: no human
+ * waits on it, Apps Script holds the connection, and its own trigger retries a failed
+ * message every 5 minutes for 3 hours. The 9s cap turned an ordinary slow answer on a
+ * 3000-char email body into a logged failure (2026-09-04), so the email path gets a
+ * patient pair instead. The ceiling here is UrlFetchApp's own ~60s, not TURN_CEILING_MS.
+ */
+export const EMAIL_TIMEOUT_MS = 20000;   // one attempt
+export const EMAIL_BUDGET_MS = 45000;    // the whole fallback chain
+
 // Structured-output schema (OpenAPI subset: nullable, not union types). Only
 // intent/error are required — a non-transaction message must be able to come back as
 // {error:"..."} without the model inventing a Category to satisfy the schema.
@@ -73,8 +83,12 @@ const SCHEMA = {
   required: ['intent', 'error']
 };
 
-/** Message text -> the structured object. Throws on API/parse failure, or on timeout. */
-export async function parse(env, refs, text, unixDate) {
+/**
+ * Message text -> the structured object. Throws on API/parse failure, or on timeout.
+ * `budget` ({capMs, budgetMs}) lets a caller with a different clock — the email
+ * courier — widen the chat turn's defaults.
+ */
+export async function parse(env, refs, text, unixDate, budget = {}) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY is not set.');
   const payload = JSON.stringify({
@@ -82,7 +96,8 @@ export async function parse(env, refs, text, unixDate) {
     contents: [{ role: 'user', parts: [{ text }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: SCHEMA }
   });
-  return JSON.parse(await tryModels(MODELS, (model, ms) => generate(model, key, payload, ms)));
+  return JSON.parse(await tryModels(MODELS, (model, ms) => generate(model, key, payload, ms),
+                                    budget.budgetMs, undefined, budget.capMs));
 }
 
 /**
@@ -98,13 +113,14 @@ export async function parse(env, refs, text, unixDate) {
  * ponytail: retries the whole call, so a 503 on the primary costs one extra round
  * trip. No per-status logic — a bad response is a bad response either way.
  */
-export async function tryModels(models, fn, budgetMs = PARSE_BUDGET_MS, now = () => Date.now()) {
+export async function tryModels(models, fn, budgetMs = PARSE_BUDGET_MS, now = () => Date.now(),
+                                capMs = MODEL_TIMEOUT_MS) {
   const until = now() + budgetMs;
   for (let i = 0; i < models.length; i++) {
     const left = until - now();
     if (left <= 0) throw new Error('Gemini ran out of time after ' + i + ' of ' +
                                    models.length + ' models (' + Math.round(budgetMs / 1000) + 's budget).');
-    try { return await fn(models[i], Math.min(MODEL_TIMEOUT_MS, left)); }
+    try { return await fn(models[i], Math.min(capMs, left)); }
     catch (err) {
       console.warn('gemini ' + models[i] + ' failed: ' + (err && err.message ? err.message : err));
       if (i === models.length - 1) throw err;
