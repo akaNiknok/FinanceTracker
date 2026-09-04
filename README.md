@@ -90,7 +90,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 | Frontend | approximately 3 470 lines, no framework and no bundler |
 | Apps Script | approximately 510 lines in 4 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 119 tests operate offline with `npm test`, and 74 of them use a real SQLite database |
+| Tests | 122 tests operate offline with `npm test`, and 74 of them use a real SQLite database |
 | Releases | 57 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
@@ -123,6 +123,8 @@ The repository is public. Do not put a secret value in a tracked file.
 | The bot | Telegram, made with **@BotFather** | |
 | Gemini key | Google AI Studio | Free plan. |
 | Share prices | Interactive Brokers Flex Web Service | See the maintenance task below. |
+| Worker logs | Cloudflare dashboard, Workers, `financetracker-telegram`, tab **Logs** | The setting `[observability]` in `worker/wrangler.toml` turns this on. It keeps the last days and it is searchable. `npm run tail` shows the present only. |
+| Apps Script logs | script.google.com, tab **Executions** | The tab **Cloud logs** is empty until a person attaches a standard Google Cloud project. See the task below. |
 | Source code | GitHub, `akaNiknok/FinanceTracker` | `main` is the released code. `develop` is the integration branch. |
 
 ## Settings that are not in the repository
@@ -181,6 +183,10 @@ The `meta` table holds the settings that were script properties before. Change t
 | Telegram message rescue | A second Cloudflare cron, in `wrangler.toml` | Each 2 minutes |
 
 Cloudflare does not do a job again after a failure. Thus each job sends a Telegram message if it fails. Apps Script disables a trigger after a number of failures.
+
+**Set the Apps Script failure notification.** Open the page **Triggers**, then the menu of the `gmail_ingest` trigger, then **Failure notification settings**, then **Notify me immediately**. Apps Script then sends an email each time the trigger fails. Without it, a failure is visible only on the page **Executions**.
+
+**Attach a Google Cloud project to see the Apps Script cloud logs.** Open **Project Settings**, then **Google Cloud Platform (GCP) Project**, then **Change project**, then give the number of a standard project. Until you do this, the tab **Cloud logs** shows nothing, and a failure before the first line of code leaves no record at all.
 
 ### Gmail, Telegram and IBKR
 
@@ -271,6 +277,7 @@ The code and the database do not go back together. Undo the code first.
 | The bot answers, but the answer is an error. | `npm run tail` while you send a message. Then the Gemini quota in AI Studio. An answer of "Unauthorized" indicates the secret `TELEGRAM_USER_ID`. |
 | The error "Wrong response from the webhook: 302". | The webhook address. It must be the Worker address, and it must end with `/tg`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |
+| An email stays in the inbox, and the transaction is absent. | The courier tries a failed email again for 3 hours, thus wait 10 minutes first. Then read the Worker logs for the line `ingestEmail:`. A message there names the cause, and it is usually the Gemini quota. To make the courier read the email again after that, delete the script property `GMAIL_LAST_TS`. The row identifier is deterministic, thus a transaction that is already recorded does not become double. |
 | The job does not record the emails. | The Gmail filter. Then the property `GMAIL_QUERY`, which replaces the label. Then the trigger, because Apps Script can disable it. Then the property `WORKER_URL` and the two `INGEST_TOKEN` values. |
 | The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create financetracker-staging --location=apac`, then write the id into the file. |
 | The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
@@ -290,7 +297,7 @@ The code and the database do not go back together. Undo the code first.
 3. Set each Worker secret, then run `npm run deploy`.
 4. Make the bot with BotFather, then set the webhook to `<worker>/tg`.
 5. Make the Gmail label and the Gmail filter.
-6. Make an Apps Script project. Run `clasp login`, then put the script id in `.clasp.json`. Enable the Apps Script API one time at script.google.com/home/usersettings. The first push fails without it. Run `npm run push`. Set the script properties. Add the `gmail_ingest` trigger, then run `backup_install()`.
+6. Make an Apps Script project. Run `clasp login`, then put the script id in `.clasp.json`. Enable the Apps Script API one time at script.google.com/home/usersettings. The first push fails without it. Run `npm run push`. Set the script properties. Add the `gmail_ingest` trigger, then run `backup_install()`. Set the failure notification of the trigger to **Notify me immediately**.
 7. Make the IBKR Flex query and token.
 8. Open the app, then put the accounts, the categories and the budgets in the **Admin** screen.
 
