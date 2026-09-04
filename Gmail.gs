@@ -26,6 +26,14 @@
  */
 
 const GMAIL_LAST_TS_    = "GMAIL_LAST_TS";
+// A post that THREW is RETRIED: the watermark stops just below that message instead of
+// stepping over it (2026-09-04 — three MariBank alerts were lost that way, see
+// gmail_ingest). The window bounds it, because a message that fails every time would
+// otherwise spend a Gemini call every five minutes for ever, and the free tier gives
+// about 250 a day.
+// ponytail: a time window, not an attempt counter — no second Script Property to keep
+// in step. Raise it if a real outage ever outlasts it.
+const GMAIL_RETRY_MS_   = 3 * 60 * 60 * 1000;   // 3 hours, so about 36 tries
 const GMAIL_MAX_BODY_   = 3000;   // notification mail says everything up top; footers are noise
 const GMAIL_QUOTE_BODY_ = 1200;   // the ⌕ Email quote is for eyes, not for the parser
 const GMAIL_MAX_THREADS_ = 20;
@@ -70,6 +78,18 @@ function cfg_(key, fallback) {
  * would survive (idempotent id) but the owner would get a second Telegram receipt.
  * ponytail: USER lock, not a script lock — this run holds it for minutes.
  * tryLock(0) = skip this tick, the next one is five minutes away.
+ *
+ * A POST THAT THREW HOLDS THE WATERMARK BACK. This used to step over it, and that lost
+ * money: on 2026-09-03 and 2026-09-04 three MariBank alerts stayed in the inbox and
+ * were never looked at again, because one transient Gemini failure each moved the mark
+ * past them. The mark now stops at the OLDEST failure in the run, so the next tick
+ * retries it even when a later message succeeded.
+ *
+ * The old comment feared that this would replay an unparseable email for ever. It
+ * cannot: an email that is genuinely not a transaction comes back HTTP 200 with
+ * logged 0 of 0, which is a SUCCESS here — the mail simply stays in the inbox. Only a
+ * real fault (Gemini 429/5xx/timeout, the Worker down, a bad token) throws, and that is
+ * exactly what deserves another try. GMAIL_RETRY_MS_ caps how long it gets one.
  */
 function gmail_ingest() {
   if (!LockService.getUserLock().tryLock(0)) return;
@@ -77,28 +97,31 @@ function gmail_ingest() {
   const q = cfg_("GMAIL_QUERY", GMAIL_QUERY_);
   const hints = cfg_("GMAIL_HINTS", GMAIL_HINTS_);
   const since = Number(cfg_(GMAIL_LAST_TS_, 0)) || 0;
+  const now = Date.now();
   let newest = since;
+  let hold = Infinity;      // the mark must not reach the oldest message that failed
 
   GmailApp.search(q, 0, GMAIL_MAX_THREADS_).forEach(function (thread) {
     thread.getMessages().forEach(function (msg) {
       const ts = msg.getDate().getTime();
       if (ts <= since) return;
       newest = Math.max(newest, ts);
-      // ponytail: a message that blows up is logged and skipped, and the watermark
-      // still moves past it — otherwise one unparseable email replays forever.
-      // Re-ingest by clearing GMAIL_LAST_TS.
       try {
         const res = gmail_post_(gmail_payload_(msg, hints));
         // Per message, never per thread: MariBank's alerts share one subject and one
         // thread, so thread.moveToTrash() would bin transactions never logged.
         if (res.total > 0 && res.logged === res.total) msg.moveToTrash();
       } catch (err) {
+        // Hold the mark below this message so the next tick tries again. Give up after
+        // GMAIL_RETRY_MS_ — then the mail stays in the inbox as the visible to-do.
+        if (now - ts < GMAIL_RETRY_MS_) hold = Math.min(hold, ts - 1);
         console.error("gmail_ingest " + msg.getId() + ": " + (err && err.stack ? err.stack : err));
       }
     });
   });
 
-  PropertiesService.getScriptProperties().setProperty(GMAIL_LAST_TS_, String(newest));
+  PropertiesService.getScriptProperties()
+    .setProperty(GMAIL_LAST_TS_, String(Math.min(newest, hold)));
 }
 
 /**
