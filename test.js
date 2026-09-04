@@ -33,6 +33,72 @@ describe('Apps Script (vm)', () => {
   sandbox.PURE_TESTS.forEach((name) => test(name, () => vm.runInContext(name + '()', sandbox)));
 });
 
+/**
+ * gmail_ingest's watermark — the only GAS logic left that carries state, and the one
+ * that lost three MariBank alerts on 2026-09-03/04 by stepping over a failed post.
+ * The arithmetic lives inside the loop, so it is driven through the vm with stubs
+ * rather than extracted into a helper nothing else would call.
+ */
+describe('Gmail courier watermark (vm)', () => {
+  const src = fs.readdirSync(__dirname).filter((f) => f.endsWith('.gs')).sort()
+    .map((f) => fs.readFileSync(path.join(__dirname, f), 'utf8')).join('\n;\n');
+
+  // One run over `msgs` (newest last), with the posts named in `failing` throwing.
+  function run(msgs, failing) {
+    const props = { WORKER_URL: 'https://worker.example', INGEST_TOKEN: 't', GMAIL_LAST_TS: '0' };
+    const trashed = [], posted = [];
+    const box = {
+      console: { error: () => {} }, Logger: { log: () => {} },
+      LockService: { getUserLock: () => ({ tryLock: () => true }) },
+      PropertiesService: { getScriptProperties: () => ({
+        getProperty: (k) => (k in props ? props[k] : null),
+        setProperty: (k, v) => { props[k] = v; }
+      }) },
+      UrlFetchApp: { fetch: (url, opt) => {
+        const id = JSON.parse(opt.payload).messageId;
+        posted.push(id);
+        if (failing.indexOf(id) !== -1) throw new Error('Gemini 503');
+        return { getResponseCode: () => 200,
+                 getContentText: () => JSON.stringify({ status: 'success', logged: 1, total: 1, ids: [id] }) };
+      } },
+      GmailApp: { search: () => [{ getMessages: () => msgs.map((m) => ({
+        getId: () => m.id, getFrom: () => 'alerts@maribank.com.ph',
+        getSubject: () => 'Successful Debit Card Transaction',
+        getDate: () => new Date(m.ts), getPlainBody: () => 'PHP 56.43',
+        moveToTrash: () => { trashed.push(m.id); }
+      })) }] }
+    };
+    vm.createContext(box);
+    vm.runInContext(src, box, { filename: 'all.gs' });
+    vm.runInContext('gmail_ingest()', box);
+    return { mark: Number(props.GMAIL_LAST_TS), trashed, posted,
+             retryMs: vm.runInContext('GMAIL_RETRY_MS_', box) };
+  }
+
+  test('a failed post holds the mark below it, even when a later one succeeds', () => {
+    const now = Date.now();
+    const a = now - 120000, b = now - 60000;
+    const r = run([{ id: 'a', ts: a }, { id: 'b', ts: b }], ['a']);
+    assert.deepStrictEqual(r.trashed, ['b']);                 // the good one still lands
+    assert.strictEqual(r.mark, a - 1);                        // and 'a' comes back next tick
+  });
+
+  test('a clean run still moves the mark to the newest message', () => {
+    const now = Date.now();
+    const b = now - 60000;
+    const r = run([{ id: 'a', ts: now - 120000 }, { id: 'b', ts: b }], []);
+    assert.strictEqual(r.mark, b);
+  });
+
+  test('a message older than GMAIL_RETRY_MS_ is given up on, not retried for ever', () => {
+    const now = Date.now();
+    const probe = run([{ id: 'x', ts: now }], []);
+    const old = now - probe.retryMs - 1000;
+    const r = run([{ id: 'old', ts: old }, { id: 'new', ts: now - 1000 }], ['old']);
+    assert.strictEqual(r.mark, now - 1000);
+  });
+});
+
 (async function () {
   const load = (p) => import(pathToFileURL(path.join(__dirname, 'worker', p)).href);
   const db = await load('src/db.js');

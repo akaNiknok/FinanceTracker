@@ -17,6 +17,18 @@ main = "worker.js"
 # UTC, and Cloudflare rejects a future date — Manila is a day ahead of UTC.
 compatibility_date = "2026-07-28"
 
+# Workers Logs. OFF by default, which is why the three ingests that failed on
+# 2026-09-03/04 left nothing to read: worker.js already writes console.error for every
+# handler that throws, but nobody was keeping it. `wrangler tail` only shows the present.
+# With this on, the dashboard (Workers -> financetracker-telegram -> Logs) holds the
+# last few days and is searchable, so "why did that email not land" has an answer after
+# the fact. Free plan; head_sampling_rate 1 = keep everything, this Worker does tens of
+# requests a day.
+# INHERITED by [env.staging], which is wanted — staging is where a change is checked.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 # The SPA. Asset requests bypass worker.js entirely and are free/unmetered, so only
 # the three routes below burn invocations.
 #
