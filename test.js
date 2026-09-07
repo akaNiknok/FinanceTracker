@@ -652,10 +652,15 @@ describe('Gmail courier watermark (vm)', () => {
       // The Worker's KV read cache went away with Apps Script; a `_v` on the URL would now
       // be a cache-buster on nothing. Running app.js here also proves it still parses.
       const noop = () => {};
+      // Enough DOM to let the chart builders run: they only set attributes and append.
+      const mkNode = (tag) => ({ tag, attrs: {}, kids: [], style: {},
+        setAttribute(k, v) { this.attrs[k] = v; }, appendChild(c) { this.kids.push(c); return c; },
+        addEventListener: noop });
       const app = {
         console: { log: noop, warn: noop, error: noop },
         navigator: {}, window: { addEventListener: noop },
-        document: { addEventListener: noop, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] },
+        document: { addEventListener: noop, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
+                    createElement: mkNode, createElementNS: (_ns, t) => mkNode(t) },
         localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
         setTimeout, clearTimeout, Date, Math, JSON, encodeURIComponent, URLSearchParams,
         history: {}, location: { search: '', href: 'https://x/' }
@@ -687,6 +692,20 @@ describe('Gmail courier watermark (vm)', () => {
       const held = app.netWorthSeries(cf, 500, {}, false);
       assert.strictEqual(held[2].nw, 500);
       assert.strictEqual(held[0].nw, 500, 'invested holds flat, does not roll back through cash flow');
+      // The cash-flow chart's right axis floats over the net-worth range, so its zero
+      // is NOT the baseline the bars sit on. A negative net worth used to draw above
+      // the left axis's ₱0 and read positive; it must now sit below a dashed zero line.
+      const nsNeg = [{ month: '2026-Jul', nw: 100000, real: true },
+                     { month: '2026-Aug', nw: -9106, real: true }];
+      const chart = app.cashflowChart(cf.slice(1), 640, nsNeg);
+      const flat = (n, out = []) => { out.push(n); (n.kids || []).forEach(k => flat(k, out)); return out; };
+      const nodes = flat(chart);
+      const zero = nodes.find(n => n.tag === 'line' && n.attrs['stroke-dasharray']);
+      assert.ok(zero, 'no dashed zero line on the right axis');
+      const line = nodes.find(n => n.tag === 'polyline');
+      const lastY = Number(line.attrs.points.split(' ').pop().split(',')[1]);
+      assert.ok(lastY > Number(zero.attrs.y1), 'a negative net worth must plot BELOW the right axis zero');
+
       // A refund is a NEGATIVE Expense row. The list used to read Amount as a magnitude
       // and take its sign from the category type, which printed "- -₱95" and — far
       // worse — sent 95 back on save, turning the refund into a charge.

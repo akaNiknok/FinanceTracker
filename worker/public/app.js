@@ -701,7 +701,11 @@ function cashflowChart(cf,width,ns){
   // Right axis spans the net-worth data range (not 0) so the trend is visible.
   var lo=0,hi=1;
   if(ns){ var v=ns.map(function(p){return p.nw;}); hi=Math.max.apply(null,v); lo=Math.min.apply(null,v);
-    if(hi===lo) hi=lo+1; var pad=(hi-lo)*0.12; hi+=pad; lo-=pad; }
+    if(hi===lo) hi=lo+1; var pad=(hi-lo)*0.12; hi+=pad; lo-=pad;
+    // A floating right axis puts its own zero somewhere mid-chart, so a NEGATIVE
+    // net worth still draws above the left axis's baseline ₱0 and reads positive.
+    // Keep zero inside the range and mark it (below), so the sign is visible.
+    if(lo<0) hi=Math.max(hi,0); }
   var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':(ns?'Cash flow and liquid net worth':'Cash flow — income vs spending')+', last '+cf.length+' months'});
   [0,.5,1].forEach(function(f){
     var y=T+ph-f*ph;
@@ -710,6 +714,17 @@ function cashflowChart(cf,width,ns){
     if(ns){ var rt=svgEl('text',{x:W-R+8,y:y+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
       rt.textContent=compactPhp(lo+(hi-lo)*f); svg.appendChild(rt); }
   });
+  // The right axis's own zero: dashed, so a net-worth line below it reads as negative.
+  if(ns && lo<0 && hi>0){
+    var zy=T+ph-(0-lo)/(hi-lo)*ph;
+    svg.appendChild(svgEl('line',{x1:L,y1:zy,x2:W-R,y2:zy,stroke:'var(--accent)','stroke-width':1,
+      'stroke-dasharray':'3 3','stroke-opacity':0.45}));
+    // Label only when it will not sit on top of a tick label.
+    if([0,.5,1].every(function(f){ return Math.abs(zy-(T+ph-f*ph))>10; })){
+      var zt=svgEl('text',{x:W-R+8,y:zy+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
+      zt.textContent=compactPhp(0); svg.appendChild(zt);
+    }
+  }
   var band=pw/cf.length, bw=Math.min(20,band*0.26), lblStep=labelStep(cf.length,pw);
   var cx=cf.map(function(m,i){ return L+band*i+band/2; });
   var tip=el('div','chart-tip'); tip.hidden=true;
