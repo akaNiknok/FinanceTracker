@@ -1206,6 +1206,10 @@ function renderTransactions(){
   fAcc.id='fAcc';   // the account rail writes the picked account back into this combo
   var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
   var fDate=inputEl('date', S.tx.filters.date||''); fDate.title='Filter by date';
+  // data-f names the S.tx.filters key each control writes, so markActiveFilters() can
+  // light the ones that are narrowing the list without holding these locals.
+  fMonth.dataset.f='month'; fType.dataset.f='type'; fCat.dataset.f='category';
+  fAcc.dataset.f='account'; fDate.dataset.f='date'; fSearch.dataset.f='search';
   [fMonth,fType,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
   // A day and a month are two ways to say the same thing, so a picked date drops the
   // month rather than silently AND-ing with it (a date outside the month = no rows).
@@ -1223,7 +1227,7 @@ function renderTransactions(){
       date: fDate.value,
       search: fSearch.value.trim()
     };
-    S.tx.offset=0; loadTx(w);
+    S.tx.offset=0; markActiveFilters(); loadTx(w);
   }
 
   var listCard=el('div','card'); listCard.id='txListCard';
@@ -1241,6 +1245,7 @@ function renderTransactions(){
 
   // default filter month to selected period on first open
   if (S.tx.filters.month===undefined) S.tx.filters.month=S.month;
+  markActiveFilters();
   loadTx(w);
   if(S.tx.edit){ loadTxAccts(); updateBulkBar(); }
 }
@@ -1269,7 +1274,14 @@ function loadTxAccts(){
 function pickRailAccount(name){
   S.tx.filters.account=name;
   var c=$('#fAcc'); if(c) c.value=name||'(all accounts)';
-  S.tx.offset=0; loadTxAccts(); loadTx();
+  S.tx.offset=0; markActiveFilters(); loadTxAccts(); loadTx();
+}
+
+/* Border-highlight every filter control that is currently narrowing the list. */
+function markActiveFilters(){
+  document.querySelectorAll('.filters [data-f]').forEach(function(e){
+    e.classList.toggle('on', !!S.tx.filters[e.dataset.f]);
+  });
 }
 
 function acctRailRow(a){
