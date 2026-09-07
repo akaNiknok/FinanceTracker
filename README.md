@@ -90,7 +90,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 | Frontend | approximately 3 470 lines, no framework and no bundler |
 | Apps Script | approximately 510 lines in 4 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 122 tests operate offline with `npm test`, and 74 of them use a real SQLite database |
+| Tests | 122 tests operate offline with `npm test`, and 76 of them use a real SQLite database |
 | Releases | 57 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
@@ -102,6 +102,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 - **The language model can read an email incorrectly.** Each receipt has an **Undo** button and a button that shows the source email.
 - **A screen that stays open does not refresh itself.** The app revalidates a screen when you go to it.
 - **The Dashboard downloads again after each write.** Each month of the Dashboard shows the live net worth, so each write changes the answer. The other screens answer 304.
+- **The system does not know a corporate action.** A split of shares changes the price at IBKR and does not change the ledger. The nightly job compares the two counts and sends a message. A person then corrects the earlier rows.
 - **The Tax screen shows one year.** Use the year list at the top of the screen to see an earlier year.
 
 ---
@@ -285,6 +286,7 @@ The code and the database do not go back together. Undo the code first.
 | The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
 | The app asks for the passphrase frequently. | A person changed `APP_PASS`, or the cookie is more than one year old. |
 | The app starts, but each request fails. | `npm run tail`. Usually the D1 binding or a secret is absent. |
+| The bot sends the message "share count drift". | The count of shares in the ledger does not agree with the count at IBKR. Examine a corporate action first, for example a split of shares. For a split, multiply the quantity of shares in each earlier transfer leg. Change the field **ToAmount** on a purchase. Change the field **Amount** on a sale. Change a leg before the effective date only. Then examine a trade that nobody recorded. The job does not write the count from IBKR, because that action hides the cause. |
 | The share values are 0 or absent. | The Telegram message from the price job. It names the IBKR error code, and it states the repair for a code that needs a person. A code that IBKR clears by itself is retried for 40 seconds first, so one message is one real fault. Then the `symbol` column of the account on the Admin screen. |
 | A balance in pesos is absent, but the native balance is correct. | The exchange rate. Examine `usd_php_fallback` in the `meta` table. |
 | A change is not in the live system. | You did not deploy. `npm run release` deploys the Worker. |

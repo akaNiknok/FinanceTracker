@@ -13,7 +13,7 @@
  * reported to the owner in Telegram. A missed night is harmless: prices just stay one
  * day staler (the read path never fetches, by design).
  */
-import { manilaToday } from './db.js';
+import { manilaToday, refs, deltas, fromU, isSharesAcct } from './db.js';
 import { notifyOwner, msgOf, drainUpdates } from './telegram.js';
 import { snapshotNetWorth } from './api.js';
 
@@ -192,8 +192,47 @@ export async function pricesJob(env, pace = FLEX_PACE) {
   // Quantities are logged for reconciliation and deliberately NOT written: the ledger
   // stays the source of truth for how many shares are held, IBKR only prices them.
   console.log('prices: ' + positions.map((p) => p.symbol + '@' + p.price + ' x' + p.position).join(', '));
-  return { written: positions.length, pricedAt: positions[0].pricedAt };
+  const drift = await quantityDrift(env, positions);
+  if (drift.length) console.warn('prices: share count drift — ' + drift.map(driftLine).join('; '));
+  return { written: positions.length, pricedAt: positions[0].pricedAt, drift };
 }
+
+/**
+ * Ledger share count vs IBKR's own position count, per share-priced account.
+ *
+ * IBKR prices the shares; the ledger says how many there are. Nothing has ever
+ * compared the two, so they drift in silence — the price keeps updating and the
+ * position keeps reading plausible. Two ways it happens: a CORPORATE ACTION (the
+ * APH 2:1 split of 2026-09-03 halved that holding's reported value for five days,
+ * because the price halved and the ledger did not double), and a TRADE that was
+ * never logged.
+ *
+ * Reported, never written. Overwriting the ledger with IBKR's count would erase the
+ * missing trade instead of surfacing it, and a corporate action still needs the
+ * historical legs restated by hand — a cron cannot know which of the two it is
+ * looking at. Same reason the quantities in the statement stay unwritten above.
+ *
+ * Quantity comes from deltas()/starting_balance, the same pair shapeAccounts uses for
+ * balanceNative, so a drift figure and the Holdings card can never disagree.
+ */
+export async function quantityDrift(env, positions) {
+  const r = await refs(env);
+  const net = await deltas(env, r);
+  const ibkrBy = positions.reduce((m, p) => { m[p.symbol] = p.position; return m; }, Object.create(null));
+  const out = [];
+  r.accounts.filter(isSharesAcct).forEach((a) => {
+    const ledger = fromU((a.starting_balance_u || 0) + (net[a.id] || 0));
+    // A closed holding is absent from the statement AND zero in the ledger: that is
+    // agreement, not drift. IBKR reports no open position for one, so `undefined`
+    // here means zero shares, and only a count one side still holds is a question.
+    const ibkr = ibkrBy[a.symbol || a.name] || 0;
+    // Micros round to 6dp and IBKR quotes 4, so anything real is far above this.
+    if (Math.abs(ledger - ibkr) > 1e-6) out.push({ symbol: a.name, ledger, ibkr });
+  });
+  return out;
+}
+
+const driftLine = (d) => d.symbol + ': ledger ' + d.ledger + ', IBKR ' + d.ibkr;
 
 // ── cron dispatch ────────────────────────────────────────────────────────────
 /**
@@ -229,6 +268,15 @@ export async function runCron(env) {
     await notifyOwner(env, '⛔ *prices job failed*\n› ' + msgOf(err));
     throw err;
   }
+  // A drift is not a failure — the prices landed — so it never throws. It is the one
+  // thing in this job a person has to act on, and Telegram is the only channel a cron
+  // has. Sent every morning until the ledger is restated: a wrong share count silently
+  // misprices net worth, so nagging is the correct volume.
+  if (out.prices.drift && out.prices.drift.length)
+    await notifyOwner(env, '⚠️ *share count drift*' +
+      out.prices.drift.map((d) => '\n› ' + driftLine(d)).join('') +
+      '\nA split or other corporate action, or a trade that was never logged.');
+
   // Snapshot AFTER prices so this month's net worth is stamped with fresh quotes.
   // Non-fatal on its own: prices (the critical job) already committed, a missed
   // snapshot just leaves this month's history to fill on the next daily run.

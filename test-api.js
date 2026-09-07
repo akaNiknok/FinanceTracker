@@ -801,11 +801,47 @@ function d1(db) {
       const { out, calls } = await withFetch(
         (u) => isSend(u) ? sendOk('5761631802') : statement,
         () => jobs.pricesJob(jobEnv, PACE));
-      assert.deepStrictEqual(out, { written: 1, pricedAt: '2026-08-28' });
+      assert.strictEqual(out.written, 1);
+      assert.strictEqual(out.pricedAt, '2026-08-28');
       assert.strictEqual(calls.filter(isSend).length, 1, 'one SendRequest is enough when the statement is ready');
       const row = sqlite.prepare("SELECT * FROM prices WHERE symbol='VWRA' AND priced_at='2026-08-28'").get();
       assert.strictEqual(row.price, 122.4);
       assert.strictEqual(row.currency, 'USD');
+    });
+
+    test('the statement is reconciled against the ledger share count', async () => {
+      // The fixture's IBKR account holds shares and the statement names only VWRA, so
+      // the happy path above already produced a drift row. It is the ledger-only shape:
+      // a holding IBKR does not report is either a corporate action or an unlogged trade.
+      const { out } = await withFetch((u) => isSend(u) ? sendOk('7777777777') : statement,
+        () => jobs.pricesJob(jobEnv, PACE));
+      const ibkr = out.drift.find((d) => d.symbol === 'IBKR');
+      assert.ok(ibkr, 'a share account absent from the statement was not reported');
+      assert.strictEqual(ibkr.ibkr, 0, 'no open position means zero shares, not "unknown"');
+      assert.ok(ibkr.ledger > 0);
+    });
+
+    test('quantityDrift: a split shows, a closed holding and an exact match do not', async () => {
+      // Its own database: these accounts must not leak into the Holdings and net-worth
+      // assertions further down the file.
+      const fresh = new DatabaseSync(':memory:');
+      const dir = path.join(__dirname, 'worker', 'migrations');
+      fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+        .forEach((f) => fresh.exec(fs.readFileSync(path.join(dir, f), 'utf8')));
+      // SPLIT is the APH case reduced: 5 in the ledger, 10 at IBKR after a 2:1.
+      // CLOSED is zero on both sides and must stay quiet — every sold-out ticker is
+      // absent from the statement, and alerting on those is an alert nobody reads.
+      // MATCH is the fractional-share case the epsilon exists for.
+      // CASH is not share-priced and is never walked at all.
+      fresh.exec("INSERT INTO account_types (subtype,type) VALUES ('Shares','Asset'),('Savings','Asset');" +
+        "INSERT INTO accounts (id,name,currency,subtype,symbol,starting_balance_u) VALUES " +
+        "(30,'SPLIT','Shares','Shares','SPLIT',5000000),(31,'CLOSED','Shares','Shares','CLOSED',0)," +
+        "(32,'MATCH','Shares','Shares','MATCH',4276000),(33,'Maya','PHP','Savings',NULL,1000000000);");
+      const drift = await jobs.quantityDrift({ DB: d1(fresh) }, [
+        { symbol: 'SPLIT', position: 10 }, { symbol: 'MATCH', position: 4.276 },
+        { symbol: 'VWRA', position: 12.5 }
+      ]);
+      assert.deepStrictEqual(drift, [{ symbol: 'SPLIT', ledger: 5, ibkr: 10 }]);
     });
 
     test('a reference code that keeps drawing 1020 is REPLACED, not replayed', async () => {
