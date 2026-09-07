@@ -1037,9 +1037,16 @@ function d1(db) {
 
         assert.strictEqual(await tgMod.drainUpdates(cronEnv, Date.now() + tgMod.STALE_MS + 1), 1,
           'the drain left a dead turn unfinished — this is the lost message, again');
-        assert.strictEqual(sent.length, 1, 'the rescue sent no receipt');
-        assert.match(sent[0].text, /Logged/);
-        assert.match(JSON.stringify(sent[0].reply_markup), /example\.dev.*screen=transactions/,
+        // The ONLY place the "still working" notice speaks (v2.12.0). A live turn that
+        // is merely slow now says nothing — the notice fired on a 6s timer inside every
+        // turn and the owner saw it constantly. A rescue has earned it: the message is
+        // minutes old and the silence so far is the thing being explained.
+        assert.strictEqual(sent.length, 2, 'the rescue did not send a notice and a receipt');
+        assert.match(sent[0].text, /Still working/);
+        assert.strictEqual(sent[0].reply_to_message_id, 7,
+          'the notice must thread onto the message it is about');
+        assert.match(sent[1].text, /Logged/);
+        assert.match(JSON.stringify(sent[1].reply_markup), /example\.dev.*screen=transactions/,
           'the rescued receipt lost its ✎ Edit button — the drain never recovered the app origin');
         assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9102-%'").get().n, 1);
         const closed = queued(9102);
@@ -1052,7 +1059,7 @@ function d1(db) {
         await abandoned;
         assert.strictEqual(sqlite.prepare("SELECT COUNT(*) n FROM transactions WHERE id LIKE 'tg-9102-%'").get().n, 1,
           'a rescue that raced a live turn wrote the transaction twice');
-        assert.match(sent[1].text, /Already logged/);
+        assert.match(sent[2].text, /Already logged/);
       } finally { globalThis.fetch = real; }
     });
 
@@ -1081,11 +1088,14 @@ function d1(db) {
         for (let i = 1; i < tgMod.MAX_ATTEMPTS; i++) {
           assert.strictEqual(await tgMod.drainUpdates(tgEnv, at()), 0);
           assert.strictEqual(queued(9103).done, 0, 'attempt ' + i + ' of ' + tgMod.MAX_ATTEMPTS + ' gave up early');
-          assert.strictEqual(sent.length, 0, 'the drain complained before it ran out of attempts');
+          // One "still working", on the first rescue only — a doomed update must not
+          // send the same notice every two minutes until its attempts run out.
+          assert.strictEqual(sent.length, 1, 'the drain complained before it ran out of attempts');
+          assert.match(sent[0].text, /Still working/);
         }
         assert.strictEqual(await tgMod.drainUpdates(tgEnv, at()), 0);
-        assert.strictEqual(sent.length, 1, 'the last attempt gave up in silence');
-        assert.match(sent[0].text, /Something went wrong/);
+        assert.strictEqual(sent.length, 2, 'the last attempt gave up in silence');
+        assert.match(sent[1].text, /Something went wrong/);
         assert.strictEqual(queued(9103).done, 1, 'a hopeless update stayed in the queue');
         assert.strictEqual(queued(9103).attempts, tgMod.MAX_ATTEMPTS);
         assert.strictEqual(await tgMod.drainUpdates(tgEnv, at()), 0, 'the closed row came back');

@@ -210,6 +210,17 @@ export async function drainUpdates(env, now = Date.now()) {
       continue;
     }
     console.warn('telegram: rescuing update ' + row.update_id + ', attempt ' + attempt);
+    // Say it ONCE, and only here. A turn that finishes on its own never speaks: the
+    // notice used to fire on a 6-second timer inside every live turn, so a merely slow
+    // parse — the common case — always sent one. A rescue is the case worth a word:
+    // the message is minutes old and the owner has had silence. Fire-and-forget, and
+    // only for a chat message, because route() answers a callback in its own bubble.
+    if (attempt === 1 && update.message && update.message.text) {
+      Promise.resolve(send(runEnv, update.message.chat.id,
+        '⏳ *Still working…*\n› _That one took too long. Picking it up again now._',
+        update.message.message_id))
+        .catch((err) => console.error('telegram: slow notice failed: ' + msgOf(err)));
+    }
     try {
       await route(runEnv, update);
       await settle(env, row.update_id);
@@ -248,7 +259,7 @@ async function route(env, update) {
   const r = await refs(env);
   let parsed;
   try {
-    parsed = await whileSlow(env, chat, replyTo, parse(env, r, text, msg.date));
+    parsed = await parse(env, r, text, msg.date);
   } catch (err) {
     return send(env, chat, '❌ *Failed to add transaction*\n› ' + msgOf(err), replyTo);
   }
@@ -267,7 +278,7 @@ async function route(env, update) {
 }
 
 /**
- * How long the whole turn may take, and how long it may stay quiet.
+ * How long the whole turn may take.
  *
  * /tg holds Telegram's webhook connection open until the turn finishes (v2.11.0), so
  * the limit is Telegram's patience for a reply, not Cloudflare's waitUntil allowance.
@@ -277,29 +288,6 @@ async function route(env, update) {
  * Being wrong costs one redelivery, which seen() dedups — not a duplicated row.
  */
 export const TURN_CEILING_MS = 25000;
-export const SLOW_NOTICE_MS = 6000;
-
-/**
- * Run `work`, and if it is still going after SLOW_NOTICE_MS, tell the owner ONCE that
- * the turn is alive — then keep waiting for it.
- *
- * This is the thing waitUntil could never do. A cancelled waitUntil task is torn down
- * mid-flight, so there was no "still working" to send and nothing left to wait with;
- * the owner's only signal was silence. Now the invocation survives, so a slow model
- * costs a wait with a progress note instead of a lost transaction.
- *
- * The notice is fire-and-forget on purpose: it is a courtesy, and awaiting it would
- * make a failed courtesy able to sink the receipt behind it. The timer is always
- * cleared, so a fast turn sends nothing extra.
- */
-export async function whileSlow(env, chat, replyTo, work, afterMs = SLOW_NOTICE_MS) {
-  let timer = setTimeout(() => {
-    Promise.resolve(send(env, chat, '⏳ *Still working…*\n› _The parser is slow right now. Hold on._', replyTo))
-      .catch((err) => console.error('telegram: slow notice failed: ' + msgOf(err)));
-  }, afterMs);
-  try { return await work; }
-  finally { clearTimeout(timer); timer = null; }
-}
 
 // ── log (one or many transactions per message) ───────────────────────────────
 /**
