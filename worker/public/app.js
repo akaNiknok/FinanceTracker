@@ -995,7 +995,7 @@ function renderDashboard(){
   var key='dashboard|'+S.month+'|'+S.cfMonths;
   if(!S.cache[key]) loading('dashboard');
   return cachedCall(key, function(et){return gs('api_getDashboard',{month:S.month,months:S.cfMonths},et);}, function(d){
-    var w=el('div','screen');
+    var w=el('div','screen cols');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Dashboard'));
     head.appendChild(monthPickerEl());
@@ -1051,7 +1051,7 @@ function renderDashboard(){
     // deltas only show for completed months; the live month says "month to date".
     var isLive=S.month===monthKey(new Date());
     var monthSpend=0; Object.keys(d.spendBySegment||{}).forEach(function(k){monthSpend+=d.spendBySegment[k];});
-    var stats=el('div','grid grid-3 kpis');
+    var stats=el('div','grid grid-3 kpis wide');
     var tIn=el('div','stat','<div class="stat-label">Income</div><div class="stat-value">'+money(cur?cur.income:null,true)+'</div>');
     var dIn=!isLive&&cur&&prev?deltaEl(cur.income,prev.income,true,prevLbl):null;
     if(dIn)tIn.appendChild(dIn); else if(isLive)tIn.appendChild(el('div','stat-sub','month to date'));
@@ -1088,7 +1088,7 @@ function renderDashboard(){
       }
     }
     if(cf.length>=2){
-      var cc=el('div','card'), ch=el('div','card-h card-h-row');
+      var cc=el('div','card wide'), ch=el('div','card-h card-h-row');
       ch.appendChild(el('span','',(liq?'Cash flow & liquid net worth':'Cash flow')+' · last '+cf.length+' months'));
       ch.appendChild(rangePickerEl());
       cc.appendChild(ch);
@@ -1098,12 +1098,14 @@ function renderDashboard(){
         if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, liq));
       });
     }
+    var brc=null;   // built below, appended AFTER the net-worth chart so the two
+                    // full-width charts sit together in the desktop 2-col grid
     // ── net-worth bridge: what moved net worth, and how much of it the ledger
     // explains. Savings is income − expense for the month; the residual is market,
     // FX and timing — and a residual that keeps running negative is spending nobody
     // logged. Absent for a month whose predecessor has no snapshot yet. ──
     if(d.bridge){
-      var br=d.bridge, brc=el('div','card');
+      var br=d.bridge; brc=el('div','card');
       brc.appendChild(el('div','card-h','Net worth bridge · '+esc(br.from)+' → '+
         esc(br.month)+(br.live?' (live)':'')));
       var rows=[['Net worth change',br.deltaNetWorth,'from '+money(br.startNetWorth,true)+' to '+money(br.endNetWorth,true)],
@@ -1118,11 +1120,10 @@ function renderDashboard(){
         bl.appendChild(r);
       });
       brc.appendChild(bl);
-      w.appendChild(brc);
     }
 
     if(liq){
-      var nc=el('div','card');
+      var nc=el('div','card wide');
       nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last '+cf.length+' months'));
       var nwHost=el('div'); nc.appendChild(nwHost);
       w.appendChild(nc);
@@ -1130,6 +1131,7 @@ function renderDashboard(){
         if(nwHost.isConnected) nwHost.appendChild(netWorthAreaChart(liq, stk, nwHost.clientWidth));
       });
     }
+    if(brc) w.appendChild(brc);
 
     // ── budgets vs actual ──
     if (d.budgets && d.budgets.length){
@@ -1550,7 +1552,7 @@ function renderAccounts(){
   if(!S.cache['accounts']) loading('accounts');
   return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
     var accs=res.accounts||[];
-    var w=el('div','screen');
+    var w=el('div','screen cols');
     w.appendChild(el('div','screen-title','Accounts'));
 
     // Same split as netWorthTotals() in api.js: a NEGATIVE receivable is money the
@@ -1815,7 +1817,7 @@ function renderBudgets(){
   return cachedCall(key,
     function(et){ return gs('api_getBudgets',{month:S.month},et); },
     function(bg){
-    var w=el('div','screen');
+    var w=el('div','screen cols');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Budgets'));
     head.appendChild(monthPickerEl());
