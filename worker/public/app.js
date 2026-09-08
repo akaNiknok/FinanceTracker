@@ -4,7 +4,7 @@
  * v2.0.0 IS the backend: /api runs against Cloudflare D1, not Apps Script. The
  * JSON contract did not change with that swap, so nothing in this file did
  * either, apart from the new Admin screen. Seven screens: Dashboard ·
- * Transactions · Budgets · Accounts · Swap · Tax · Admin.
+ * Transactions · Accounts · Swap · Tax · Admin.
  * ========================================================================== */
 
 /* ── server bridge: /api → Promise ───────────────────────────────────────────
@@ -246,7 +246,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 9;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 10;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -372,7 +372,7 @@ function toast(msg,kind){
 function monthKey(d){return d.getFullYear()+'-'+MONTHS[d.getMonth()];}      // "2026-Jun"
 function monthLabel(m){var p=String(m).split('-');return p.length===2?p[1]+' '+p[0]:m;} // "Jun 2026"
 function monthOptions(){return buildMonthList().map(function(m){return {value:m,label:monthLabel(m)};});}
-/* The period control lives on the screens it actually drives (Dashboard, Budgets),
+/* The period control lives on the screen it actually drives (the Dashboard),
  * not the topbar — there it was a silent no-op on the other six screens, since
  * Transactions owns its month as one of five in-screen filters.
  * Refocus after the repaint: the picker is inside the screen we just replaced, and
@@ -382,7 +382,7 @@ function monthPickerEl(){
   buildMonthList().forEach(function(m){var o=el('option');o.value=m;o.textContent=monthLabel(m);mp.appendChild(o);});
   mp.value=S.month;
   mp.onchange=function(){
-    // Do NOT wipe S.cache here: 'dashboard|<month>' / 'budgets|<month>' are already
+    // Do NOT wipe S.cache here: the 'dashboard|<month>' keys are already
     // month-scoped keys, so flipping the picker repaints a visited month from cache
     // (version-gated) instead of refetching behind a skeleton.
     S.month=mp.value;
@@ -507,7 +507,7 @@ function boot(){
   // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
   if(p.get('tx')) openTxById(p.get('tx'));
   (warm ? revalidateBoot() : ensureBoot().then(function(){
-    if(S.screen==='dashboard'||S.screen==='budgets'||S.screen==='accounts') render();
+    if(S.screen==='dashboard'||S.screen==='accounts') render();
   })).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
   // Launching IS a reconnect signal: the 'online' event doesn't fire for an app that
   // was closed while offline and reopened with a connection.
@@ -529,7 +529,7 @@ function refresh(){
  * validates against, so a retired name can't stick in the URL or in localStorage.
  * (Function declarations hoist, so naming them here at load time is safe.) */
 var SCREEN_FNS={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
-                budgets:renderBudgets,exchange:renderExchange,tax:renderTax,admin:renderAdmin};
+                exchange:renderExchange,tax:renderTax,admin:renderAdmin};
 var SECONDARY_SCREENS={exchange:1,tax:1,admin:1};
 /* Last screen, so a browser reload comes back where you were. The parent URL
  * (?screen=, pushed below) is the primary channel; localStorage covers reloads
@@ -597,7 +597,6 @@ var SKELS={
   dashboard:function(){ return '<div class="stat hero">'+skBar(11,'30%')+skBar(34,'58%')+skBar(10,'100%')+'</div>'+
     skTiles(3)+skCard(skBar(11,'34%')+skBar(150,'100%'))+skCard(skBar(11,'26%')+skRows(4)); },
   accounts: function(){ return skTiles(2)+skCard(skBar(11,'26%')+skRows(4))+skCard(skBar(11,'26%')+skRows(3)); },
-  budgets:  function(){ return skCard(skBar(11,'34%')+skBar(28,'50%')+skBar(10,'100%'))+skCard(skBar(11,'26%')+skRows(5)); },
   list:     function(){ return '<div class="filters">'+skBar(34,'170px')+skBar(34,'130px')+skBar(34,'130px')+'</div>'+skCard(skRows(7)); },
   table:    function(){ return skCard(skBar(11,'30%')+skRows(6)); }
 };
@@ -995,7 +994,7 @@ function renderDashboard(){
   var key='dashboard|'+S.month+'|'+S.cfMonths;
   if(!S.cache[key]) loading('dashboard');
   return cachedCall(key, function(et){return gs('api_getDashboard',{month:S.month,months:S.cfMonths},et);}, function(d){
-    var w=el('div','screen');
+    var w=el('div','screen cols');
     var head=el('div','screen-head');
     head.appendChild(el('div','screen-title','Dashboard'));
     head.appendChild(monthPickerEl());
@@ -1004,6 +1003,12 @@ function renderDashboard(){
     var cf=d.cashflow||[];
     var cur=cf.length?cf[cf.length-1]:null, prev=cf.length>1?cf[cf.length-2]:null;
     var prevLbl=prev?('vs '+String(prev.month).split('-')[1]):null;
+
+    // The two hero cards are ONE row at desktop width (see .hero-row in app.css):
+    // side by side in a multicol they land in different columns, keep their own
+    // heights and leave a ragged gap under the shorter one. The wrapper is
+    // display:contents until 1200px, so the phone stack is unchanged.
+    var heroes=el('div','hero-row wide'); w.appendChild(heroes);
 
     // ── FI countdown: the top line, above net worth ──
     // Every input is a closed month (api.js fireEta), so the target DATE holds still
@@ -1027,7 +1032,7 @@ function renderDashboard(){
         '<div class="stat-sub">'+sub+'</div>'+
         '<div class="stat-sub">'+f.withdrawalRatePct+'% rule · '+money(f.monthlyExpensePhp,true)+
         '/mo spend · saving '+money(f.monthlySavingsPhp,true)+'/mo at '+f.realReturnPct+'% real</div>';
-      w.appendChild(fc);
+      heroes.appendChild(fc);
     }
 
     // ── hero: net worth + asset/liability split bar ──
@@ -1044,14 +1049,14 @@ function renderDashboard(){
         '<span><span class="lg-key" style="background:var(--chart-neg)"></span>Liabilities <b>'+money(liabAbs,true)+'</b></span>';
       hero.appendChild(lg);
     }
-    w.appendChild(hero);
+    heroes.appendChild(hero);
 
     // ── KPI row ──
     // A live (incomplete) month vs a finished month is a misleading delta, so
     // deltas only show for completed months; the live month says "month to date".
     var isLive=S.month===monthKey(new Date());
     var monthSpend=0; Object.keys(d.spendBySegment||{}).forEach(function(k){monthSpend+=d.spendBySegment[k];});
-    var stats=el('div','grid grid-3 kpis');
+    var stats=el('div','grid grid-3 kpis wide');
     var tIn=el('div','stat','<div class="stat-label">Income</div><div class="stat-value">'+money(cur?cur.income:null,true)+'</div>');
     var dIn=!isLive&&cur&&prev?deltaEl(cur.income,prev.income,true,prevLbl):null;
     if(dIn)tIn.appendChild(dIn); else if(isLive)tIn.appendChild(el('div','stat-sub','month to date'));
@@ -1088,7 +1093,7 @@ function renderDashboard(){
       }
     }
     if(cf.length>=2){
-      var cc=el('div','card'), ch=el('div','card-h card-h-row');
+      var cc=el('div','card wide'), ch=el('div','card-h card-h-row');
       ch.appendChild(el('span','',(liq?'Cash flow & liquid net worth':'Cash flow')+' · last '+cf.length+' months'));
       ch.appendChild(rangePickerEl());
       cc.appendChild(ch);
@@ -1098,12 +1103,14 @@ function renderDashboard(){
         if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, liq));
       });
     }
+    var brc=null;   // built below, appended AFTER the net-worth chart so the two
+                    // full-width charts sit together in the desktop 2-col grid
     // ── net-worth bridge: what moved net worth, and how much of it the ledger
     // explains. Savings is income − expense for the month; the residual is market,
     // FX and timing — and a residual that keeps running negative is spending nobody
     // logged. Absent for a month whose predecessor has no snapshot yet. ──
     if(d.bridge){
-      var br=d.bridge, brc=el('div','card');
+      var br=d.bridge; brc=el('div','card');
       brc.appendChild(el('div','card-h','Net worth bridge · '+esc(br.from)+' → '+
         esc(br.month)+(br.live?' (live)':'')));
       var rows=[['Net worth change',br.deltaNetWorth,'from '+money(br.startNetWorth,true)+' to '+money(br.endNetWorth,true)],
@@ -1118,11 +1125,10 @@ function renderDashboard(){
         bl.appendChild(r);
       });
       brc.appendChild(bl);
-      w.appendChild(brc);
     }
 
     if(liq){
-      var nc=el('div','card');
+      var nc=el('div','card wide');
       nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last '+cf.length+' months'));
       var nwHost=el('div'); nc.appendChild(nwHost);
       w.appendChild(nc);
@@ -1130,11 +1136,38 @@ function renderDashboard(){
         if(nwHost.isConnected) nwHost.appendChild(netWorthAreaChart(liq, stk, nwHost.clientWidth));
       });
     }
+    if(brc) w.appendChild(brc);
 
-    // ── budgets vs actual ──
+    // ── budgets — the whole Budgets screen, merged here in v2.14.0 ──
+    // It was a nav item showing a subset of what the Dashboard already drew (the
+    // same meterRow list, off the same budgetsPayload). Recurring & installments
+    // went to Accounts, beside the liabilities it is really about.
+    var pace=periodPace('Monthly',S.month);
+    var er=d.essentialsRewards;
+    if(er){
+      var ec=el('div','card hero');
+      var now=new Date(), daysLeft=isLive   // isLive: the KPI row already asked
+        ? (new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()) : null;
+      ec.innerHTML='<div class="card-h card-h-row"><span>Essentials + Rewards</span>'+
+        (daysLeft!=null?('<span class="dim" style="text-transform:none;letter-spacing:0">'+
+          daysLeft+' day'+(daysLeft===1?'':'s')+' left</span>'):'')+'</div>'+
+        '<div class="row-between"><div class="stat-value" style="font-size:26px">'+money(er.actualPhp,true)+'</div>'+
+        '<div class="dim">of '+money(er.targetPhp,true)+'</div></div>';
+      var em=el('div','meter '+(er.isOver?'over':((er.pctUsed||0)>=85?'warn':'')));
+      em.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,er.pctUsed||0)+'%"></div>';
+      if(pace!=null&&pace>0.02&&pace<0.98){
+        var pm=el('div','meter-pace'); pm.style.left='calc('+(pace*100)+'% - 1px)';
+        pm.title=Math.round(pace*100)+'% of the month has elapsed';
+        em.appendChild(pm);
+      }
+      ec.appendChild(em);
+      w.appendChild(ec);
+    }
     if (d.budgets && d.budgets.length){
       var bc=el('div','card');
-      bc.appendChild(el('div','card-h','Budget vs actual'));
+      bc.appendChild(el('div','card-h card-h-row','<span>Segment targets</span>'+
+        (d.incomePhp?('<span class="dim" style="text-transform:none;letter-spacing:0">planning income '+
+          money(d.incomePhp,true)+'/mo</span>'):'')));
       d.budgets.forEach(function(b){ bc.appendChild(meterRow(b, periodPace(b.period,S.month))); });
       w.appendChild(bc);
     }
@@ -1550,7 +1583,7 @@ function renderAccounts(){
   if(!S.cache['accounts']) loading('accounts');
   return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
     var accs=res.accounts||[];
-    var w=el('div','screen');
+    var w=el('div','screen cols');
     w.appendChild(el('div','screen-title','Accounts'));
 
     // Same split as netWorthTotals() in api.js: a NEGATIVE receivable is money the
@@ -1586,6 +1619,26 @@ function renderAccounts(){
     // Holdings: the share accounts above, re-cut by portfolio weight. Filled by a
     // separate cachedCall — the 'accounts' payload is pre-seeded from getBootstrap
     // and shared with the edit-mode rail, so its shape must not change.
+    // Recurring & installments — from the Budgets screen (merged into the Dashboard
+    // in v2.14.0). It belongs beside the liabilities: an installment IS one. Read off
+    // getBootstrap, which already carries the rows, so the screen gains no fetch; a
+    // cold load paints it on the boot re-render.
+    var rec=((S.boot&&S.boot.recurring)||[]);
+    if(rec.length){
+      var rcard=el('div','card');
+      rcard.appendChild(el('div','card-h','Recurring & installments'));
+      var rl=el('div','list');
+      rec.forEach(function(o){
+        var amt=o.Amount, ml=o['Months Left'];
+        var r=el('div','litem');
+        r.innerHTML='<div class="ic">⟳</div><div class="grow"><div class="t1">'+esc(o.Description||'')+'</div>'+
+          '<div class="t2">'+esc(o.Group||'')+(ml!=null&&ml!==''?(' · '+esc(ml)+' mo left'):'')+'</div></div>'+
+          '<div class="amt">'+(amt!=null&&amt!==''?money(amt):'—')+'</div>';
+        rl.appendChild(r);
+      });
+      rcard.appendChild(rl); w.appendChild(rcard);
+    }
+
     var inv=el('div'); inv.id='invCards';
     w.appendChild(inv);
     paint(w);
@@ -1802,71 +1855,6 @@ function accountRow(a){
   }
   r.onclick=function(){ openAccountModal(a); };
   return r;
-}
-
-/* ════════════════════════════════════════════════════════════════════════
- *  BUDGETS
- * ════════════════════════════════════════════════════════════════════════ */
-function renderBudgets(){
-  var key='budgets|'+S.month;
-  if(!S.cache[key]) loading('budgets');
-  // One request, not two: getBudgets carries `recurring` since v2.9.0, so the screen
-  // has one ETag to revalidate instead of a pair that could not 304 independently.
-  return cachedCall(key,
-    function(et){ return gs('api_getBudgets',{month:S.month},et); },
-    function(bg){
-    var w=el('div','screen');
-    var head=el('div','screen-head');
-    head.appendChild(el('div','screen-title','Budgets'));
-    head.appendChild(monthPickerEl());
-    w.appendChild(head);
-    var now=new Date(), daysLeft=(bg.month===monthKey(now))
-      ? (new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()) : null;
-    w.appendChild(el('div','screen-sub','Planning income '+money(bg.incomePhp,true)+'/mo'+
-      (daysLeft!=null?(' · '+daysLeft+' day'+(daysLeft===1?'':'s')+' left'):'')));
-
-    var pace=periodPace('Monthly',bg.month);
-    if(bg.essentialsRewards){
-      var er=bg.essentialsRewards;
-      var card=el('div','card hero');
-      card.innerHTML='<div class="card-h">Essentials + Rewards</div>'+
-        '<div class="row-between"><div class="stat-value" style="font-size:26px">'+money(er.actualPhp,true)+'</div>'+
-        '<div class="dim">of '+money(er.targetPhp,true)+'</div></div>';
-      var m=el('div','meter '+(er.isOver?'over':((er.pctUsed||0)>=85?'warn':'')));
-      m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,er.pctUsed||0)+'%"></div>';
-      if(pace!=null&&pace>0.02&&pace<0.98){
-        var pm=el('div','meter-pace'); pm.style.left='calc('+(pace*100)+'% - 1px)';
-        pm.title=Math.round(pace*100)+'% of the month has elapsed';
-        m.appendChild(pm);
-      }
-      card.appendChild(m);
-      w.appendChild(card);
-    }
-
-    var bc=el('div','card');
-    bc.appendChild(el('div','card-h','Segment targets'));
-    (bg.budgets||[]).forEach(function(b){ bc.appendChild(meterRow(b, periodPace(b.period,bg.month))); });
-    if(!(bg.budgets||[]).length) bc.appendChild(el('div','empty','<span class="empty-ico">◎</span>No budget rows.'));
-    w.appendChild(bc);
-
-    // recurring obligations
-    var rows=(bg.recurring||[]);
-    if(rows.length){
-      var rcard=el('div','card');
-      rcard.appendChild(el('div','card-h','Recurring & installments'));
-      var l=el('div','list');
-      rows.forEach(function(o){
-        var amt=o.Amount, ml=o['Months Left'];
-        var r=el('div','litem');
-        r.innerHTML='<div class="ic">⟳</div><div class="grow"><div class="t1">'+esc(o.Description||'')+'</div>'+
-          '<div class="t2">'+esc(o.Group||'')+(ml!=null&&ml!==''?(' · '+esc(ml)+' mo left'):'')+'</div></div>'+
-          '<div class="amt">'+(amt!=null&&amt!==''?money(amt):'—')+'</div>';
-        l.appendChild(r);
-      });
-      rcard.appendChild(l); w.appendChild(rcard);
-    }
-    paint(w);
-  }).catch(showErr);
 }
 
 /* ════════════════════════════════════════════════════════════════════════

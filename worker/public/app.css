@@ -122,7 +122,9 @@ button{font-family:inherit;cursor:pointer}
 .range-picker{padding:4px 6px;font-size:11.5px;min-height:0;text-transform:none;letter-spacing:0}
 /* top-level hero tiles / KPI grids need the same rhythm as .card (which
  * carries its own margin-bottom) — otherwise they sit flush against neighbors */
-.screen>.stat,.screen>.grid{margin-bottom:14px}
+.screen>.stat,.screen>.grid,.hero-row>.stat{margin-bottom:14px}
+/* Two hero cards that pair up at desktop width and are invisible below it. */
+.hero-row{display:contents}
 .grid{display:grid;gap:12px}
 .grid-2{grid-template-columns:repeat(2,1fr)}
 .grid-3{grid-template-columns:repeat(3,1fr)}
@@ -426,6 +428,30 @@ table.tbl td.editing{padding:0}
   .toast-root{bottom:28px}
   .main{padding:24px max(28px,(100% - 1080px)/2)}
   .screen-title{font-size:23px}
+}
+/* ── Responsive: desktop → two-column card layout ────────────────────────── */
+/* Every screen is a flat list of cards appended to .screen, so the layout lives
+ * on the parent — no per-card wrappers. Multi-column, NOT a 2-col grid: grid
+ * rows are as tall as their tallest card, so one long account list leaves a
+ * half-screen void beside it; multicol balances the columns instead. Opt in
+ * with .cols (Dashboard, Accounts, Budgets); Transactions/Tax/Admin/Swap stay
+ * one column because a wide table or the tx rail already owns the row.
+ * .wide breaks the flow and runs full width; it is set in JS, never by
+ * :has(svg) — a chart is appended at rAF, so the column count would change
+ * AFTER the chart measured the host it drew into. */
+@media(min-width:1200px){
+  .main{padding:24px max(28px,(100% - 1440px)/2)}
+  .cols{columns:2;column-gap:14px}
+  .cols .card,.cols>.stat,.cols>.grid{break-inside:avoid}
+  .cols>.screen-head,.cols>.screen-title,.cols>.screen-sub,.cols>.wide{column-span:all}
+  /* #invCards is an empty wrapper the investments fetch fills later — dissolve
+   * it, or its four cards are one unbreakable block in one column. */
+  .cols>#invCards{display:contents}
+  /* One row of equal-height heroes: in the plain column flow they land in
+   * different columns, each its own height, with a ragged gap under the shorter
+   * one. grid-auto-columns keeps it honest when only one hero exists. */
+  .cols>.hero-row{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:14px;margin-bottom:14px}
+  .cols>.hero-row>.stat{margin-bottom:0}
 }
 @media(max-width:520px){
   .grid-2,.grid-3{grid-template-columns:1fr}

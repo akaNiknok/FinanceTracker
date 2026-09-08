@@ -364,6 +364,7 @@ export async function getDashboard(args, env) {
   const r = await refs(env);
   const { accounts, fx } = await accountsList(env, r);
   const totals = netWorthTotals(accounts);
+  const bud = await budgetsPayload(env, month, fx);
 
   // Chart window, client-chosen (6 on a phone, 12 on a big screen, 24 on request).
   // Clamped because every key becomes a bound parameter in two queries below.
@@ -456,7 +457,14 @@ export async function getDashboard(args, env) {
     cashflow: flowKeys.map((k) => byMonth[k]),
     netWorthHistory, sharesHistory,
     bridge: nwBridge(month, snapNw, byMonth, ref, totals.netWorth),
-    budgets: (await budgetsPayload(env, month, fx)).budgets,
+    // Budgets: the meters AND the Essentials+Rewards roll-up, because the Budgets
+    // screen was merged into the Dashboard (v2.14.0). budgetsPayload already ran for
+    // this month, so the two extra fields cost no query. Named, not spread — the
+    // payload also carries its own canonical `month`, which would overwrite the one
+    // above (this handler echoes back what the caller asked for). getBudgets stays:
+    // it is the tested surface for budgetsPayload, and an old service-worker-cached
+    // app.js still calls it.
+    budgets: bud.budgets, incomePhp: bud.incomePhp, essentialsRewards: bud.essentialsRewards,
     recentTransactions: recent.results.map((row) => shapeTx(row, r))
   };
 }

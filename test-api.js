@@ -347,6 +347,12 @@ function d1(db) {
       assert.strictEqual(d.spendBySegment.Essentials, 250.5 + 1200);
       assert.ok(d.recentTransactions.length > 0);
       assert.ok(Math.abs(d.netWorth - (d.assets + d.liabilities)) < 0.01, 'liabilities are already negative');
+      // The Budgets screen lives here now (v2.14.0), so the Dashboard must carry the
+      // whole budgets payload. Drop one of these and the card just stops painting.
+      const b = await api.getBudgets({ month: '2026-Aug' }, env);
+      assert.deepStrictEqual(d.budgets, b.budgets);
+      assert.deepStrictEqual(d.essentialsRewards, b.essentialsRewards);
+      assert.strictEqual(d.incomePhp, b.incomePhp);
     });
 
     test('getDashboard: the FI countdown reads closed months, whatever month is browsed', async () => {
