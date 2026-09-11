@@ -1600,10 +1600,14 @@ function renderAccounts(){
     top.appendChild(tile('Total assets', money(assets,true), accs.length+' accounts tracked'));
     top.appendChild(tile('Total liabilities', money(liab,true), 'credit lines and money owed back'));
     w.appendChild(top);
+    // The runway card lands here, under both tiles, once loadInvestments fills it.
+    var rwh=el('div'); rwh.id='runwayCard';
+    w.appendChild(rwh);
 
-    // group by type
+    // group by type. Share-priced accounts are left out: the Holdings card lists
+    // every one of them, with weight and gain, and its rows open the same modal.
     var groups={};
-    accs.forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
+    accs.forEach(function(a){ if(a.isShares) return; var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
     Object.keys(groups).sort().forEach(function(t){
       var card=el('div','card');
       var sum=0; groups[t].forEach(function(a){ sum+=(a.balancePhp||0); });
@@ -1651,6 +1655,7 @@ function loadInvestments(){
   return cachedCall('investments', function(et){return gs('api_getInvestments',null,et);}, function(inv){
     var host=$('#invCards'); if(!host) return;
     host.innerHTML='';
+    var rwh=$('#runwayCard'); if(rwh) rwh.innerHTML='';
     var positions=inv.positions||[];
     if(!positions.length) return;
 
@@ -1675,7 +1680,8 @@ function loadInvestments(){
     // Color follows the entity: the account's own color when set, else a stable
     // slot from the validated fallback palette (assigned by name, not by rank).
     var fallback=['#3987e5','#199e70','#c98500','#9085e9','#e66767','#d55181','#d95926','#eb6834'];
-    var names=positions.map(function(p){return p.name;}).sort();
+    var holdOrder=positions.map(function(p){return p.name;});
+    var names=holdOrder.slice().sort();
     function posColor(p){ return acctColor(p.name)||fallback[names.indexOf(p.name)%fallback.length]; }
     // one stacked allocation bar (part-to-whole), 2px surface gaps between fills
     var stack=el('div'); stack.style.cssText='display:flex;gap:2px;height:14px;margin:2px 0 16px';
@@ -1686,9 +1692,15 @@ function loadInvestments(){
     });
     card.appendChild(stack);
 
+    // The Assets card no longer lists share accounts, so these rows carry its tap:
+    // the account modal, off the 'accounts' payload the screen already painted from.
+    var accByName={};
+    ((S.cache.accounts&&S.cache.accounts.data.accounts)||[]).forEach(function(a){ accByName[a.name]=a; });
     var l=el('div','list');
     positions.forEach(function(p){
-      var r=el('div','litem');
+      var acc=accByName[p.name];
+      var r=el('div','litem'+(acc?' click':''));
+      if(acc) r.onclick=function(){ openAccountModal(acc); };
       var q=p.quantity!=null?(num(p.quantity)+' · '):'';
       var pc=posColor(p);
       // Average cost is the entry price a sale does NOT move (average-cost method), so
@@ -1745,6 +1757,9 @@ function loadInvestments(){
           if(!agg[b.symbol]){agg[b.symbol]={symbol:b.symbol,currency:b.currency,amount:0,quantity:0};order.push(b.symbol);}
           agg[b.symbol].amount+=b.amount||0; agg[b.symbol].quantity+=b.quantity||0;
         });
+        // Holdings order, so a ticker sits in the same place on both cards.
+        function rank(s){ var i=holdOrder.indexOf(s); return i<0?holdOrder.length:i; }
+        order.sort(function(a,b){ return rank(a)-rank(b); });
         var w=qrow(qlabel(q.quarter),moneyCur(q.totalUsd,'USD'));
         // A quarter whose only activity was a sale has still parked nothing, so it gets
         // the same dashed empty track as a quarter with no activity at all: the bar
@@ -1775,7 +1790,7 @@ function loadInvestments(){
       qc.appendChild(qhost); host.appendChild(qc);
     }
 
-    // Emergency runway: the whole cash-like pool (Liquid + EF − credit) vs the
+    // Emergency runway: the whole cash-like pool (Liquid + EF − credit − money lent) vs the
     // 4-months-of-expenses rule — EF is commingled, so the pool IS the fund.
     // Stat-tile shape: peso pool as the value (the "how much EF do I have"
     // answer), months-of-runway as the pill, a severity meter against the target
@@ -1799,11 +1814,11 @@ function loadInvestments(){
         m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,Math.round(100*rw.efPhp/rw.targetPhp))+'%"></div>';
         rc.appendChild(m);
       }
-      var sub=el('div','dim','Liquid accounts + IB01 − credit'+
+      var sub=el('div','dim','Liquid accounts + IB01 − credit − money lent'+
         (rw.avgMonthlyExpensePhp?' · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo':''));
       sub.style.cssText='font-size:12px;margin-top:8px';
       rc.appendChild(sub);
-      host.appendChild(rc);
+      if(rwh) rwh.appendChild(rc);
     }
 
     // targets reference
