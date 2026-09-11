@@ -311,7 +311,7 @@ export async function getBudgets(args, env) {
  * (it sums netWorthPhp, which is already signed), netWorth is signed, shares are a
  * subset of assets. The SPA's hero takes Math.abs of it. Do not "fix" the sign —
  * every nw_snapshots row on disk holds it this way. sharesValue uses
- * isInvestedNetWorth (subtype-based, NARROWER than the Holdings card's isInvestment)
+ * isInvestedNetWorth (subtype-based, NARROWER than the Holdings card's isShares)
  * so a near-cash share holding — a treasury ETF held as an EF, say — sits with liquid
  * here while still showing in Holdings. Shared by getDashboard and snapshotNetWorth
  * so the tile, chart and snapshot agree exactly.
@@ -558,9 +558,12 @@ const quarterOf = (d) => d.slice(0, 4) + '-Q' + Math.ceil(+d.slice(5, 7) / 3);
 export async function getInvestments(args, env) {
   const r = await refs(env);
   const { accounts } = await accountsList(env, r);
-  const positions = accounts.filter((a) => a.isInvestment).map((a) => ({
+  // Share-priced accounts only: a broker's cash balance (IBKR, subtype "For
+  // Investment") is money waiting to buy, not a position, and the SPA's Assets card
+  // already lists it. The SPA hides these same accounts from that card in turn.
+  const positions = accounts.filter((a) => a.isShares).map((a) => ({
     name: a.name, subtype: a.subtype, currency: a.currency,
-    quantity: a.isShares ? a.balanceNative : null,
+    quantity: a.balanceNative,
     valuePhp: a.balancePhp
   }));
   const total = positions.reduce((s, p) => s + (p.valuePhp || 0), 0);
