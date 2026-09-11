@@ -1775,7 +1775,7 @@ function loadInvestments(){
       qc.appendChild(qhost); host.appendChild(qc);
     }
 
-    // Emergency runway: the whole cash-like pool (Liquid + EF − credit) vs the
+    // Emergency runway: the whole cash-like pool (Liquid + EF − credit − money lent) vs the
     // 4-months-of-expenses rule — EF is commingled, so the pool IS the fund.
     // Stat-tile shape: peso pool as the value (the "how much EF do I have"
     // answer), months-of-runway as the pill, a severity meter against the target
@@ -1799,7 +1799,7 @@ function loadInvestments(){
         m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,Math.round(100*rw.efPhp/rw.targetPhp))+'%"></div>';
         rc.appendChild(m);
       }
-      var sub=el('div','dim','Liquid accounts + IB01 − credit'+
+      var sub=el('div','dim','Liquid accounts + IB01 − credit − money lent'+
         (rw.avgMonthlyExpensePhp?' · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo':''));
       sub.style.cssText='font-size:12px;margin-top:8px';
       rc.appendChild(sub);
