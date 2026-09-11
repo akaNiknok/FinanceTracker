@@ -207,8 +207,9 @@ export const isSharesAcct = (a) =>
 export const NOT_SHARES_SRC =
   "(UPPER(COALESCE(a.currency,'')) != 'SHARES' AND COALESCE(a.subtype,'') NOT LIKE '%share%' " +
   "AND COALESCE(a.subtype,'') NOT LIKE '%stock%')";
-/** "Counts as an investment" — drives the Holdings card. Broad: any share-priced
- * account is a position you hold and price, even one parked as near-cash. */
+/** "Counts as an investment" — the `isInvestment` API field. Broad: share-priced
+ * accounts plus broker cash (subtype "For Investment"). The Holdings card is
+ * NARROWER: isSharesAcct only, because broker cash is not a position. */
 export const isInvestmentAcct = (a) =>
   String(a.currency).toUpperCase() === 'SHARES' || /share|stock|invest|etf/i.test(String(a.subtype || ''));
 /** "Counts as invested for the liquid-vs-invested net-worth split" — NARROWER than
