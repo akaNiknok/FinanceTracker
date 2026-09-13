@@ -149,6 +149,14 @@ async function flexPoll(t, ref, url, tries, pace) {
     const xml = await res.text();
     if (xml.indexOf('<FlexQueryResponse') !== -1) return { xml };
     code = xmlTag(xml, 'ErrorCode');
+    // An HTTP error carrying no <ErrorCode> is not IBKR talking. The Flex service answers
+    // 200 with XML even when it REFUSES — a bad token is a 200 with 1015 — so a non-200
+    // means the request never reached it. 2026-09-13 spent all six polls on a 403 whose
+    // body was the plain text "error code: 1000", an edge error page rather than a Flex
+    // reply. Replaying the same shut door cannot help, so it gets the one recovery a dead
+    // reference code gets: a fresh request, which resolves the host again and goes
+    // through ndcdyn first.
+    if (res.status >= 400 && !code) return { blocked: true, last: flexWhy(res.status, xml) };
     // 1017 says the code is bad outright. Nothing changes by asking again with it.
     if (code && flexStaleRef(code) && !flexRetryable(code)) return { stale: code, last: flexWhy(res.status, xml) };
     if (code && !flexRetryable(code))
@@ -172,16 +180,22 @@ export async function pricesJob(env, pace = FLEX_PACE) {
   // One fresh reference code, once. A 1020 against a URL shape that IBKR does validate
   // points at the code rather than the request, and v2.8.2 replayed the same code six
   // times before giving up — the one response that could not have helped.
-  if (!got.xml && got.stale) {
+  if (!got.xml && (got.stale || got.blocked)) {
     await sleep(pace.wait);          // do not stack the second send on the per-minute limit
     ({ ref, url } = await flexSend(t, q));
     const retry = await flexPoll(t, ref, url, pace.retryTries, pace);
-    got = { xml: retry.xml, last: retry.last || got.last, stale: retry.stale, resent: true };
+    got = { xml: retry.xml, last: retry.last || got.last, stale: retry.stale,
+            blocked: retry.blocked, resent: true };
   }
 
+  // "Not ready" and "never arrived" are different faults with different repairs: one
+  // waits, the other is an edge between us and IBKR. The tries count is meaningless for
+  // a block, which stops at the first reply instead of spending the budget.
   if (!got.xml)
-    throw new Error('Flex statement not ready after ' + (got.resent ? 'two reference codes' :
-      pace.tries + ' tries') + '. Last reply: ' + got.last);
+    throw new Error((got.blocked
+      ? 'Flex request blocked before IBKR answered — no error code in the reply'
+      : 'Flex statement not ready after ' + (got.resent ? 'two reference codes' :
+        pace.tries + ' tries')) + '. Last reply: ' + got.last);
 
   const positions = parsePositions(got.xml);
   if (!positions.length) return { written: 0, message: 'No open positions in the statement.' };
