@@ -790,13 +790,16 @@ function d1(db) {
       '<OpenPositions><OpenPosition symbol="VWRA" position="12.5" markPrice="122.4" currency="USD" />' +
       '</OpenPositions></FlexStatement></FlexQueryResponse>';
 
-    // Each case is a script: a function of the request URL returning the body to answer.
+    // Each case is a script: a function of the request URL returning the body to answer,
+    // or {status, body} when the case is about the HTTP status rather than the XML.
     const withFetch = async (reply, fn) => {
       const real = globalThis.fetch;
       const calls = [];
       globalThis.fetch = async (u) => {
         calls.push(String(u));
-        return { status: 200, text: async () => reply(String(u), calls.length) };
+        const r = reply(String(u), calls.length);
+        const { status = 200, body = r } = typeof r === 'string' ? {} : r;
+        return { status, text: async () => body };
       };
       try { return { out: await fn(), calls }; } finally { globalThis.fetch = real; }
     };
@@ -883,6 +886,27 @@ function d1(db) {
           /1012.*Token has expired.*Make a new Flex token/s); });
       assert.strictEqual(calls.filter(isSend).length, 1, 'an expired token is not fixed by a second reference code');
       assert.strictEqual(calls.length, 2, 'a fatal code must not be polled');
+    });
+
+    test('a 403 with no error code is a shut door: one fresh request, not five more polls', async () => {
+      // The 2026-09-13 failure. Six polls all answered 403 with the plain-text body
+      // "error code: 1000" — an edge error page, not IBKR, which answers 200 with XML
+      // even to refuse. The job spent its whole budget on a request that never landed
+      // and never pulled the one lever it has.
+      let sends = 0;
+      const { out, calls } = await withFetch((u) => {
+        if (isSend(u)) return sendOk(++sends === 1 ? '8888888888' : '9999999999');
+        return refOf(u) === '8888888888' ? { status: 403, body: 'error code: 1000' } : statement;
+      }, () => jobs.pricesJob(jobEnv, PACE));
+      assert.strictEqual(out.written, 1, 'the fresh request never happened');
+      assert.strictEqual(calls.filter((u) => !isSend(u) && refOf(u) === '8888888888').length, 1,
+        'a blocked poll must stop at once, not spend the patience budget');
+    });
+
+    test('a block that does not clear says so, instead of blaming a slow statement', async () => {
+      await withFetch((u) => isSend(u) ? sendOk('1010101010') : { status: 403, body: 'error code: 1000' },
+        async () => { await assert.rejects(() => jobs.pricesJob(jobEnv, PACE),
+          /blocked before IBKR answered.*403 error code: 1000/s); });
     });
 
     test('two dead reference codes report the last reply, not a bare "not ready"', async () => {
