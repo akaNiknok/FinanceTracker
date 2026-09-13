@@ -13,10 +13,10 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 ## What it does
 
 - **Telegram bot.** Send "coffee 120 maya". The bot writes the row and answers with a receipt that has an **Undo** button. One message can hold more than one transaction. The bot also answers `/balance` and questions such as "how much on food this month".
-- **Progressive web app.** Seven screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
+- **Progressive web app.** Six screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
 - **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
 - **Net worth history.** Each day the app records the total net worth for the month. The Dashboard shows the history as a line on the cash-flow chart.
-- **Retirement countdown.** The Dashboard shows the time to financial independence as years and months, with a progress bar. The target is 25 times the yearly expenses. The app calculates the date one time each month, at the month close, thus the count goes down each day.
+- **Retirement countdown.** The Dashboard shows the time to financial independence as years and months, with a progress bar. The target is 25 times the yearly expenses. The app calculates the date at each month close, thus the count goes down each day.
 - **Two more parts.** A nightly job reads the share prices from Interactive Brokers. A Tax screen collects the data for the Philippine BIR 8 percent regime.
 
 ## Architecture
@@ -57,27 +57,27 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 
 ## Engineering decisions
 
-**The Worker exists because Telegram refuses a redirect.** The first version sent the webhook to Apps Script. The bot answered again and again. `getWebhookInfo` gave the cause: `"Wrong response from the webhook: 302 Found"`. Apps Script always answers a POST with a redirect. A 15-line Worker answered Telegram with the code 200, then sent the message to Apps Script. That Worker is now the whole backend.
+**The Worker exists because Telegram refuses a redirect.** The first version sent the webhook to Apps Script, and the bot answered again and again. `getWebhookInfo` gave the cause: `"Wrong response from the webhook: 302 Found"`. Apps Script always answers a POST with a redirect. A 15-line Worker answered Telegram with the code 200, then sent the message to Apps Script. That Worker is now the whole backend.
 
-**The database moved because the runtime was the cost, not the storage.** A measurement showed that an API call needed 0.5 to 2 seconds, and that the Apps Script invocation and its mandatory redirect caused most of the delay. A different database below Apps Script would move only 200 to 800 milliseconds. Thus version 2.0.0 removed Apps Script from the request path and put the data in D1, on the Worker that was already deployed.
+**The database moved because the runtime was the cost, not the storage.** A measurement showed that an API call needed 0.5 to 2 seconds, and that the Apps Script invocation and its mandatory redirect caused most of the delay. A different database below Apps Script would move only 200 to 800 milliseconds. Thus version 2.0.0 removed Apps Script from the request path and put the data in D1.
 
 **Apps Script keeps the mailbox only.** `GmailApp` is free and permitted access to the owner mailbox, and it has no equivalent outside the platform. Thus two files stay: a courier that sends the text of each labelled email to the Worker, and a puller that writes a copy of the database into a spreadsheet each night.
 
-**The money is an integer.** Each amount is a count of millionths of a unit. The conversion to a decimal is at the API boundary only. Thus a sum is exact, and the same column holds a fractional quantity of shares.
+**The money is an integer.** Each amount is a count of millionths of a unit, and the conversion to a decimal is at the API boundary only. Thus a sum is exact, and the same column holds a fractional quantity of shares.
 
-**The database calculates the derived values.** The reporting month and the peso amount are generated columns. The type, the segment and the currency come from a join. The balances come from two group-by queries. Thus no code writes a value that it can calculate, which is the same rule the workbook formulas gave before.
+**The database calculates the derived values.** The reporting month and the peso amount are generated columns. The type, the segment and the currency come from a join. The balances come from two group-by queries. Thus no code writes a value that it can calculate.
 
 **The offline queue accepts idempotent writes only.** The app makes the identifier before the first attempt. If the connection fails after the server wrote the row, the second attempt gives the answer "duplicate", and the app counts this answer as a success. Edits and deletions refuse to operate offline, because they are not idempotent.
 
-**One deduplication layer was not sufficient.** A deterministic row identifier stops a second row, but the check is after the slow language model call. Telegram sent the message again first. The webhook now claims the update identifier at the first line. The row identifier stops a duplicate row. The claim stops the storm.
+**One deduplication layer was not sufficient.** A deterministic row identifier stops a second row, but the check is after the slow language model call, and Telegram sent the message again first. The webhook now claims the update identifier at the first line. The row identifier stops a duplicate row. The claim stops the storm.
 
-**The Gmail ingest uses the bot.** The courier has no parser for each bank. The Worker sends the email text to the function that reads a Telegram message, then to the same write function. Thus an email gives the same receipt and the same **Undo** button as a message that you typed.
+**The Gmail ingest uses the bot.** The courier has no parser for each bank. The Worker sends the email text to the function that reads a Telegram message, then to the same write function. Thus an email gives the same receipt and the same **Undo** button as a message that you typed. There is one parser, not two.
 
-**The application carries its own typeface.** The first version asked Google Fonts for the font Inter. A measurement gave 146 kilobytes on a first installation, which was 72 percent of the total. The style sheet had a cache time of one day, so a phone requested it again each day. The font also failed when the phone had no connection. The two font files are now in the repository, and the service worker holds them.
+**The application carries its own typeface.** The first version asked Google Fonts for the font Inter. A measurement gave 146 kilobytes on a first installation, which was 72 percent of the total. The style sheet had a cache time of one day, so a phone requested it again each day, and the font also failed when the phone had no connection. The two font files are now in the repository, and the service worker holds them.
 
-**The cache asks the correct question.** One counter in the database recorded the version of the data. Each write increased it, and the app downloaded each screen again. An automatic write at 03:00 thus made the next start of the app expensive, because the counter cannot say which screen changed. Each read now carries an ETag, which is a hash of the answer. The app sends the tag back, and the server answers 304 with no content when the answer is the same. The tag also knows the month, the year and the page, so an old month does not download again. No write function must remember to invalidate a cache.
+**The cache asks the correct question.** One counter in the database recorded the version of the data. Each write increased it, and the app downloaded each screen again. An automatic write at 03:00 thus made the next start of the app expensive, because the counter cannot say which screen changed. Each read now carries an ETag, which is a hash of the answer. The app sends the tag back, and the server answers 304 with no content when the answer is the same. The tag also knows the month, the year and the page, so an old month does not download again, and no write function must remember to invalidate a cache.
 
-**Infrastructure that the project removed.** The first client was an n8n workflow on a laptop, and a migration to a virtual machine started, then stopped. The bot moved into Apps Script, then into the Worker. The project has no virtual machine, no web server, no TLS certificates, no dynamic DNS name and no container stack.
+**Infrastructure that the project removed.** The first client was an n8n workflow on a laptop, and a migration to a virtual machine started, then stopped. The bot moved into Apps Script, then into the Worker. The project now has no virtual machine, no web server, no TLS certificate, no dynamic DNS name and no container stack.
 
 **A feature that the data removed.** A job calculated the daily interest. The bank gave 24.50 pesos, and the job gave 25.83 pesos, because the bank does not use the daily balance multiplied by the rate. The project stopped the job for that bank, then removed the job completely in v2.0.1. A calculation that does not agree with the bank is worse than no calculation.
 
@@ -85,13 +85,13 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 
 | Item | Value |
 | --- | --- |
-| Backend | approximately 2 600 lines of JavaScript in the Worker |
-| Database schema | 156 lines of SQL, 11 tables and 1 view |
-| Frontend | approximately 3 470 lines, no framework and no bundler |
-| Apps Script | approximately 510 lines in 4 files, mail and backup only |
+| Backend | approximately 3 110 lines of JavaScript in the Worker |
+| Database schema | 5 migration files, 12 tables and 1 view |
+| Frontend | approximately 3 620 lines, no framework and no bundler |
+| Apps Script | approximately 430 lines in 3 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 122 tests operate offline with `npm test`, and 76 of them use a real SQLite database |
-| Releases | 57 tagged versions, each one from one command |
+| Tests | 124 tests operate offline with `npm test`, and 78 of them use a real SQLite database |
+| Releases | 73 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
 
@@ -102,7 +102,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 - **The language model can read an email incorrectly.** Each receipt has an **Undo** button and a button that shows the source email.
 - **A screen that stays open does not refresh itself.** The app revalidates a screen when you go to it.
 - **The Dashboard downloads again after each write.** Each month of the Dashboard shows the live net worth, so each write changes the answer. The other screens answer 304.
-- **The system does not know a corporate action.** A split of shares changes the price at IBKR and does not change the ledger. The nightly job compares the two counts and sends a message. A person then corrects the earlier rows.
+- **The system does not know a corporate action.** A split of shares changes the price at IBKR and does not change the ledger. The nightly job compares the two counts and sends a message. A person corrects the earlier rows.
 - **The Tax screen shows one year.** Use the year list at the top of the screen to see an earlier year.
 
 ---
@@ -171,7 +171,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | `owner_email` | It identifies the owner. |
 | `tg_last_ids` | The code writes this value. Do not change it manually. |
 | `app_url` | The address of the app. The code writes this value. The rescue cron reads it to build the Edit button. Do not change it manually. |
-| `data_version` | Not in use since v2.9.0. A later version removes the row. Do not change it. |
+| `data_version`, `ledger_first_year` | No code reads these rows. A later version removes them. Do not change them. |
 
 ### Triggers and schedules
 
@@ -179,8 +179,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | --- | --- | --- |
 | `gmail_ingest` | Apps Script, add it manually | Each 5 minutes |
 | `backup_run` | Apps Script, run `backup_install()` one time | Each day, approximately 03:00 |
-| IBKR prices | Cloudflare cron, in `wrangler.toml` | 06:00 Manila time |
-| Net worth snapshot | The same Cloudflare cron, after the prices | 06:00 Manila time |
+| IBKR prices, then the net worth snapshot | Cloudflare cron, in `wrangler.toml` | 06:00 Manila time |
 | Telegram message rescue | A second Cloudflare cron, in `wrangler.toml` | Each 2 minutes |
 
 Cloudflare does not do a job again after a failure. Thus each job sends a Telegram message if it fails. Apps Script disables a trigger after a number of failures.
@@ -191,7 +190,7 @@ Cloudflare does not do a job again after a failure. Thus each job sends a Telegr
 
 ### Gmail, Telegram and IBKR
 
-- **Apps Script permissions.** The project declares no `oauthScopes`, thus Apps Script calculates the list from the code at each push. A push that adds a `.gs` file or removes one changes that list, and each existing trigger then stops until a person runs a function in the editor one time and accepts the screen. Expect this after each push that changes the set of files.
+- **Apps Script permissions.** The project declares no `oauthScopes`, thus Apps Script calculates the list from the code at each push. A push that adds a `.gs` file or removes one changes that list, and each existing trigger then stops until a person runs a function in the editor one time and accepts the screen.
 - **Gmail.** The courier searches for `in:inbox label:"Finance Tracker"`. To add a bank or to remove a bank, change the Gmail filter that applies the label.
 - **Telegram.** To set the webhook, use the Telegram `setWebhook` method with the address `<worker>/tg`, the secret token, and the update types `message` and `callback_query`. The buttons do not operate without `callback_query`.
 - **IBKR.** In Client Portal, make a Flex Query that has the Open Positions section with the fields Symbol, Position, Mark Price and Currency. Enable the Flex Web Service, then make a token with the maximum validity.
@@ -212,12 +211,12 @@ npm run dev:seed         # fill the local database with invented data
 npm run migrate          # apply the pending database migrations
 npm run tail             # read the live Worker log
 npm run tail:staging     # read the staging Worker log
-npm run push             # send the two files to Apps Script
+npm run push             # send the Apps Script files
 ```
 
 ### The staging app
 
-The `develop` branch deploys to a second Worker. Each push to `develop` starts the Staging workflow. The workflow applies the migrations, then deploys. Use the staging app to examine a change before you merge the release.
+The `develop` branch deploys to a second Worker. Each push to `develop` starts the Staging workflow, which applies the migrations, then deploys. Use the staging app to examine a change before you merge the release.
 
 Staging is separate in every way that matters. It has its own database. It has no cron, so it never calls IBKR. It has no bot token and no email job. It needs one secret only:
 
@@ -231,9 +230,7 @@ The database starts empty. Fill it from your computer:
 npm run seed:staging
 ```
 
-The seed is `worker/seed.sql`, which holds invented data. A normal push never reseeds, so your test data stays while you work. Use the same command again for a clean database.
-
-The Staging workflow can also do it: select **Run workflow**, then set **reseed** to true. **GitHub shows that button only when the workflow file is on the default branch.** So the button appears after the next release moves `staging.yml` into `main`. Until then, use the command above.
+The seed is `worker/seed.sql`, which holds invented data. A normal push never reseeds, so your test data stays while you work. Use the same command again for a clean database. The Staging workflow can also do it: select **Run workflow**, then set **reseed** to true.
 
 **Do not copy the real data into staging.** A second copy doubles the damage if a person learns the passphrase.
 
@@ -241,14 +238,14 @@ The Staging workflow can also do it: select **Run workflow**, then set **reseed*
 
 1. Do the work on a `feature/*` branch. Merge the branch into `develop` with a pull request.
 2. Run `npm version patch` or `npm version minor` on `develop`. The command also writes the number into `worker/public/index.html`. Commit the result.
-3. Run `npm run release`. The command tests the code, then opens the pull request from `develop` to `main`. It does not deploy.
+3. Run `npm run release`. The command tests the code, then opens the pull request from `develop` to `main`. **It does not deploy.**
 4. Wait for the CI check. Then merge the pull request on GitHub.
 
-The CI workflow tests each pull request and each push to `develop`. The `main` branch accepts only a pull request with a green check. Nobody approves the release a second time: your merge is the approval. After the merge, the Release workflow moves `develop` forward to `main` again. You can also set auto-merge on the pull request. GitHub then merges it when the check becomes green, and the release starts without you.
+The CI workflow tests each pull request and each push to `develop`. The `main` branch accepts only a pull request with a green check. Nobody approves the release a second time: your merge is the approval. You can also set auto-merge on the pull request. GitHub then merges it when the check becomes green, and the release starts without you.
 
-The merge starts the Release workflow. The workflow applies the database migrations, deploys the Worker, makes the tag, and makes the GitHub release. A merge that does not change the version does nothing. The Apps Script files are not part of this procedure. Send them with `npm run push` when you change them.
+The merge starts the Release workflow. The workflow applies the database migrations, deploys the Worker, makes the tag, and makes the GitHub release. A last job then moves `develop` forward to `main` again. GitHub deletes each merged branch, `develop` included, and that last job makes `develop` again at the same commit. A merge that does not change the version does nothing. The Apps Script files are not part of this procedure. Send them with `npm run push` when you change them.
 
-The workflow needs two GitHub repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Give the token the permissions **Workers Scripts:Edit** and **D1:Edit**, and no more. The token can read all of the financial data, because it can deploy a Worker that is bound to the database. The `main` branch is protected: it accepts only a pull request, and the CI check must pass.
+The workflow needs two GitHub repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Give the token the permissions **Workers Scripts:Edit** and **D1:Edit**, and no more. The token can read all of the financial data, because it can deploy a Worker that is bound to the database.
 
 ### Database migration procedure
 
@@ -274,13 +271,12 @@ The code and the database do not go back together. Undo the code first.
 
 | Indication | What to examine, in this sequence |
 | --- | --- |
-| The bot sends no message at all. | **Wait 4 minutes first.** Since v2.12.0 a cron re-runs a turn that died, thus a late receipt is normal and the message is not lost. If nothing arrives, read `getWebhookInfo`, after you send a new test message. Do not set the webhook again first, because that action erases the last error. An error there means that the message did not arrive. A 403 points to the secret `SECRET_TOKEN`, which must be the same as the script property `TELEGRAM_SECRET_TOKEN`. **If the webhook is clean, run `npm run tail` and send a message.** Since v2.11.0 the bot answers Telegram only after the work, thus Cloudflare no longer stops a slow turn. A slow parse sends "Still working" and continues. If you see the old line `waitUntil() tasks did not complete`, the Worker is a version before v2.11.0. |
+| The bot sends no message at all. | **Wait 4 minutes first.** Since v2.12.0 a cron re-runs a turn that died, thus a late receipt is normal and the message is not lost. If nothing arrives, read `getWebhookInfo`, after you send a new test message. Do not set the webhook again first, because that action erases the last error. An error there means that the message did not arrive. A 403 points to the secret `SECRET_TOKEN`, which must be the same as the script property `TELEGRAM_SECRET_TOKEN`. If the webhook is clean, run `npm run tail` and send a message. A slow parse sends "Still working" and continues. |
 | The bot answers late, or the same message arrives twice. | The rescue cron did the turn again. Read `npm run tail` for the line `rescuing update`. A second receipt says "Already logged", thus no transaction is double. If every message is late, the first turn always fails: examine the Gemini quota. |
 | The bot answers, but the answer is an error. | `npm run tail` while you send a message. Then the Gemini quota in AI Studio. An answer of "Unauthorized" indicates the secret `TELEGRAM_USER_ID`. |
-| The error "Wrong response from the webhook: 302". | The webhook address. It must be the Worker address, and it must end with `/tg`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |
 | An email stays in the inbox, and the transaction is absent. | The courier tries a failed email again for 3 hours, thus wait 10 minutes first. Then read the Worker logs for the line `ingestEmail:`. A message there names the cause, and it is usually the Gemini quota. To make the courier read the email again after that, delete the script property `GMAIL_LAST_TS`. The row identifier is deterministic, thus a transaction that is already recorded does not become double. |
-| A trigger fails with "Authorization is required to perform that action." | `npm run push` changed which files the Apps Script project holds, thus Apps Script calculated the list of permissions again. A list that changes makes the permission of each existing trigger old, in both directions: a permission that goes away has the same result as a permission that arrives. **The repair is one action.** Open the editor, select `gmail_ingest`, press **Run**, then accept the screen that asks for permission. The trigger operates again at the next tick. Do the same for `backup_run`, because the nightly backup fails in the same way, and its own failure email needs the same permission. |
+| A trigger fails with "Authorization is required to perform that action." | `npm run push` changed which files the Apps Script project holds, thus Apps Script calculated the list of permissions again. A list that changes makes the permission of each existing trigger old. **The repair is one action.** Open the editor, select `gmail_ingest`, press **Run**, then accept the screen that asks for permission. The trigger operates again at the next tick. Do the same for `backup_run`. |
 | The job does not record the emails. | The Gmail filter. Then the property `GMAIL_QUERY`, which replaces the label. Then the trigger, because Apps Script can disable it. Then the property `WORKER_URL` and the two `INGEST_TOKEN` values. |
 | The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create financetracker-staging --location=apac`, then write the id into the file. |
 | The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
@@ -290,8 +286,7 @@ The code and the database do not go back together. Undo the code first.
 | The price job says "blocked before IBKR answered". | An edge between the Worker and IBKR refused the request. IBKR never saw it, so no token and no query is at fault. The reply body names the edge, for example "403 error code: 1000". Do nothing the first time: the job tries a second request by itself, and the next run is the following morning. Examine the IBKR system status page if the message arrives on two days. |
 | The share values are 0 or absent. | The Telegram message from the price job. It names the IBKR error code, and it states the repair for a code that needs a person. A code that IBKR clears by itself is retried for 40 seconds first, so one message is one real fault. Then the `symbol` column of the account on the Admin screen. |
 | A balance in pesos is absent, but the native balance is correct. | The exchange rate. Examine `usd_php_fallback` in the `meta` table. |
-| A change is not in the live system. | You did not deploy. `npm run release` deploys the Worker. |
-| The app shows data that is too old. | Push the refresh button. The app compares the data version on each navigation, not continuously. |
+| A change is not in the live system. | Nobody merged the release pull request. `npm run release` only opens it. The merge into `main` deploys. |
 
 **Free plan limits.** Cloudflare permits 100 000 Worker requests each day, 5 GB in D1, 5 million read rows and 100 000 written rows each day, and 5 cron triggers. The static files do not count. Apps Script gives approximately 90 minutes of trigger time each day, and the mail courier uses 6 to 10 percent. Gemini has a limit for each key.
 
@@ -314,10 +309,11 @@ worker/src/            db · api · telegram · gemini · fx · jobs
 worker/migrations/     the SQL schema, one numbered file for each change
 worker/public/         the app: index.html, app.css, app.js, sw.js, icons, manifest
 Gmail.gs, Backup.gs    Apps Script: the mail courier and the nightly backup
-Export.gs              the one-time exporter of the old workbook. Remove it when it is not necessary.
-migrate/               the one-time conversion of the workbook, and the API contract test
-release.js             the only procedure that changes the live system
+Tests.gs               the tests of the Apps Script helpers
+migrate/backfill-nw.js the one-time rebuild of the net worth history
+release.js             it tests the code and opens the release pull request
 test.js, test-api.js   the Node programs that do the tests
+bootstrap.js           it makes a fresh clone or a new worktree runnable
 icons.js               it makes the icons again from an SVG file
 CLAUDE.md              the document for AI assistants
 MEMORY.md              the record of the decisions and the reasons for them
