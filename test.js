@@ -672,6 +672,14 @@ describe('Gmail courier watermark (vm)', () => {
       vm.createContext(app);
       vm.runInContext(fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8'), app, { filename: 'app.js' });
       assert.ok(app.SCREEN_FNS.admin, 'the Admin screen is not registered');
+      // A new transaction defaults to the date the list is filtered to, not today.
+      app.S.screen = 'transactions'; app.S.tx.filters = { date: '2026-02-14' };
+      assert.strictEqual(app.newTxDate(), '2026-02-14');
+      app.S.tx.filters = {};
+      assert.strictEqual(app.newTxDate(), app.isoDate(new Date()));
+      app.S.screen = 'dashboard'; app.S.tx.filters = { date: '2026-02-14' };
+      assert.strictEqual(app.newTxDate(), app.isoDate(new Date()), 'off-screen filter must not leak into the date');
+      app.S.screen = 'dashboard'; app.S.tx.filters = {};
       // Net worth: last point = current total; earlier months roll back through
       // that month's savings UNLESS a real snapshot pins them.
       const cf = [{ month: '2026-Jun', income: 80, expense: 30 },
