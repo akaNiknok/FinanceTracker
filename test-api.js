@@ -1320,6 +1320,104 @@ function d1(db) {
     });
   });
 
+  await describe('Debts: itemising a receivable balance', () => {
+    // Its own database. The shared fixture has no receivable, and every balance
+    // assertion above depends on its exact contents.
+    const ddb = new DatabaseSync(':memory:');
+    const dir = path.join(__dirname, 'worker', 'migrations');
+    fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+      .forEach((f) => ddb.exec(fs.readFileSync(path.join(dir, f), 'utf8')));
+    const denv = { DB: d1(ddb), FX_CACHE: { get: async () => '50', put: async () => {} } };
+    ddb.exec(`
+      INSERT INTO account_types (subtype, type) VALUES ('Savings','Asset'),('Receivable','Asset');
+      INSERT INTO accounts (id,name,currency,subtype,starting_balance_u) VALUES
+        (1,'Maya','PHP','Savings',100000000000),
+        (2,'Instalment','PHP','Receivable',0),      -- one big debt paid down monthly
+        (3,'Roundtrip','PHP','Receivable',0),       -- small same-amount round trips
+        (4,'Opened','PHP','Receivable',5000000000); -- carries a starting balance
+      INSERT INTO categories (id,name,type,segment) VALUES
+        (1,'Expense: Food','Expense','Essentials'), (2,'Transfer: Internal','Transfer',NULL);
+    `);
+    // A charge (the owner pays FOR them) is a transfer INTO the receivable; a repayment
+    // is a transfer OUT of it. Same two shapes the SPA and the bot already write.
+    let n = 0;
+    const charge = (acct, date, amt, desc) => ddb.exec(
+      `INSERT INTO transactions (id,date,category_id,description,account_id,amount_u,to_account_id,to_amount_u)
+       VALUES ('${"d"+String(++n).padStart(3,"0")}','${date}',2,'${desc}',1,${amt * 1e6},${acct},${amt * 1e6})`);
+    const repay = (acct, date, amt, desc) => ddb.exec(
+      `INSERT INTO transactions (id,date,category_id,description,account_id,amount_u,to_account_id,to_amount_u)
+       VALUES ('${"d"+String(++n).padStart(3,"0")}','${date}',2,'${desc}',${acct},${amt * 1e6},1,${amt * 1e6})`);
+    const of = (payload, name) => payload.accounts.find((a) => a.account === name);
+
+    // The instalment shape: small charges that net out, then one big charge, then
+    // equal monthly repayments. This is the case that separates FIFO from LIFO.
+    charge(2, '2026-01-10', 600, 'snack run');
+    repay(2, '2026-01-20', 600, 'paid back');
+    charge(2, '2026-02-01', 1200, 'before the big one');
+    charge(2, '2026-02-02', 12000, 'laptop');
+    repay(2, '2026-02-05', 1200, 'clearing the small one');
+    repay(2, '2026-03-01', 1000, 'instalment 1');
+    repay(2, '2026-04-01', 1000, 'instalment 2');
+
+    // The round-trip shape: spot them, get the exact amount back days later.
+    charge(3, '2026-01-05', 900, 'standing balance');
+    charge(3, '2026-02-10', 140, 'milk tea');
+    repay(3, '2026-02-10', 140, 'milk tea back');
+    charge(3, '2026-03-11', 318, 'lunch');       // two debts, one payment: the case
+    charge(3, '2026-03-11', 154.29, 'coffee');   // the owner was unsure how to handle
+    repay(3, '2026-03-12', 472.29, 'both back');
+
+    test('a big debt is reported against ITSELF, not eaten by older items (FIFO, not LIFO)', async () => {
+      const a = of(await api.getDebts({}, denv), 'Instalment');
+      // 12000 charged, 2000 repaid in two instalments. The Jan and Feb round trips
+      // netted out first, so nothing older is left to absorb them.
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.amount, x.open]),
+        [['laptop', 12000, 10000]]);
+      assert.strictEqual(a.balance, 10000);
+    });
+
+    test('one payment settles several debts at once, and an exact amount beats age', async () => {
+      const a = of(await api.getDebts({}, denv), 'Roundtrip');
+      // The 140 pairs with its own 140 rather than the older 900; the single 472.29
+      // clears BOTH the 318 and the 154.29. Only the standing 900 is left.
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]), [['standing balance', 900]]);
+    });
+
+    test('a part payment leaves the remainder open, not the whole item', async () => {
+      repay(2, '2026-05-01', 250, 'short instalment');
+      const a = of(await api.getDebts({}, denv), 'Instalment');
+      assert.strictEqual(a.items[0].amount, 12000);
+      assert.strictEqual(a.items[0].open, 9750);
+    });
+
+    test('a starting balance is an item, so it cannot vanish from the list', async () => {
+      const a = of(await api.getDebts({}, denv), 'Opened');
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.open, x.date]),
+        [['Opening balance', 5000, null]]);
+    });
+
+    test('overpaying flips the direction — now the owner owes them', async () => {
+      charge(4, '2026-06-01', 100, 'top up');       // 5000 opening + 100 = 5100 owed
+      repay(4, '2026-06-02', 6000, 'paid too much');
+      const a = of(await api.getDebts({}, denv), 'Opened');
+      assert.strictEqual(a.balance, -900);
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]), [['paid too much', -900]]);
+    });
+
+    test('the open items always sum to the account balance — every account, every time', async () => {
+      // The invariant the whole design rests on: the list IS the balance, itemised, so
+      // it can never drift from the ledger the way a stored "paid" flag would.
+      const { accounts } = await api.getAccounts({}, denv);
+      const debts = await api.getDebts({}, denv);
+      assert.strictEqual(debts.accounts.length, 3, 'every receivable account must be reported');
+      for (const d of debts.accounts) {
+        const live = accounts.find((x) => x.name === d.account);
+        assert.strictEqual(d.balance, live.balanceNative, d.account + ': items do not sum to the balance');
+        assert.strictEqual(d.balance, dbm.q2(d.items.reduce((s, x) => s + x.open, 0)), d.account + ': Balance disagrees with its own items');
+      }
+    });
+  });
+
   await describe('HTTP layer', () => {
     test('/api is closed without a credential and open with either one', async () => {
       assert.strictEqual((await call('/api?action=getRecurring')).status, 401);
