@@ -2821,7 +2821,7 @@ function openTxModal(t){
   var wantAcc=(S.screen==='transactions'&&S.tx.filters.account)||prefGet('lastAcct');
   var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===wantAcc;})?wantAcc:'');
 
-  var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate());
   var fPeriod=periodEl(t);
   var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
   var fAcc=comboEl(accs, (t&&t.Account)||defAcc, {placeholder:'Select account'});
@@ -2876,7 +2876,7 @@ function openTransferModal(t){
   }).sort();
   var accs=acctOptions();
 
-  var fDate=inputEl('date', t?isoDate(t.Date):isoDate(new Date()));
+  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate());
   var fPeriod=periodEl(t);
   var defCat=xferCats.indexOf('Transfer: Internal')>=0?'Transfer: Internal':'';
   var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], (t&&t.Category)||defCat, {placeholder:'Select category'});
@@ -3014,6 +3014,11 @@ function openAccountModal(a){
 }
 
 /* ── shared ──────────────────────────────────────────────────────────────── */
+// A date filter on the transactions screen is explicit — a new row defaults to that
+// date, the same way an account filter beats the last-used account.
+function newTxDate(){
+  return (S.screen==='transactions'&&S.tx.filters.date)||isoDate(new Date());
+}
 function isoDate(d){
   if(!d) return '';
   var dt=parseDate(d);
