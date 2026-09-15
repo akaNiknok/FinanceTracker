@@ -131,6 +131,151 @@ export async function getAccounts(args, env) {
   return { status: 'success', accounts };
 }
 
+/**
+ * Itemise a receivable account's balance into the individual debts still open.
+ *
+ * DERIVED, never stored: there is no "paid" flag to keep in step with the ledger and
+ * nothing extra to type when logging. A receivable's rows are folded in date order
+ * and each leg is classified by what it does to the running balance — a leg that
+ * pushes |balance| UP opens a debt item, one that pulls it toward zero settles the
+ * open items. So a single "Transfer: Internal" that repays four small debts at once
+ * clears all four, which is the whole reason this is an allocation and not a form.
+ *
+ * Allocation order: EXACT AMOUNT first, then FIFO (oldest open item).
+ *   * exact-amount, because a real receivable is full of same-amount round trips —
+ *     spot someone 140, get 140 back the same day — and FIFO alone credits that
+ *     payment to some older item instead, so both rows stay open and wrong.
+ *   * FIFO for the rest, because it is the only ordering that survives a long
+ *     instalment plan. Measured against the real ledger before this was written: one
+ *     receivable carried a gadget bought on the owner's card, paid back in 12 equal
+ *     instalments, with a year of small round trips around it. FIFO landed within
+ *     0.5% of the true remaining balance and smallest-first within 3%, but LIFO was
+ *     out by 28% — it holds the charges made days BEFORE the big one open for ever
+ *     and pays the big one down that much too fast. Do NOT "improve" this to LIFO.
+ *     Smallest-first is the debt-snowball rule and fails the other way: it spends
+ *     every payment on the small items, so the big debt never visibly moves.
+ *
+ * The ordering only ever decides LABELS. The sum of the open items equals the account
+ * balance under any ordering, which is what test-api.js asserts.
+ *
+ * Signs follow the account: positive = they owe the owner, negative = the owner owes
+ * them (the same asymmetry netWorthTotals reads). An overpayment empties the queue
+ * and opens an item the other way round, which is exactly what it means.
+ */
+const ROUNDTRIP_DAYS = 14;
+
+/** Days between two 'yyyy-MM-dd' strings. Both come straight out of the date column,
+ * which a CHECK constraint already holds to that shape. */
+const daysApart = (a, b) => Math.abs(Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 86400000;
+
+/**
+ * Cancel the round trips BEFORE anything is allocated: a leg, and the nearby legs
+ * running the other way that add up to exactly it, are one debt that came and went.
+ *
+ * This has to run as its own pass, not inside the fold, for two reasons the real
+ * ledger shows on almost every receivable:
+ *   * a round trip is often recorded the WRONG WAY ROUND — the repayment lands the
+ *     same day as the charge, or the day before it clears. A date-ordered fold then
+ *     spends the repayment on some older debt and leaves the charge open for ever.
+ *   * ONE repayment often clears SEVERAL debts (spot someone lunch and coffee, get a
+ *     single transfer back the next day). A fold that matches one leg to one leg
+ *     cannot see that, and leaves every one of them open.
+ * Both end the same way: the total stays right and every label is wrong, which is the
+ * one thing this screen exists to get right. Matching a run, in either direction,
+ * fixes both spellings at once.
+ *
+ * The exact sum is what keeps this honest — a near miss cancels nothing and falls
+ * through to the fold. Removing a set that sums to zero cannot move the balance, so
+ * the invariant holds whatever this pass does.
+ */
+function cancelRoundTrips(rows) {
+  const dead = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    if (dead.has(i)) continue;
+    // Every unallocated leg running the other way, near enough in time, oldest first.
+    // Either side of i: the single leg is as often the repayment as the charge.
+    const run = [], want = -rows[i].delta_u;
+    let sum = 0;
+    for (let j = 0; j < rows.length; j++) {
+      if (j === i || dead.has(j) || Math.sign(rows[j].delta_u) === Math.sign(rows[i].delta_u)) continue;
+      if (daysApart(rows[i].date, rows[j].date) > ROUNDTRIP_DAYS) continue;
+      run.push(j); sum += rows[j].delta_u;
+      if (sum === want) { dead.add(i); run.forEach((k) => dead.add(k)); break; }
+    }
+  }
+  return rows.filter((_, i) => !dead.has(i));
+}
+
+function allocateDebts(rows, openingU) {
+  const q = [];
+  let bal = 0;
+  const open = (date, description, txId, u) => { q.push({ date, description, txId, orig: u, open: u }); bal += u; };
+  if (openingU) open(null, 'Opening balance', null, openingU);
+  for (const r of cancelRoundTrips(rows)) {
+    let amt = r.delta_u;
+    while (amt !== 0) {
+      // Nothing open, or the leg deepens the debt: a new item. q is single-signed by
+      // construction, so "q is empty" and "bal is 0" always agree.
+      if (!q.length || Math.sign(amt) === Math.sign(bal)) { open(r.date, r.description || '', r.id, amt); break; }
+      // A settlement. An open item of exactly the opposite amount wins over age — this
+      // is what the pre-pass cannot reach, a repayment that matches a charge made
+      // months ago. findIndex keeps FIFO among equals (identical repeated charges).
+      let i = q.findIndex((x) => x.open === -amt);
+      if (i < 0) i = 0;
+      const it = q[i];
+      const take = Math.min(Math.abs(amt), Math.abs(it.open)) * Math.sign(it.open);
+      it.open -= take; bal -= take; amt += take;
+      if (it.open === 0) q.splice(i, 1);
+    }
+  }
+  return q;
+}
+
+/**
+ * One entry per receivable account, each with the debts still open against it.
+ * No arguments: the whole payload is a handful of rows, and a pure function of the
+ * data, so the ETag carries it.
+ *
+ * NOT_SHARES_SRC is not needed here even though this counts Transfers: the fold runs
+ * in the receivable's NATIVE units and a receivable is never share-priced, so the leg
+ * being read is always money and never a share quantity.
+ */
+export async function getDebts(args, env) {
+  const r = await refs(env);
+  const accts = r.accounts.filter(isReceivable);
+  if (!accts.length) return { status: 'success', accounts: [] };
+  const holes = accts.map(() => '?').join(',');
+  const rows = (await env.DB.prepare(
+    'SELECT t.id, t.date, t.description, ra.id AS acct_id, ' +
+    'CASE WHEN t.account_id = ra.id ' +
+    "     THEN (CASE WHEN c.type = 'Income' THEN t.amount_u ELSE -t.amount_u END) " +
+    '     ELSE t.to_amount_u END AS delta_u ' +
+    'FROM transactions t ' +
+    'JOIN categories c ON c.id = t.category_id ' +
+    'JOIN accounts ra ON ra.id = t.account_id OR ra.id = t.to_account_id ' +
+    'WHERE ra.id IN (' + holes + ') ' +
+    'ORDER BY t.date, t.created_at, t.id'
+  ).bind(...accts.map((a) => a.id)).all()).results;
+
+  return { status: 'success', accounts: accts.map((a) => {
+    const items = allocateDebts(rows.filter((x) => x.acct_id === a.id), a.starting_balance_u || 0);
+    return {
+      account: a.name,
+      currency: a.currency,
+      // The sum of the open items, by construction. Reported so the SPA needs no
+      // second call to head the list with "owes 1,234.56".
+      balance: q2(fromU(items.reduce((s, x) => s + x.open, 0))),
+      items: items.map((x) => ({
+        txId: x.txId,
+        date: x.date,
+        description: x.description,
+        amount: q2(fromU(x.orig)),   // what the debt started at
+        open: q2(fromU(x.open))      // still unpaid; less than amount = part paid
+      }))
+    };
+  }) };
+}
+
 export async function getRecurring(args, env) {
   const rows = (await env.DB.prepare('SELECT * FROM recurring ORDER BY id').all()).results;
   return { status: 'success', rows: rows.map((r) => ({
