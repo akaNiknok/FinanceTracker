@@ -38,3 +38,8 @@ worker/.dev-backfill.sql
 
 # git worktrees created by Claude Code live here
 .claude/worktrees/
+
+# Stray SQLite files a mistyped script argument can create (node:sqlite makes the
+# file when the path does not exist). One reached main in v2.15.1.
+x
+*.sqlite
