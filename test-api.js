@@ -1334,7 +1334,10 @@ function d1(db) {
         (1,'Maya','PHP','Savings',100000000000),
         (2,'Instalment','PHP','Receivable',0),      -- one big debt paid down monthly
         (3,'Roundtrip','PHP','Receivable',0),       -- small same-amount round trips
-        (4,'Opened','PHP','Receivable',5000000000); -- carries a starting balance
+        (4,'Opened','PHP','Receivable',5000000000), -- carries a starting balance
+        (5,'Spends','PHP','Receivable',0),          -- expenses charged to the tab
+        (6,'Worded','PHP','Receivable',0),          -- descriptions that name the debt
+        (7,'Routed','PHP','Receivable',0);          -- descriptions that name an account
       INSERT INTO categories (id,name,type,segment) VALUES
         (1,'Expense: Food','Expense','Essentials'), (2,'Transfer: Internal','Transfer',NULL);
     `);
@@ -1347,6 +1350,11 @@ function d1(db) {
     const repay = (acct, date, amt, desc) => ddb.exec(
       `INSERT INTO transactions (id,date,category_id,description,account_id,amount_u,to_account_id,to_amount_u)
        VALUES ('${"d"+String(++n).padStart(3,"0")}','${date}',2,'${desc}',${acct},${amt * 1e6},1,${amt * 1e6})`);
+    // A SPEND: an expense funded off the tab, with no destination account. This is
+    // the leg that says 'they bought something', as against 'they handed money back'.
+    const spend = (acct, date, amt, desc) => ddb.exec(
+      `INSERT INTO transactions (id,date,category_id,description,account_id,amount_u)
+       VALUES ('${"d"+String(++n).padStart(3,"0")}','${date}',1,'${desc}',${acct},${amt * 1e6})`);
     const of = (payload, name) => payload.accounts.find((a) => a.account === name);
 
     // The instalment shape: small charges that net out, then one big charge, then
@@ -1366,6 +1374,26 @@ function d1(db) {
     charge(3, '2026-03-11', 318, 'lunch');       // two debts, one payment: the case
     charge(3, '2026-03-11', 154.29, 'coffee');   // the owner was unsure how to handle
     repay(3, '2026-03-12', 472.29, 'both back');
+
+    // The spend shape: one big debt, part-settled in cash and part in kind, then a
+    // small unrelated expense charged to the same tab. Every amount below is unique,
+    // so nothing here is decided by the exact-amount rule — these test the WORDS.
+    charge(5, '2026-01-05', 12000, 'tablet');
+    repay(5, '2026-02-01', 2000, 'cash half, rest is the Switch game');
+    spend(5, '2026-02-01', 1000, 'Switch game');       // words recur above: a payment
+    spend(5, '2026-02-10', 50, 'Parking Ayala Cloverleaf');   // orphan words: own debt
+
+    // Two debts open at once, and a repayment that names which one it pays. FIFO alone
+    // would take the older one, so this only passes if the shared word wins.
+    charge(6, '2026-01-05', 700, 'older unrelated thing');
+    charge(6, '2026-01-20', 900, 'the tablet');
+    repay(6, '2026-03-01', 400, 'for the tablet');
+
+    // A description that names an ACCOUNT rather than the debt. Without account names
+    // as stopwords, "Maya" would pull this onto the handset instead of the oldest.
+    charge(7, '2026-01-05', 300, 'dinner');
+    charge(7, '2026-01-20', 500, 'Maya handset');
+    repay(7, '2026-03-01', 200, 'Transfer to Maya');
 
     test('a big debt is reported against ITSELF, not eaten by older items (FIFO, not LIFO)', async () => {
       const a = of(await api.getDebts({}, denv), 'Instalment');
@@ -1404,12 +1432,46 @@ function d1(db) {
       assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]), [['paid too much', -900]]);
     });
 
+    test('a spend nothing else refers to opens its own item, instead of paying the big debt', async () => {
+      // The reported bug: a small expense charged to a receivable (they bought the
+      // owner parking) settled the big instalment, which then read that much cheaper
+      // than it really was. It is a debt running the other way, not a payment.
+      const a = of(await api.getDebts({}, denv), 'Spends');
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]),
+        [['tablet', 9000], ['Parking Ayala Cloverleaf', -50]]);
+      assert.strictEqual(a.balance, 8950);   // still the account balance, itemised
+    });
+
+    test('a spend whose words appear elsewhere is still a payment, not a new debt', async () => {
+      // Half an instalment settled in kind: a game handed over, described on its own
+      // leg and named again on the cash leg. Its words recur, so it is part of a story
+      // and keeps paying the tablet down — it must NOT split off the way parking does.
+      const a = of(await api.getDebts({}, denv), 'Spends');
+      assert.strictEqual(a.items[0].open, 9000, '12000 less 2000 cash and 1000 in kind');
+      assert.ok(!a.items.some((x) => /Switch game/.test(x.description)),
+        'a spend named by another row must not become its own debt item');
+    });
+
+    test('a shared description word beats FIFO', async () => {
+      const a = of(await api.getDebts({}, denv), 'Worded');
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]),
+        [['older unrelated thing', 700], ['the tablet', 500]]);
+    });
+
+    test('an account name in a description is routing, not a subject', async () => {
+      // "Transfer to Maya" says where the money went. Matching on it would pair two
+      // unrelated rows, so account names are stopwords and this falls through to FIFO.
+      const a = of(await api.getDebts({}, denv), 'Routed');
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]),
+        [['dinner', 100], ['Maya handset', 500]]);
+    });
+
     test('the open items always sum to the account balance — every account, every time', async () => {
       // The invariant the whole design rests on: the list IS the balance, itemised, so
       // it can never drift from the ledger the way a stored "paid" flag would.
       const { accounts } = await api.getAccounts({}, denv);
       const debts = await api.getDebts({}, denv);
-      assert.strictEqual(debts.accounts.length, 3, 'every receivable account must be reported');
+      assert.strictEqual(debts.accounts.length, 6, 'every receivable account must be reported');
       for (const d of debts.accounts) {
         const live = accounts.find((x) => x.name === d.account);
         assert.strictEqual(d.balance, live.balanceNative, d.account + ': items do not sum to the balance');

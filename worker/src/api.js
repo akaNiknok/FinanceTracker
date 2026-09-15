@@ -206,22 +206,72 @@ function cancelRoundTrips(rows) {
   return rows.filter((_, i) => !dead.has(i));
 }
 
-function allocateDebts(rows, openingU) {
+/** Words that carry no subject: the plumbing of a description, not what it is about.
+ * ACCOUNT NAMES are added to this per call — "Transfer to MariBank" names the route
+ * the money took, not the debt it pays, and matching on it pairs unrelated rows. */
+const DEBT_STOPWORDS = ('for to from the and of my in on at be is it back paid pay debt repayment ' +
+  'payment transfer minus plus adjustment unlogged catch balance opening money cash').split(' ');
+
+/** The words of a description that say what the debt was FOR. Empty = no signal. */
+function debtWords(text, stop) {
+  return String(text || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
+    .filter((w) => w.length > 2 && stop.indexOf(w) < 0);
+}
+
+/**
+ * Fold the legs into open debt items. `stop` is the stopword list (generic words plus
+ * every account name), built once per request by getDebts.
+ *
+ * A SETTLEMENT picks what it pays off in this order:
+ *   ① the exact amount, anywhere in the queue — the strongest signal there is, and the
+ *     one cancelRoundTrips cannot reach because it only looks at nearby dates;
+ *   ② a shared description word — "For iPad" pays "iPad for Berry", "From Hippers"
+ *     pays "Hippers". This is the owner's own habit, already in the data;
+ *   ③ nothing, if this leg is a SPEND whose words appear NOWHERE else in the account.
+ *     That is the case this rule exists for: a ₱50 parking charged to a receivable is
+ *     the other person buying something for the owner — a fresh IOU running the other
+ *     way — not an instalment on the ₱42,990 tablet that happens to be the oldest
+ *     thing open. It opens its own item, and the two show as separate lines;
+ *   ④ otherwise FIFO, the oldest open item.
+ *
+ * ③ is narrow on BOTH counts, and each half was needed to keep a real row right.
+ *   * SPEND only. A transfer out of the receivable is the repayment channel, so it
+ *     always settles something even when its description says nothing useful — most
+ *     do not ("Transfer to MariBank" is routing, not a subject).
+ *   * ORPHAN WORDS only. A gift logged as a spend can still be half of a payment: one
+ *     real instalment was settled as cash plus a game, described "<game>" on one leg
+ *     and "For <plan> minus <game>" on the other. Its words appear twice, so it is
+ *     part of a story and rule ③ leaves it alone; "Parking Ayala Cloverleaf" appears
+ *     once and has nothing to be part of. A word used once cannot link to anything.
+ */
+function allocateDebts(rows, openingU, stop) {
   const q = [];
   let bal = 0;
+  // How many rows use each word, so rule ③ can tell an orphan spend from one that is
+  // half of something described elsewhere.
+  const freq = Object.create(null);
+  rows.forEach((r) => debtWords(r.description, stop).forEach((w) => { freq[w] = (freq[w] || 0) + 1; }));
   const open = (date, description, txId, u) => { q.push({ date, description, txId, orig: u, open: u }); bal += u; };
   if (openingU) open(null, 'Opening balance', null, openingU);
   for (const r of cancelRoundTrips(rows)) {
     let amt = r.delta_u;
+    const words = debtWords(r.description, stop);
     while (amt !== 0) {
       // Nothing open, or the leg deepens the debt: a new item. q is single-signed by
       // construction, so "q is empty" and "bal is 0" always agree.
       if (!q.length || Math.sign(amt) === Math.sign(bal)) { open(r.date, r.description || '', r.id, amt); break; }
-      // A settlement. An open item of exactly the opposite amount wins over age — this
-      // is what the pre-pass cannot reach, a repayment that matches a charge made
-      // months ago. findIndex keeps FIFO among equals (identical repeated charges).
+      // ① exact amount. findIndex keeps FIFO among equals (identical repeated charges).
       let i = q.findIndex((x) => x.open === -amt);
-      if (i < 0) i = 0;
+      // ② a shared word with an open item.
+      if (i < 0 && words.length) {
+        i = q.findIndex((x) => debtWords(x.description, stop).some((w) => words.indexOf(w) >= 0));
+      }
+      // ③ a spend nothing else in the ledger refers to is its own debt, not a payment
+      // on someone else's. A word used once has nothing it could be part of.
+      if (i < 0 && r.spend && words.length && words.every((w) => freq[w] === 1)) {
+        open(r.date, r.description || '', r.id, amt); break;
+      }
+      if (i < 0) i = 0;   // ④ FIFO
       const it = q[i];
       const take = Math.min(Math.abs(amt), Math.abs(it.open)) * Math.sign(it.open);
       it.open -= take; bal -= take; amt += take;
@@ -249,7 +299,10 @@ export async function getDebts(args, env) {
     'SELECT t.id, t.date, t.description, ra.id AS acct_id, ' +
     'CASE WHEN t.account_id = ra.id ' +
     "     THEN (CASE WHEN c.type = 'Income' THEN t.amount_u ELSE -t.amount_u END) " +
-    '     ELSE t.to_amount_u END AS delta_u ' +
+    '     ELSE t.to_amount_u END AS delta_u, ' +
+    // A leg with no destination is a SPEND off the tab (they bought something), not a
+    // repayment. allocateDebts rule ③ needs to tell the two apart.
+    '(t.account_id = ra.id AND t.to_account_id IS NULL) AS spend ' +
     'FROM transactions t ' +
     'JOIN categories c ON c.id = t.category_id ' +
     'JOIN accounts ra ON ra.id = t.account_id OR ra.id = t.to_account_id ' +
@@ -257,8 +310,13 @@ export async function getDebts(args, env) {
     'ORDER BY t.date, t.created_at, t.id'
   ).bind(...accts.map((a) => a.id)).all()).results;
 
+  // Account names join the stopwords: a description naming one is saying where the
+  // money went, which is true of every transfer and tells us nothing about the debt.
+  const stop = DEBT_STOPWORDS.concat(
+    r.accounts.reduce((s, x) => s.concat(debtWords(x.name, [])), []));
+
   return { status: 'success', accounts: accts.map((a) => {
-    const items = allocateDebts(rows.filter((x) => x.acct_id === a.id), a.starting_balance_u || 0);
+    const items = allocateDebts(rows.filter((x) => x.acct_id === a.id), a.starting_balance_u || 0, stop);
     return {
       account: a.name,
       currency: a.currency,
