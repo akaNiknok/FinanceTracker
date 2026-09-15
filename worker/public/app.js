@@ -1643,10 +1643,82 @@ function renderAccounts(){
       rcard.appendChild(rl); w.appendChild(rcard);
     }
 
+    var dbt=el('div'); dbt.id='debtsCard';
+    w.appendChild(dbt);
+
     var inv=el('div'); inv.id='invCards';
     w.appendChild(inv);
     paint(w);
     loadInvestments();
+    loadDebts();
+  }).catch(showErr);
+}
+
+/* Open debts per receivable — the itemised balance behind each IOU account.
+ *
+ * getDebts derives this from the ledger (see api.js allocateDebts), so there is
+ * nothing to tick off here and no write path: the card is a READING of the same
+ * rows the Assets list already totals. Its own cachedCall rather than a field on
+ * getBootstrap — this is one screen's card, and boot is the payload every launch
+ * pays for.
+ *
+ * Sign follows the account, exactly as the Accounts tiles split it: positive means
+ * they owe the owner, negative means the owner owes them. The two read differently
+ * enough to be worth saying in words ("owes you" / "you owe"), because a minus sign
+ * in front of a peso amount is the one thing people misread here.
+ */
+function loadDebts(){
+  return cachedCall('debts', function(et){return gs('api_getDebts',null,et);}, function(res){
+    var host=$('#debtsCard'); if(!host) return;
+    host.innerHTML='';
+    var people=(res.accounts||[]).filter(function(p){return (p.items||[]).length;});
+    if(!people.length) return;
+
+    var card=el('div','card');
+    var h=el('div','row-between'); h.style.marginBottom='12px';
+    var n=people.reduce(function(s,p){return s+p.items.length;},0);
+    var ttl=el('div','card-h','Debts &amp; IOUs <span style="opacity:.55">· '+n+'</span>'); ttl.style.margin='0';
+    h.appendChild(ttl);
+    card.appendChild(h);
+
+    people.forEach(function(p,i){
+      var owed=p.balance>=0;
+      var ph=el('div','row-between');
+      ph.style.cssText='margin:'+(i?'16px':'2px')+' 0 6px;font-size:12px';
+      ph.innerHTML='<span style="font-weight:650">'+esc(p.account)+'</span>'+
+        '<span class="dim">'+(owed?'owes you ':'you owe ')+
+        '<span class="mono" style="font-weight:650">'+money(Math.abs(p.balance))+'</span></span>';
+      card.appendChild(ph);
+
+      var l=el('div','list');
+      p.items.forEach(function(it){
+        // A part-paid debt is the one worth a bar: it is the only way to see a long
+        // instalment burning down. paid/amount, not open/amount — the bar fills up.
+        var paid=Math.abs(it.amount)-Math.abs(it.open);
+        var r=el('div','litem');
+        // Short date and a bare "of <original>": this line has to survive a 375px
+        // phone beside the amount, and the bar under it already says how far along
+        // the debt is — spelling out "paid" only pushed the total off the edge.
+        // The year only when it is not this one — the usual convention, and here it
+        // is also what keeps the line inside a 375px phone next to the amount.
+        var d=it.date&&parseDate(it.date);
+        var when=d?(MONTHS[d.getMonth()]+' '+d.getDate()+
+          (d.getFullYear()===new Date().getFullYear()?'':', '+d.getFullYear())):'opening balance';
+        r.innerHTML='<div class="ic">'+(owed?'←':'→')+'</div>'+
+          '<div class="grow"><div class="t1">'+esc(it.description||'(no description)')+'</div>'+
+          '<div class="t2">'+esc(when)+
+            (paid>0?(' · '+Math.round(100*paid/Math.abs(it.amount))+'% of '+money(Math.abs(it.amount),true)):'')+'</div></div>'+
+          '<div class="amt mono">'+money(Math.abs(it.open))+'</div>';
+        if(paid>0){
+          var b=el('div','bar thin');
+          b.innerHTML='<div class="bar-fill" style="width:'+Math.min(100,Math.round(100*paid/Math.abs(it.amount)))+'%"></div>';
+          $('.grow',r).appendChild(b);
+        }
+        l.appendChild(r);
+      });
+      card.appendChild(l);
+    });
+    host.appendChild(card);
   }).catch(showErr);
 }
 
