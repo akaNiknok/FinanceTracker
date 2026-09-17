@@ -1704,11 +1704,15 @@ function loadDebts(){
         var d=it.date&&parseDate(it.date);
         var when=d?(MONTHS[d.getMonth()]+' '+d.getDate()+
           (d.getFullYear()===new Date().getFullYear()?'':', '+d.getFullYear())):'opening balance';
-        r.innerHTML='<div class="ic '+(owed?'in':'out')+'">'+(owed?'←':'→')+'</div>'+
+        // Direction per ITEM, not per account: a spend off the tab (they bought the
+        // owner something) is its own item running against the balance, and the
+        // account's sign drew it as one more thing they owe.
+        var theirs=it.amount>=0;
+        r.innerHTML='<div class="ic '+(theirs?'in':'out')+'">'+(theirs?'←':'→')+'</div>'+
           '<div class="grow"><div class="t1">'+esc(it.description||'(no description)')+'</div>'+
-          '<div class="t2">'+esc(when)+
+          '<div class="t2">'+(theirs===owed?'':(theirs?'owes you · ':'you owe · '))+esc(when)+
             (paid>0?(' · '+Math.round(100*paid/Math.abs(it.amount))+'% of '+money(Math.abs(it.amount),true)):'')+'</div></div>'+
-          '<div class="amt mono '+(owed?'pos':'neg')+'">'+money(Math.abs(it.open))+'</div>';
+          '<div class="amt mono '+(theirs?'pos':'neg')+'">'+money(Math.abs(it.open))+'</div>';
         if(paid>0){
           var b=el('div','bar thin');
           b.innerHTML='<div class="bar-fill" style="width:'+Math.min(100,Math.round(100*paid/Math.abs(it.amount)))+'%"></div>';

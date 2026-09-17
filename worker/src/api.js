@@ -257,21 +257,25 @@ function allocateDebts(rows, openingU, stop) {
     let amt = r.delta_u;
     const words = debtWords(r.description, stop);
     while (amt !== 0) {
-      // Nothing open, or the leg deepens the debt: a new item. q is single-signed by
-      // construction, so "q is empty" and "bal is 0" always agree.
-      if (!q.length || Math.sign(amt) === Math.sign(bal)) { open(r.date, r.description || '', r.id, amt); break; }
+      // A leg can only settle an item running the OTHER way. Rule ③ lets the queue hold
+      // both signs, so "same sign as bal" no longer means "nothing to settle".
+      const opp = (x) => Math.sign(x.open) === -Math.sign(amt);
+      if (!q.some(opp)) { open(r.date, r.description || '', r.id, amt); break; }
       // ① exact amount. findIndex keeps FIFO among equals (identical repeated charges).
       let i = q.findIndex((x) => x.open === -amt);
       // ② a shared word with an open item.
       if (i < 0 && words.length) {
-        i = q.findIndex((x) => debtWords(x.description, stop).some((w) => words.indexOf(w) >= 0));
+        i = q.findIndex((x) => opp(x) && debtWords(x.description, stop).some((w) => words.indexOf(w) >= 0));
       }
+      // A leg that deepens the balance settles only on ① or ② (paying back a ③ item);
+      // otherwise it is a new debt, never FIFO against the minority direction.
+      if (i < 0 && Math.sign(amt) === Math.sign(bal)) { open(r.date, r.description || '', r.id, amt); break; }
       // ③ a spend nothing else in the ledger refers to is its own debt, not a payment
       // on someone else's. A word used once has nothing it could be part of.
       if (i < 0 && r.spend && words.length && words.every((w) => freq[w] === 1)) {
         open(r.date, r.description || '', r.id, amt); break;
       }
-      if (i < 0) i = 0;   // ④ FIFO
+      if (i < 0) i = q.findIndex(opp);   // ④ FIFO
       const it = q[i];
       const take = Math.min(Math.abs(amt), Math.abs(it.open)) * Math.sign(it.open);
       it.open -= take; bal -= take; amt += take;
