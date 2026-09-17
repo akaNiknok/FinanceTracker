@@ -1452,6 +1452,14 @@ function d1(db) {
         'a spend named by another row must not become its own debt item');
     });
 
+    test('paying back a debt that runs against the balance settles it, not opens another', async () => {
+      // The owner repays the parking: a charge, the same sign as the balance. It used to
+      // open a fresh "owes you" item beside the -50 instead of clearing it.
+      charge(5, '2026-04-01', 50, 'settling up');   // past the round-trip window
+      const a = of(await api.getDebts({}, denv), 'Spends');
+      assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]), [['tablet', 9000]]);
+    });
+
     test('a shared description word beats FIFO', async () => {
       const a = of(await api.getDebts({}, denv), 'Worded');
       assert.deepStrictEqual(a.items.map((x) => [x.description, x.open]),
