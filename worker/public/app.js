@@ -1687,7 +1687,7 @@ function loadDebts(){
       ph.style.cssText='margin:'+(i?'16px':'2px')+' 0 6px;font-size:12px';
       ph.innerHTML='<span style="font-weight:650">'+esc(p.account)+'</span>'+
         '<span class="dim">'+(owed?'owes you ':'you owe ')+
-        '<span class="mono" style="font-weight:650">'+money(Math.abs(p.balance))+'</span></span>';
+        '<span class="mono '+(owed?'pos':'neg')+'" style="font-weight:650">'+money(Math.abs(p.balance))+'</span></span>';
       card.appendChild(ph);
 
       var l=el('div','list');
@@ -1704,11 +1704,11 @@ function loadDebts(){
         var d=it.date&&parseDate(it.date);
         var when=d?(MONTHS[d.getMonth()]+' '+d.getDate()+
           (d.getFullYear()===new Date().getFullYear()?'':', '+d.getFullYear())):'opening balance';
-        r.innerHTML='<div class="ic">'+(owed?'←':'→')+'</div>'+
+        r.innerHTML='<div class="ic '+(owed?'in':'out')+'">'+(owed?'←':'→')+'</div>'+
           '<div class="grow"><div class="t1">'+esc(it.description||'(no description)')+'</div>'+
           '<div class="t2">'+esc(when)+
             (paid>0?(' · '+Math.round(100*paid/Math.abs(it.amount))+'% of '+money(Math.abs(it.amount),true)):'')+'</div></div>'+
-          '<div class="amt mono">'+money(Math.abs(it.open))+'</div>';
+          '<div class="amt mono '+(owed?'pos':'neg')+'">'+money(Math.abs(it.open))+'</div>';
         if(paid>0){
           var b=el('div','bar thin');
           b.innerHTML='<div class="bar-fill" style="width:'+Math.min(100,Math.round(100*paid/Math.abs(it.amount)))+'%"></div>';
