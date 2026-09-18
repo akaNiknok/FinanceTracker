@@ -390,6 +390,20 @@ function d1(db) {
       }
     });
 
+    test('getWidget: pinned accounts, a 6-month net worth ending live, 3 recent rows', async () => {
+      await assert.rejects(api.setWidgetAccounts({ names: ['a', 'b', 'c', 'd'] }, env), /at most 3/);
+      await assert.rejects(api.setWidgetAccounts({ names: ['Nope'] }, env), /Unknown Account/);
+      assert.deepStrictEqual((await api.setWidgetAccounts({ names: ['wise'] }, env)).widgetAccounts, ['Wise']);
+      const w = await api.getWidget({}, env);
+      assert.deepStrictEqual(w.accounts.map((a) => a.name), ['Wise']);
+      assert.strictEqual(w.netWorth.length, 6);
+      assert.strictEqual(w.netWorth[5].value, (await api.getDashboard({}, env)).netWorth);
+      assert.ok(w.recent.length <= 3);
+      assert.ok(w.segments.every((b) => ['Essentials', 'Rewards'].includes(b.segment)));
+      assert.deepStrictEqual((await api.getBootstrap({}, env)).widgetAccounts, ['Wise']);
+      await api.setWidgetAccounts({ names: [] }, env);
+    });
+
     test('getDashboard: the chart window is client-chosen and clamped', async () => {
       const wide = await api.getDashboard({ month: '2026-Aug', months: 12 }, env);
       assert.strictEqual(wide.cashflow.length, 12);

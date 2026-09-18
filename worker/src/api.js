@@ -25,7 +25,7 @@
  * a throw into {status:'error', message}, exactly as Router.gs's try/catch did.
  */
 import {
-  refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll,
+  refs, deltas, latestPrices, shapeAccounts, shapeTx, metaGet, metaAll, metaSet,
   toU, fromU, q2, parseDate, parsePeriod, parseMonthKey,
   monthKey, monthOf, shiftMonth, periodMonths, manilaMonth, manilaToday, manilaYesterday, BASE_CURRENCY,
   isInvestedNetWorth, isPulseAcct, isSharesAcct, NOT_SHARES_SRC, resolveAccount, resolveCategory
@@ -565,11 +565,13 @@ export async function snapshotNetWorth(env) {
   return { month, netWorth: q2(t.netWorth) };
 }
 
-export async function getDashboard(args, env) {
+// `pre` ({r, accounts, fx}) is getWidget's: it already ran the balance fold, the most
+// expensive read here (two full scans of transactions). The router passes two args only.
+export async function getDashboard(args, env, pre) {
   const month = args.month ? String(args.month) : manilaMonth();
   const ref = parseMonthKey(month) || parseMonthKey(manilaMonth());
-  const r = await refs(env);
-  const { accounts, fx } = await accountsList(env, r);
+  const r = pre ? pre.r : await refs(env);
+  const { accounts, fx } = pre || await accountsList(env, r);
   const totals = netWorthTotals(accounts);
   const bud = await budgetsPayload(env, month, fx);
 
@@ -931,9 +933,69 @@ export async function getBootstrap(args, env) {
     budgets: (await budgetsPayload(env, args.month, fx)).budgets,
     recurring: recurring.rows,
     fxUsdPhp: fx.USD || null,
+    widgetAccounts: widgetNames(meta[WIDGET_META]),   // the Accounts screen's widget picker
     // Oldest ledger month, so the month pickers reach all history.
     minMonth: minRow && minRow.d ? monthOf(minRow.d) : null
   };
+}
+
+// ── iOS widgets (widgets/FinanceTracker.js) ─────────────────────────────────
+/** meta key holding the balance widget's accounts: a JSON array of up to 3 names. */
+const WIDGET_META = 'widget_accounts';
+const WIDGET_SEGMENTS = ['Essentials', 'Rewards'];
+export function widgetNames(v) {
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.map(String).slice(0, 3) : []; }
+  catch (e) { return []; }
+}
+
+/**
+ * Every home-screen widget in ONE small GET: a widget refresh is a background task with
+ * a tight time and memory budget, so it gets the four answers in one round trip and not
+ * the whole Dashboard payload. The balance fold runs ONCE and is handed to getDashboard.
+ */
+export async function getWidget(args, env) {
+  const r = await refs(env);
+  const pre = Object.assign({ r }, await accountsList(env, r));
+  const [d, pins] = await Promise.all([
+    getDashboard({ months: 6 }, env, pre), metaGet(env, WIDGET_META, '[]')
+  ]);
+  const accounts = widgetNames(pins).map((n) => pre.accounts.find((x) => x.name === n)).filter(Boolean)
+    .map((x) => ({ name: x.name, color: x.color, currency: x.currency, balanceNative: x.balanceNative,
+                   balancePhp: x.balancePhp, isLiability: x.isLiability, isShares: x.isShares }));
+  // Same as the SPA's netWorthSeries: the live figure anchors the newest month, a
+  // snapshot wins where one exists, and a month without one rolls the flows backward.
+  const cf = d.cashflow, netWorth = [];
+  let nw = d.netWorth;
+  for (let i = cf.length - 1; i >= 0; i--) {
+    const snap = i < cf.length - 1 ? d.netWorthHistory[cf[i].month] : null;
+    if (snap != null) nw = snap;
+    netWorth.unshift({ month: cf[i].month, value: q2(nw) });
+    nw -= cf[i].income - cf[i].expense;
+  }
+  return {
+    status: 'success', month: d.month, accounts, netWorth,
+    segments: d.budgets.filter((b) => WIDGET_SEGMENTS.includes(b.segment)).map((b) => ({
+      segment: b.segment, period: b.period, currency: b.currency, actual: b.actualNative,
+      target: b.targetNative, remaining: b.remainingNative, pctUsed: b.pctUsed, isOver: b.isOver })),
+    essentialsRewards: d.essentialsRewards,
+    recent: d.recentTransactions.slice(0, 3).map((t) => ({
+      Date: t.Date, Description: t.Description, Category: t.Category, Type: t.Type,
+      Amount: t.Amount, Currency: t.Currency, 'Amount (PHP)': t['Amount (PHP)'], ToAccount: t.ToAccount }))
+  };
+}
+
+/** POST {names:[...]} — the balance widget's accounts, set from the Accounts screen. */
+export async function setWidgetAccounts(args, env) {
+  const names = Array.isArray(args.names) ? args.names.filter((n) => n) : [];
+  if (names.length > 3) throw new Error('The widget shows at most 3 accounts.');
+  const r = await refs(env);
+  const canon = names.map((n) => {
+    const acc = resolveAccount(r, n);
+    if (!acc) throw new Error('Unknown Account: ' + n);
+    return acc.name;
+  });
+  await metaSet(env, WIDGET_META, JSON.stringify(canon));
+  return { status: 'success', widgetAccounts: canon };
 }
 
 // ── ledger (Tax screen) ──────────────────────────────────────────────────────

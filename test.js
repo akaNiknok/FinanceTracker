@@ -639,6 +639,15 @@ describe('Gmail courier watermark (vm)', () => {
         'a top-level [vars] block needs an [env.staging.vars] copy — vars are not inherited');
     });
 
+    test('the Scriptable widget compiles and calls a real read route', () => {
+      // It runs only on a phone, so nothing else here would notice it break. Scriptable
+      // wraps a script in an async function (top-level await), hence the wrapper.
+      const src = fs.readFileSync(path.join(__dirname, 'widgets', 'FinanceTracker.js'), 'utf8');
+      new vm.Script('(async () => {' + src + '\n})');
+      const used = src.match(/action=(\w+)/g).map((m) => m.slice(7));
+      used.forEach((a) => assert.ok(a in worker.ROUTES_READ, 'the widget calls ' + a + ', which is not a read route'));
+    });
+
     test('the topbar version matches package.json', () => {
       // The header badge is hardcoded (no build step stamps the SPA), so this is the
       // only thing that stops it drifting a release behind.
