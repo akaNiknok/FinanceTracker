@@ -10,7 +10,7 @@
  *   segments  medium — Essentials + Rewards, Essentials, Rewards meters (tap → Dashboard)
  * No parameter: medium → segments, small → recent.
  *
- * One GET per refresh: /api?action=getWidget. Run the script inside Scriptable once to
+ * One GET per refresh window, shared by every widget: /api?action=getWidget. Run the script inside Scriptable once to
  * sign in: it asks for the app URL and the passphrase, posts them to /login and keeps
  * only the session cookie in the iOS Keychain — never the passphrase. The last good
  * payload is cached on the phone, so a refresh with no signal still draws (marked
@@ -85,10 +85,18 @@ async function signIn() {
 
 const fm = FileManager.local();
 const CACHE = fm.joinPath(fm.documentsDirectory(), 'financetracker-widget.json');
+// iOS refreshes all four widgets at about the same time. A payload younger than this is
+// reused, so the four cost ONE request and one radio wake-up, not four. In the app
+// (a preview) it always fetches, so a preview shows the live figures.
+const FRESH_MS = 15 * 60e3;
 
 async function load() {
   if (!Keychain.contains(K_URL) || !Keychain.contains(K_COOKIE)) {
     throw new Error('Open Scriptable and run FinanceTracker to sign in.');
+  }
+  if (config.runsInWidget && fm.fileExists(CACHE) &&
+      Date.now() - fm.modificationDate(CACHE).getTime() < FRESH_MS) {
+    return { d: JSON.parse(fm.readString(CACHE)), stale: false };
   }
   try {
     const r = new Request(Keychain.get(K_URL) + '/api?action=getWidget');
