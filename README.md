@@ -230,6 +230,7 @@ The file `widgets/FinanceTracker.js` makes four home-screen widgets with the fre
 - The script keeps the session cookie in the iOS Keychain. It does not keep the passphrase.
 - If `APP_PASS` changes, the widgets show "Signed out". Run the script in Scriptable and sign in again.
 - iOS decides when a widget refreshes. The script asks for a refresh after 30 minutes.
+- The four widgets share one request. A widget uses the data again if the data is less than 15 minutes old.
 - If there is no connection, the widget shows the last data and the word "cached".
 - To update the script, copy the new text over the old text in Scriptable. You do not sign in again.
 

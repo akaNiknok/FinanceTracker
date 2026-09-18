@@ -565,11 +565,13 @@ export async function snapshotNetWorth(env) {
   return { month, netWorth: q2(t.netWorth) };
 }
 
-export async function getDashboard(args, env) {
+// `pre` ({r, accounts, fx}) is getWidget's: it already ran the balance fold, the most
+// expensive read here (two full scans of transactions). The router passes two args only.
+export async function getDashboard(args, env, pre) {
   const month = args.month ? String(args.month) : manilaMonth();
   const ref = parseMonthKey(month) || parseMonthKey(manilaMonth());
-  const r = await refs(env);
-  const { accounts, fx } = await accountsList(env, r);
+  const r = pre ? pre.r : await refs(env);
+  const { accounts, fx } = pre || await accountsList(env, r);
   const totals = netWorthTotals(accounts);
   const bud = await budgetsPayload(env, month, fx);
 
@@ -949,15 +951,15 @@ export function widgetNames(v) {
 /**
  * Every home-screen widget in ONE small GET: a widget refresh is a background task with
  * a tight time and memory budget, so it gets the four answers in one round trip and not
- * the whole Dashboard payload.
- * ponytail: rides getDashboard + getAccounts, so the balance fold runs twice per call.
- * iOS refreshes a widget a few times an hour at most; share accountsList if that ever shows.
+ * the whole Dashboard payload. The balance fold runs ONCE and is handed to getDashboard.
  */
 export async function getWidget(args, env) {
-  const [d, a, pins] = await Promise.all([
-    getDashboard({ months: 6 }, env), getAccounts({}, env), metaGet(env, WIDGET_META, '[]')
+  const r = await refs(env);
+  const pre = Object.assign({ r }, await accountsList(env, r));
+  const [d, pins] = await Promise.all([
+    getDashboard({ months: 6 }, env, pre), metaGet(env, WIDGET_META, '[]')
   ]);
-  const accounts = widgetNames(pins).map((n) => a.accounts.find((x) => x.name === n)).filter(Boolean)
+  const accounts = widgetNames(pins).map((n) => pre.accounts.find((x) => x.name === n)).filter(Boolean)
     .map((x) => ({ name: x.name, color: x.color, currency: x.currency, balanceNative: x.balanceNative,
                    balancePhp: x.balancePhp, isLiability: x.isLiability, isShares: x.isShares }));
   // Same as the SPA's netWorthSeries: the live figure anchors the newest month, a
