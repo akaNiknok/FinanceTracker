@@ -35,7 +35,7 @@
  */
 import {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
-  getLedger, listTransactions, getDebts, listTable, getExportAll,
+  getLedger, listTransactions, getDebts, listTable, getExportAll, getWidget, setWidgetAccounts,
   createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
   bulkUpdateTransactions, bulkDeleteTransactions, updateLedgerCell, appendLedgerRow,
   deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
@@ -55,7 +55,8 @@ export const ROUTES_READ = {
   getLedger, listTransactions,
   getDebts,         // open debts per receivable account
   listTable,        // admin grid
-  getExportAll      // backup puller + the admin screen's CSV
+  getExportAll,     // backup puller + the admin screen's CSV
+  getWidget         // the iOS Scriptable widgets
 };
 
 export const ROUTES_WRITE = {
@@ -63,6 +64,7 @@ export const ROUTES_WRITE = {
   bulkUpdateTransactions, bulkDeleteTransactions,
   updateLedgerCell, appendLedgerRow, deleteLedgerRow,
   updateTableCell, insertTableRow, deleteTableRow,   // admin grid
+  setWidgetAccounts,                                 // the Accounts screen's widget picker
   ingestEmail                                        // the Gmail courier
 };
 
