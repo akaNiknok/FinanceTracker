@@ -1648,10 +1648,33 @@ function renderAccounts(){
 
     var inv=el('div'); inv.id='invCards';
     w.appendChild(inv);
+    if(S.boot) w.appendChild(widgetCard());
     paint(w);
     loadInvestments();
     loadDebts();
   }).catch(showErr);
+}
+
+/* Home-screen widget: which 3 accounts the iOS balance widget shows (meta
+ * widget_accounts, read by getWidget). Seeded from getBootstrap, so no fetch. */
+function widgetCard(){
+  var c=el('div','card');
+  c.appendChild(el('div','card-h','Home-screen widget · balances'));
+  var cur=S.boot.widgetAccounts||[], opts=[{value:'',label:'(none)'}].concat(acctOptions());
+  var combos=[0,1,2].map(function(i){
+    var f=el('div','field','<label>Account '+(i+1)+'</label>');
+    var k=comboEl(opts, cur[i]||'', {placeholder:'(none)'});
+    f.appendChild(k); c.appendChild(f); return k;
+  });
+  var save=el('button','btn sm primary','Save');
+  save.onclick=function(){
+    save.disabled=true;
+    gs('api_setWidgetAccounts',{names:combos.map(function(k){return k.value;}).filter(Boolean)})
+      .then(function(res){ S.boot.widgetAccounts=res.widgetAccounts; toast('Widget accounts saved','ok'); })
+      .catch(function(e){ toast(e.message||String(e),'err'); }).then(function(){ save.disabled=false; });
+  };
+  c.appendChild(save);
+  return c;
 }
 
 /* Open debts per receivable — the itemised balance behind each IOU account.

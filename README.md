@@ -17,6 +17,7 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 - **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
 - **Net worth history.** Each day the app records the total net worth for the month. The Dashboard shows the history as a line on the cash-flow chart.
 - **Retirement countdown.** The Dashboard shows the time to financial independence as years and months, with a progress bar. The target is 25 times the yearly expenses. The app calculates the date at each month close, thus the count goes down each day.
+- **iPhone widgets.** Four home-screen widgets show the latest transactions, three account balances, the net worth and the segment targets. See [iPhone widgets](#iphone-widgets).
 - **Two more parts.** A nightly job reads the share prices from Interactive Brokers. A Tax screen collects the data for the Philippine BIR 8 percent regime.
 
 ## Architecture
@@ -90,7 +91,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 | Frontend | approximately 3 620 lines, no framework and no bundler |
 | Apps Script | approximately 430 lines in 3 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 124 tests operate offline with `npm test`, and 78 of them use a real SQLite database |
+| Tests | 137 tests operate offline with `npm test`, and 90 of them use a real SQLite database |
 | Releases | 73 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
@@ -103,6 +104,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 - **A screen that stays open does not refresh itself.** The app revalidates a screen when you go to it.
 - **The Dashboard downloads again after each write.** Each month of the Dashboard shows the live net worth, so each write changes the answer. The other screens answer 304.
 - **The system does not know a corporate action.** A split of shares changes the price at IBKR and does not change the ledger. The nightly job compares the two counts and sends a message. A person corrects the earlier rows.
+- **A widget tap opens Safari.** iOS has no link that opens an installed web app, so the widget opens the app address in Safari.
 - **The Tax screen shows one year.** Use the year list at the top of the screen to see an earlier year.
 
 ---
@@ -169,6 +171,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | `usd_php_fallback` | The exchange rate to use if the live rate is not available. |
 | `fire_real_return` | The return each year, as a percent, after inflation. The Dashboard countdown uses it. |
 | `owner_email` | It identifies the owner. |
+| `widget_accounts` | The 3 accounts that the balance widget shows, as a JSON list of names. Set it on the screen **Accounts**, card **Home-screen widget**. |
 | `tg_last_ids` | The code writes this value. Do not change it manually. |
 | `app_url` | The address of the app. The code writes this value. The rescue cron reads it to build the Edit button. Do not change it manually. |
 | `data_version`, `ledger_first_year` | No code reads these rows. A later version removes them. Do not change them. |
@@ -194,6 +197,41 @@ Cloudflare does not do a job again after a failure. Thus each job sends a Telegr
 - **Gmail.** The courier searches for `in:inbox label:"Finance Tracker"`. To add a bank or to remove a bank, change the Gmail filter that applies the label.
 - **Telegram.** To set the webhook, use the Telegram `setWebhook` method with the address `<worker>/tg`, the secret token, and the update types `message` and `callback_query`. The buttons do not operate without `callback_query`.
 - **IBKR.** In Client Portal, make a Flex Query that has the Open Positions section with the fields Symbol, Position, Mark Price and Currency. Enable the Flex Web Service, then make a token with the maximum validity.
+
+## iPhone widgets
+
+The file `widgets/FinanceTracker.js` makes four home-screen widgets with the free app **Scriptable**. One script makes all four widgets. The widget parameter selects the widget.
+
+| Widget | Size | Parameter | Content | A tap opens |
+| --- | --- | --- | --- | --- |
+| Recent | Small | `recent` | The 3 latest transactions. | Transactions |
+| Balances | Small | `balances` | The balances of 3 accounts. Select the accounts on the screen **Accounts**, card **Home-screen widget**. | Accounts |
+| Net worth | Small | `networth` | The net worth, the change in 6 months and a line of the 6 months. | Dashboard |
+| Segment targets | Medium | `segments` | Essentials + Rewards, Essentials and Rewards. Each has a bar and a mark for the date in the month. | Dashboard |
+
+### Install the script
+
+1. Install **Scriptable** from the App Store.
+2. On the iPhone, open `widgets/FinanceTracker.js` on GitHub. Select **Raw** and copy all the text.
+3. In Scriptable, select **+**. Paste the text. Set the name of the script to `FinanceTracker`.
+4. Run the script. Type the address of the app and the passphrase, then select **Sign in**.
+5. Select a preview. Make sure that the widget shows data.
+
+### Add a widget
+
+1. Touch and hold the home screen. Select **Edit**, then **Add Widget**.
+2. Select **Scriptable**. Select the small size or the medium size, then select **Add Widget**.
+3. Touch and hold the new widget, then select **Edit Widget**.
+4. Set **Script** to `FinanceTracker`.
+5. Set **Parameter** to a value from the table. If there is no parameter, a small widget shows `recent` and a medium widget shows `segments`.
+
+### Widget notes
+
+- The script keeps the session cookie in the iOS Keychain. It does not keep the passphrase.
+- If `APP_PASS` changes, the widgets show "Signed out". Run the script in Scriptable and sign in again.
+- iOS decides when a widget refreshes. The script asks for a refresh after 30 minutes.
+- If there is no connection, the widget shows the last data and the word "cached".
+- To update the script, copy the new text over the old text in Scriptable. You do not sign in again.
 
 ## Maintenance tasks with a date
 
