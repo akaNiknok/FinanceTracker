@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Swap desktop</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
+button,input{font-family:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; overflow: hidden; background: {{t.bg}}; color: {{t.text}}; font-size: 14px; font-variant-numeric: tabular-nums;">
+<dc-import name="Sidebar" active="swap" dark="{{dark}}" on-toggle="{{toggle}}" hint-size="240px,900px"></dc-import>
+<main style="width: 1200px; display: flex; flex-direction: column;">
+<dc-import name="Toolbar" heading="Swap" sub="A fair USD ↔ PHP rate with a friend" dark="{{dark}}" hint-size="1200px,76px"></dc-import>
+<div style="padding: 4px 28px 28px; display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 16px; align-items: start;">
+<section style="background: {{t.card}}; border-radius: 20px; overflow: hidden;">
+<sc-for list="{{inputs}}" as="f" hint-placeholder-count="4">
+<label style="display: flex; align-items: center; min-height: 54px; padding: 0 20px; border-top: {{f.line}};"><span style="flex-grow: 1; display: flex; flex-direction: column;"><span style="font-size: 15px;">{{f.k}}</span><span style="font-size: 12px; color: {{t.dim}};">{{f.s}}</span></span><input aria-label="{{f.k}}" value="{{f.v}}" style="width: 120px; text-align: right; border: 0; outline: none; background: transparent; color: {{t.text}}; font-size: 17px; font-weight: 600;"></input></label>
+</sc-for>
+<div style="padding: 14px 20px 18px; border-top: 1px solid {{t.sep}}; display: flex; flex-direction: column; gap: 8px;">
+<div style="display: flex; justify-content: space-between;"><span style="font-size: 15px;">Your share of the saving</span><span style="font-size: 15px; font-weight: 600;">50%</span></div>
+<div style="position: relative; height: 28px;"><div style="position: absolute; left: 0; right: 0; top: 12px; height: 4px; border-radius: 2px; background: {{t.track}};"></div><div style="position: absolute; left: 0; width: 50%; top: 12px; height: 4px; border-radius: 2px; background: {{t.accent}};"></div><div style="position: absolute; left: calc(50% - 14px); top: 0; width: 28px; height: 28px; border-radius: 14px; background: #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,.3);"></div></div>
+</div>
+</section>
+<div style="display: flex; flex-direction: column; gap: 16px;">
+<section style="background: {{t.card}}; border-radius: 20px; padding: 20px 24px; display: flex; flex-direction: column; gap: 4px;">
+<span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">They send you</span>
+<div style="display: flex; align-items: baseline; gap: 10px;"><span style="font-size: 44px; font-weight: 700; letter-spacing: -1px;">₱61,364.44</span><span style="font-size: 17px; color: {{t.dim}};">for $1,000</span></div>
+<span style="font-size: 17px; font-weight: 600;">Fair rate ₱61.36 per $1</span>
+<div style="margin-top: 16px; position: relative; height: 64px;">
+<div style="position: absolute; left: 0; right: 0; top: 22px; height: 12px; border-radius: 6px; background: linear-gradient(90deg, {{t.pos}}, {{t.accent}});"></div>
+<div style="position: absolute; left: 50%; top: 14px; width: 3px; height: 28px; margin-left: -1px; background: {{t.text}};"></div>
+<div style="position: absolute; left: 60.5%; top: 22px; width: 2px; height: 12px; background: #FFFFFF; opacity: .8;"></div>
+<span style="position: absolute; left: 0; top: 0; font-size: 12px; color: {{t.dim}};">Wise pays you ₱61.17</span>
+<span style="position: absolute; right: 0; top: 0; font-size: 12px; color: {{t.dim}};">Wise costs them ₱61.55</span>
+<span style="position: absolute; left: 50%; top: 44px; transform: translateX(-50%); font-size: 12px; font-weight: 600;">Fair ₱61.36</span>
+<span style="position: absolute; left: 60.5%; top: 44px; transform: translateX(-10%); font-size: 12px; color: {{t.dim}};">· mid ₱61.40</span>
+</div>
+<span style="font-size: 13px; color: {{t.dim}};">Any rate inside the bar beats Wise for you both.</span>
+</section>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;">
+<section style="background: {{t.card}}; border-radius: 20px; padding: 16px 20px;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">You save</span><div style="font-size: 26px; font-weight: 700; color: {{t.pos}};">₱190.39</div><span style="font-size: 12px; color: {{t.dim}};">Your 50% of ₱380.78</span></section>
+<section style="background: {{t.card}}; border-radius: 20px; padding: 16px 20px;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">They save</span><div style="font-size: 26px; font-weight: 700; color: {{t.pos}};">₱190.39</div><span style="font-size: 12px; color: {{t.dim}};">Their 50% of ₱380.78</span></section>
+</div>
+<button style="align-self: flex-start; height: 44px; padding: 0 18px; border: 0; border-radius: 22px; background: {{t.accent}}; color: #FFFFFF; font-size: 15px; font-weight: 600;">Record this swap as a transfer</button>
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+theme(d){return d?{bg:'#000000',card:'#1C1C1E',text:'#F5F5F7',dim:'#A1A1A6',sep:'#38383A',accent:'#0A84FF',pos:'#30D158',track:'#3A3A3C'}:{bg:'#F2F2F7',card:'#FFFFFF',text:'#1C1C1E',dim:'#6C6C70',sep:'#E5E5EA',accent:'#2463EB',pos:'#157A50',track:'#E9E9EE'};}
+renderVals(){
+var s=this.state||{}, dark=s.dark!=null?s.dark:!!this.props.dark, t=this.theme(dark), self=this, L='1px solid '+t.sep;
+return {t:t,dark:dark,toggle:function(){self.setState({dark:!dark});},
+inputs:[{k:'Dollars you give',s:'USD',v:'$1,000',line:'none'},{k:'Mid-market rate',s:'Live · tap to change',v:'₱61.40',line:L},{k:'Your Wise fee',s:'USD → PHP',v:'$3.68',line:L},{k:'Their Wise fee',s:'PHP → USD',v:'₱154.83',line:L}]};
+}
+}
+</script>
+</body>
+</html>

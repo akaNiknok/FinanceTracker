@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Activity phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
+button,input{font-family:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; position: relative; overflow: hidden; background: {{t.bg}}; color: {{t.text}}; font-variant-numeric: tabular-nums;">
+<div style="padding: 16px 16px 170px; display: flex; flex-direction: column; gap: 12px;">
+<div style="display: flex; align-items: flex-end; justify-content: space-between; padding: 12px 4px 0;">
+<h1 style="margin: 0; font-size: 34px; line-height: 41px; font-weight: 700; letter-spacing: -0.5px;">Activity</h1>
+<button style="height: 44px; padding: 0 4px; border: 0; background: transparent; color: {{t.accent}}; font-size: 17px;">Select</button>
+</div>
+<label style="display: flex; align-items: center; gap: 6px; min-height: 44px; box-sizing: border-box; padding: 6px 10px; background: {{t.field}}; border-radius: 12px; flex-wrap: wrap;">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{t.dim}}" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></svg>
+<span style="display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 10px; border-radius: 14px; background: {{t.accentTint}}; color: {{t.accent}}; font-size: 14px; font-weight: 600;">GCash<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"></path></svg></span>
+<span style="display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 10px; border-radius: 14px; background: {{t.accentTint}}; color: {{t.accent}}; font-size: 14px; font-weight: 600;">≥ ₱300<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"></path></svg></span>
+<input aria-label="Search" placeholder="Search" style="flex-grow: 1; min-width: 60px; border: 0; outline: none; background: transparent; color: {{t.text}}; font-size: 17px;"></input>
+</label>
+<div style="display: flex; gap: 8px; overflow: hidden; margin-right: -16px;">
+<button style="flex-shrink: 0; height: 36px; padding: 0 12px; border: 0; border-radius: 18px; background: {{t.text}}; color: {{t.bg}}; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"></path></svg>Filters · 3</button>
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="4">
+<button style="flex-shrink: 0; height: 36px; padding: 0 12px; border: 1px solid {{c.bd}}; border-radius: 18px; background: {{c.bg}}; color: {{c.fg}}; font-size: 14px; font-weight: 600;">{{c.k}}</button>
+</sc-for>
+</div>
+<div style="font-size: 13px; color: {{t.dim}}; padding: 0 4px;">6 results · −₱3,758</div>
+
+<sc-for list="{{days}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; justify-content: space-between; padding: 4px 4px 0; font-size: 13px; font-weight: 600; color: {{t.dim}};"><span>{{g.day}}</span><span>{{g.total}}</span></div>
+<div style="background: {{t.card}}; border-radius: 16px; overflow: hidden;">
+<sc-for list="{{g.rows}}" as="r" hint-placeholder-count="2">
+<div style="display: flex; align-items: stretch; border-top: {{r.line}};">
+<div style="flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 0 14px; margin-left: {{r.shift}};">
+<span style="width: 34px; height: 34px; flex-shrink: 0; border-radius: 10px; background: {{r.tint}}; color: {{r.seg}}; display: grid; place-items: center; font-weight: 700; font-size: 15px;">{{r.ini}}</span>
+<div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column;"><span style="font-size: 17px; white-space: nowrap;">{{r.d}}</span><span style="font-size: 13px; color: {{t.dim}}; white-space: nowrap;">{{r.m}}</span></div>
+<span style="font-size: 17px; font-weight: 600; white-space: nowrap;">{{r.a}}</span>
+</div>
+<sc-if value="{{r.swiped}}" hint-placeholder-val="{{false}}">
+<button style="width: 76px; flex-shrink: 0; border: 0; background: {{t.accent}}; color: #FFFFFF; font-size: 14px; font-weight: 600;">Edit</button>
+<button style="width: 76px; flex-shrink: 0; border: 0; background: {{t.neg}}; color: #FFFFFF; font-size: 14px; font-weight: 600;">Delete</button>
+</sc-if>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+<div style="position: absolute; left: 0; bottom: 0;"><dc-import name="TabBar" active="activity" dark="{{dark}}" hint-size="390px,156px"></dc-import></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+theme(d){return d?{bg:'#000000',card:'#1C1C1E',field:'#1C1C1E',text:'#F5F5F7',dim:'#A1A1A6',sep:'#38383A',accent:'#0A84FF',accentTint:'rgba(10,132,255,.2)',neg:'#FF453A',ess:'#64D2FF',essTint:'rgba(100,210,255,.16)',rew:'#FF9F0A',rewTint:'rgba(255,159,10,.16)'}:{bg:'#F2F2F7',card:'#FFFFFF',field:'#E4E4EA',text:'#1C1C1E',dim:'#6C6C70',sep:'#E5E5EA',accent:'#2463EB',accentTint:'#EAF0FE',neg:'#C4382D',ess:'#0E7C86',essTint:'#DDF1F2',rew:'#D97706',rewTint:'#FDF1E1'};}
+renderVals(){
+var s=this.state||{}, dark=s.dark!=null?s.dark:!!this.props.dark, t=this.theme(dark), self=this;
+function C(k,on){return {k:k,bg:on?t.accentTint:t.card,fg:on?t.accent:t.text,bd:on?t.accent:t.sep};}
+function R(d,m,a,seg,first,swiped){return {d:d,m:m,a:a,ini:d.charAt(0),seg:seg==='E'?t.ess:t.rew,tint:seg==='E'?t.essTint:t.rewTint,line:first?'none':'1px solid '+t.sep,swiped:!!swiped,shift:swiped?'-152px':'0'};}
+return {t:t,dark:dark,
+chips:[C('September',true),C('Spent',true),C('Category'),C('Smart lists')],
+days:[{day:'Friday, 18 September',total:'−₱620.00',rows:[R('Vitamins','Health: Medical','−₱620.00','E',true)]},
+{day:'Tuesday, 15 September',total:'−₱442.00',rows:[R('Mobile load','Utilities: Internet/Mobile','−₱442.00','E',true,true)]},
+{day:'Sunday, 13 September',total:'−₱312.00',rows:[R('Grab to the office','Transport: Ride Hailing','−₱312.00','E',true)]},
+{day:'Thursday, 10 September',total:'−₱1,450.00',rows:[R('Weekly groceries','Food: Groceries','−₱1,450.00','E',true)]}]};
+}
+}
+</script>
+</body>
+</html>

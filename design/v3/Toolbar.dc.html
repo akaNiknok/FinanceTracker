@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Toolbar with add bar</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
+button,input{font-family:inherit;cursor:pointer}
+</style>
+</helmet>
+<header style="width: 1200px; height: 76px; box-sizing: border-box; padding: 0 28px; display: flex; align-items: center; gap: 20px; color: {{t.text}}; font-family: -apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;">
+<div style="width: 260px; flex-shrink: 0;"><h1 style="margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.3px;">{{heading}}</h1><div style="font-size: 13px; color: {{t.dim}};">{{sub}}</div></div>
+<label style="flex-grow: 1; display: flex; align-items: center; gap: 10px; height: 44px; box-sizing: border-box; padding: 0 8px 0 14px; background: {{t.card}}; border: 1px solid {{t.sep}}; border-radius: 12px; color: {{t.dim}};">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{t.accent}}" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+<input aria-label="Add, search or jump" placeholder="Add “grab 312 gcash”, search, or jump to a screen" style="flex-grow: 1; border: 0; outline: none; background: transparent; color: {{t.text}}; font-size: 15px;"></input>
+<span style="font-size: 12px; border: 1px solid {{t.sep}}; border-radius: 6px; padding: 2px 6px;">Ctrl K</span>
+</label>
+<button style="display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 14px; border: 0; border-radius: 20px; background: {{t.card}}; color: {{t.text}}; font-size: 14px; font-weight: 600; flex-shrink: 0;">September 2026<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></button>
+</header>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"heading":{"editor":null,"default":"Summary"},"sub":{"editor":null,"default":""},"dark":{"editor":"boolean","default":false},"$preview":{"width":1200,"height":76}}'>
+class Component extends DCLogic {
+theme(d){return d?{card:'#1C1C1E',sep:'#38383A',text:'#F5F5F7',dim:'#A1A1A6',accent:'#0A84FF'}:{card:'#FFFFFF',sep:'#DCDCE0',text:'#1C1C1E',dim:'#6C6C70',accent:'#2463EB'};}
+renderVals(){
+return {t:this.theme(!!this.props.dark),heading:this.props.heading||'Summary',sub:this.props.sub||''};
+}
+}
+</script>
+</body>
+</html>

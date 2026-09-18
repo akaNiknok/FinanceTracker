@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Phone tab bar and add bar</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
+button,input{font-family:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 156px; box-sizing: border-box; display: flex; flex-direction: column; font-family: -apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;">
+<div style="height: 72px; box-sizing: border-box; padding: 10px 12px; background: {{t.fade}}; display: flex; gap: 8px; align-items: center;">
+<label style="flex-grow: 1; display: flex; align-items: center; gap: 8px; height: 50px; box-sizing: border-box; padding: 0 6px 0 16px; background: {{t.card}}; border: 1px solid {{t.sep}}; border-radius: 25px; box-shadow: {{t.shadow}};">
+<input aria-label="Quick add" placeholder="coffee 180 gcash" style="flex-grow: 1; min-width: 0; border: 0; outline: none; background: transparent; color: {{t.text}}; font-size: 17px;"></input>
+<button aria-label="Dictate" style="width: 38px; height: 38px; border: 0; border-radius: 19px; background: transparent; color: {{t.dim}}; display: grid; place-items: center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg></button>
+</label>
+<button aria-label="Open the full add form" style="width: 50px; height: 50px; border: 0; border-radius: 25px; background: {{t.accent}}; color: #FFFFFF; display: grid; place-items: center; box-shadow: {{t.shadow}};"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+</div>
+<nav style="height: 84px; box-sizing: border-box; padding: 8px 12px 30px; background: {{t.bar}}; border-top: 1px solid {{t.sep}}; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));">
+<button style="border: 0; background: transparent; color: {{c.summary}}; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; font-weight: 600;"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v9l6.4 6.4"></path></svg>Summary</button>
+<button style="border: 0; background: transparent; color: {{c.activity}}; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; font-weight: 600;"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>Activity</button>
+<button style="border: 0; background: transparent; color: {{c.accounts}}; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; font-weight: 600;"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="3"></rect><path d="M3 10h18M16 15h2"></path></svg>Accounts</button>
+<button style="border: 0; background: transparent; color: {{c.more}}; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; font-weight: 600;"><svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>More</button>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"active":{"editor":"enum","options":["summary","activity","accounts","more"],"default":"summary"},"dark":{"editor":"boolean","default":false},"$preview":{"width":390,"height":156}}'>
+class Component extends DCLogic {
+theme(d){return d?{card:'#1C1C1E',sep:'#38383A',text:'#F5F5F7',dim:'#A1A1A6',off:'#8E8E93',accent:'#0A84FF',bar:'rgba(18,18,20,.94)',fade:'linear-gradient(to bottom, rgba(0,0,0,0), #000000 60%)',shadow:'0 4px 18px rgba(0,0,0,.6)'}:{card:'#FFFFFF',sep:'#DCDCE0',text:'#1C1C1E',dim:'#6C6C70',off:'#8A8A8E',accent:'#2463EB',bar:'rgba(249,249,251,.94)',fade:'linear-gradient(to bottom, rgba(242,242,247,0), #F2F2F7 60%)',shadow:'0 4px 18px rgba(0,0,0,.10)'};}
+renderVals(){
+var t=this.theme(!!this.props.dark), a=this.props.active||'summary', c={};
+['summary','activity','accounts','more'].forEach(function(k){c[k]=k===a?t.accent:t.off;});
+return {t:t,c:c};
+}
+}
+</script>
+</body>
+</html>

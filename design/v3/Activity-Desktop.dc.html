@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Activity desktop</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
+button,input{font-family:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; overflow: hidden; background: {{t.bg}}; color: {{t.text}}; font-size: 14px; font-variant-numeric: tabular-nums;">
+<dc-import name="Sidebar" active="activity" dark="{{dark}}" on-toggle="{{toggle}}" hint-size="240px,900px"></dc-import>
+
+<aside style="width: 250px; flex-shrink: 0; box-sizing: border-box; padding: 24px 12px; border-right: 1px solid {{t.sep}}; display: flex; flex-direction: column; gap: 2px;">
+<div style="font-size: 12px; font-weight: 600; color: {{t.dim}}; padding: 0 10px 6px;">Smart lists</div>
+<sc-for list="{{lists}}" as="l" hint-placeholder-count="5">
+<button style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: {{l.bg}}; color: {{t.text}}; font-size: 14px; font-weight: {{l.fw}}; text-align: left;"><span style="flex-grow: 1;">{{l.k}}</span><span style="font-size: 12px; font-weight: 600; color: {{l.nc}}; background: {{l.nb}}; border-radius: 9px; padding: 0 7px;">{{l.n}}</span></button>
+</sc-for>
+<button style="height: 34px; padding: 0 10px; border: 0; background: transparent; color: {{t.accent}}; font-size: 13px; text-align: left;">+ Save these filters as a list</button>
+<div style="font-size: 12px; font-weight: 600; color: {{t.dim}}; padding: 18px 10px 6px;">Accounts</div>
+<sc-for list="{{accts}}" as="a" hint-placeholder-count="8">
+<button style="display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: {{a.bg}}; color: {{t.text}}; font-size: 14px; font-weight: {{a.fw}}; text-align: left;"><span style="width: 8px; height: 8px; border-radius: 4px; background: {{a.dot}};"></span><span style="flex-grow: 1;">{{a.k}}</span><span style="font-size: 13px; color: {{a.vc}};">{{a.v}}</span></button>
+</sc-for>
+</aside>
+
+<main style="flex-grow: 1; min-width: 0; padding: 24px 28px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; position: relative;">
+<div style="display: flex; align-items: flex-end; justify-content: space-between;">
+<div><h1 style="margin: 0; font-size: 26px; font-weight: 700;">Activity</h1><div style="font-size: 13px; color: {{t.dim}};">6 results · −₱3,758</div></div>
+<div style="display: flex; gap: 8px;">
+<button style="height: 34px; padding: 0 12px; border: 1px solid {{t.sep}}; border-radius: 9px; background: {{t.card}}; color: {{t.text}}; font-size: 13px;">Newest first ▾</button>
+<button style="height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: {{t.accent}}; color: #FFFFFF; font-size: 13px; font-weight: 600;">Done selecting</button>
+</div>
+</div>
+
+<div style="position: relative;">
+<label style="display: flex; align-items: center; gap: 8px; min-height: 46px; box-sizing: border-box; padding: 6px 12px; background: {{t.card}}; border: 2px solid {{t.accent}}; border-radius: 12px; flex-wrap: wrap;">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{t.dim}}" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></svg>
+<sc-for list="{{tokens}}" as="k" hint-placeholder-count="3">
+<span style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 10px; border-radius: 14px; background: {{t.accentTint}}; color: {{t.accent}}; font-size: 13px; font-weight: 600;"><span style="font-weight: 400; opacity: .8;">{{k.f}}</span>{{k.v}}<button aria-label="Remove filter" style="width: 20px; height: 20px; border: 0; border-radius: 10px; background: transparent; color: inherit; display: grid; place-items: center; padding: 0;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></span>
+</sc-for>
+<span style="font-size: 15px;">gro<span style="display: inline-block; width: 1px; height: 17px; background: {{t.accent}}; vertical-align: middle;"></span></span>
+</label>
+<div style="position: absolute; left: 220px; top: 52px; width: 340px; background: {{t.card}}; border: 1px solid {{t.sep}}; border-radius: 12px; box-shadow: {{t.shadow}}; padding: 6px; z-index: 4; display: flex; flex-direction: column;">
+<sc-for list="{{sugg}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; background: {{g.bg}}; color: {{g.c}};"><span style="font-size: 12px; width: 76px; opacity: .8;">{{g.f}}</span><span style="flex-grow: 1; font-weight: 600;">{{g.v}}</span><span style="font-size: 12px; opacity: .8;">{{g.n}}</span></div>
+</sc-for>
+<div style="font-size: 12px; color: {{t.dim}}; padding: 6px 10px 2px;">Try: &gt;500 · aug · transfer · gmail · "exact words"</div>
+</div>
+</div>
+
+<div style="display: flex; gap: 8px; align-items: center;">
+<div style="display: flex; background: {{t.card2}}; border-radius: 9px; padding: 2px;">
+<button style="border: 0; border-radius: 7px; height: 30px; padding: 0 14px; background: transparent; color: {{t.dim}}; font-size: 13px;">All</button>
+<button style="border: 0; border-radius: 7px; height: 30px; padding: 0 14px; background: {{t.card}}; color: {{t.text}}; font-size: 13px; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.15);">Spent</button>
+<button style="border: 0; border-radius: 7px; height: 30px; padding: 0 14px; background: transparent; color: {{t.dim}}; font-size: 13px;">Earned</button>
+<button style="border: 0; border-radius: 7px; height: 30px; padding: 0 14px; background: transparent; color: {{t.dim}}; font-size: 13px;">Moved</button>
+</div>
+<span style="font-size: 12px; color: {{t.dim}}; margin-left: 8px;">Click any category, account or date in the list to filter by it.</span>
+</div>
+
+<div style="background: {{t.card}}; border-radius: 16px; overflow: hidden;">
+<div style="display: grid; grid-template-columns: 44px 90px minmax(0, 1fr) 220px 140px 120px; align-items: center; height: 36px; padding: 0 12px; font-size: 12px; font-weight: 600; color: {{t.dim}}; border-bottom: 1px solid {{t.sep}};"><span></span><span>Date</span><span>Description</span><span>Category</span><span>Account</span><span style="text-align: right;">Amount</span></div>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+<div style="display: grid; grid-template-columns: 44px 90px minmax(0, 1fr) 220px 140px 120px; align-items: center; min-height: 52px; padding: 0 12px; background: {{r.bg}}; border-bottom: 1px solid {{t.sep}};">
+<span style="width: 20px; height: 20px; border-radius: 6px; border: 2px solid {{r.cb}}; background: {{r.cf}}; box-sizing: border-box; display: grid; place-items: center; color: #FFFFFF; font-size: 12px; font-weight: 700;">{{r.tick}}</span>
+<span style="color: {{t.dim}};">{{r.date}}</span>
+<span style="display: flex; align-items: center; gap: 8px;">{{r.d}}<span style="font-size: 11px; font-weight: 600; color: {{r.tagc}}; background: {{r.tagb}}; border-radius: 6px; padding: 1px 6px;">{{r.tag}}</span></span>
+<span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 4px; background: {{r.segc}};"></span>{{r.cat}}</span>
+<span>GCash</span>
+<span style="text-align: right; font-weight: 600;">{{r.a}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 16px; border-radius: 16px; background: {{t.tip}}; color: #F5F5F7; box-shadow: {{t.shadow}}; font-size: 14px;">
+<span style="font-weight: 600; margin-right: 10px;">2 selected · −₱1,062</span>
+<button style="height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: rgba(255,255,255,.12); color: inherit; font-size: 13px;">Category</button>
+<button style="height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: rgba(255,255,255,.12); color: inherit; font-size: 13px;">Account</button>
+<button style="height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: rgba(255,255,255,.12); color: inherit; font-size: 13px;">Date</button>
+<button style="height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: rgba(255,69,58,.25); color: #FF8A80; font-size: 13px;">Delete</button>
+<button aria-label="Clear selection" style="width: 36px; height: 36px; border: 0; border-radius: 10px; background: transparent; color: inherit; display: grid; place-items: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+theme(d){return d?{bg:'#000000',card:'#1C1C1E',card2:'#2C2C2E',sel:'#2C2C2E',text:'#F5F5F7',dim:'#A1A1A6',sep:'#38383A',accent:'#0A84FF',accentTint:'rgba(10,132,255,.2)',pos:'#30D158',neg:'#FF453A',warn:'#FF9F0A',warnTint:'rgba(255,159,10,.18)',ess:'#64D2FF',rew:'#FF9F0A',tip:'#3A3A3C',rowSel:'rgba(10,132,255,.16)',rowHov:'#242426',shadow:'0 10px 30px rgba(0,0,0,.6)'}:{bg:'#F2F2F7',card:'#FFFFFF',card2:'#E4E4EA',sel:'#DCDCE3',text:'#1C1C1E',dim:'#6C6C70',sep:'#E5E5EA',accent:'#2463EB',accentTint:'#EAF0FE',pos:'#157A50',neg:'#C4382D',warn:'#B45309',warnTint:'#FDF1E1',ess:'#0E7C86',rew:'#D97706',tip:'#1C1C1E',rowSel:'#EAF0FE',rowHov:'#F7F7F9',shadow:'0 10px 30px rgba(0,0,0,.18)'};}
+renderVals(){
+var s=this.state||{}, dark=s.dark!=null?s.dark:!!this.props.dark, t=this.theme(dark), self=this;
+function L(k,n,on,badge){return {k:k,n:n,bg:on?t.sel:'transparent',fw:on?600:400,nc:badge?'#FFFFFF':t.dim,nb:badge?t.accent:'transparent'};}
+function A(k,v,dot,on,neg){return {k:k,v:v,dot:dot,bg:on?t.sel:'transparent',fw:on?600:400,vc:neg?t.neg:t.dim};}
+function R(date,d,cat,seg,a,sel,tag,hov){return {date:date,d:d,cat:cat,segc:seg==='E'?t.ess:t.rew,a:a,bg:sel?t.rowSel:(hov?t.rowHov:'transparent'),cb:sel?t.accent:t.dim,cf:sel?t.accent:'transparent',tick:sel?'✓':'',tag:tag||'',tagc:t.warn,tagb:tag?t.warnTint:'transparent'};}
+return {t:t,dark:dark,toggle:function(){self.setState({dark:!dark});},
+lists:[L('All activity','214',false),L('This month','23',false),L('Needs review','3',false,true),L('Big spends, ₱5,000+','4',false),L('Subscriptions','6',false)],
+accts:[A('Cash','₱4,238','#9AA0AA'),A('MariBank','₱13,074','#FFB454'),A('BPI Banko','₱26,050','#FF6B6B'),A('GCash','₱4,566','#5B8CFF',true),A('CIMB','₱38','#5B8CFF'),A('Wise','$200.00','#A78BFA'),A('RCBC Hexagon','−₱12,194','#9AA0AA',false,true),A('SPayLater','−₱4,000','#9AA0AA',false,true)],
+tokens:[{f:'Account',v:'GCash'},{f:'Amount',v:'≥ ₱300'},{f:'Month',v:'September 2026'}],
+sugg:[{f:'Category',v:'Food: Groceries',n:'1 result',bg:t.accent,c:'#FFFFFF'},{f:'Text',v:'contains “gro”',n:'1 result',bg:'transparent',c:t.text},{f:'Segment',v:'Growth',n:'0 results',bg:'transparent',c:t.dim}],
+rows:[R('Sep 18','Vitamins','Health: Medical','E','−₱620.00',true),R('Sep 15','Mobile load','Utilities: Internet/Mobile','E','−₱442.00',true),R('Sep 13','Grab to the office','Transport: Ride Hailing','E','−₱312.00'),R('Sep 10','Weekly groceries','Food: Groceries','E','−₱1,450.00'),R('Sep 8','Lunch with the team','Food: Dining Out','R','−₱385.00',false,'',true),R('Sep 5','Netflix','Services: Subscriptions','R','−₱549.00',false,'From Gmail · review')]};
+}
+}
+</script>
+</body>
+</html>
