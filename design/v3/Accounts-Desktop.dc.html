@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Accounts desktop</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
+button,input{font-family:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; overflow: hidden; background: {{t.bg}}; color: {{t.text}}; font-size: 14px; font-variant-numeric: tabular-nums;">
+<dc-import name="Sidebar" active="accounts" dark="{{dark}}" on-toggle="{{toggle}}" hint-size="240px,900px"></dc-import>
+<main style="width: 1200px; display: flex; flex-direction: column;">
+<dc-import name="Toolbar" heading="Accounts" sub="12 accounts · 2 owe you" dark="{{dark}}" hint-size="1200px,76px"></dc-import>
+<div style="padding: 4px 28px 28px; display: flex; flex-direction: column; gap: 16px;">
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;">
+<sc-for list="{{totals}}" as="k" hint-placeholder-count="3">
+<section style="background: {{t.card}}; border-radius: 20px; padding: 16px 20px; display: flex; flex-direction: column;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">{{k.k}}</span><span style="font-size: 28px; font-weight: 700; color: {{k.c}};">{{k.v}}</span><span style="font-size: 12px; color: {{t.dim}};">{{k.s}}</span></section>
+</sc-for>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start;">
+<div style="display: flex; flex-direction: column; gap: 16px;">
+<section style="background: {{t.card}}; border-radius: 20px; padding: 14px 20px 6px;">
+<div style="display: flex; justify-content: space-between; padding-bottom: 6px;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">Cash and banks</span><span style="font-size: 13px; font-weight: 600;">₱74,107</span></div>
+<sc-for list="{{cash}}" as="a" hint-placeholder-count="7">
+<div style="display: flex; align-items: center; gap: 12px; min-height: 50px; border-top: 1px solid {{t.sep}};"><span style="width: 30px; height: 30px; border-radius: 9px; background: {{a.dot}}; color: #FFFFFF; display: grid; place-items: center; font-weight: 700; font-size: 13px;">{{a.i}}</span><div style="flex-grow: 1; display: flex; flex-direction: column;"><span style="font-size: 15px;">{{a.k}}</span><span style="font-size: 12px; color: {{t.dim}};">{{a.s}}</span></div><div style="display: flex; flex-direction: column; align-items: flex-end;"><span style="font-size: 15px; font-weight: 600;">{{a.v}}</span><span style="font-size: 12px; color: {{t.dim}};">{{a.p}}</span></div></div>
+</sc-for>
+</section>
+<section style="background: {{t.card}}; border-radius: 20px; padding: 14px 20px 6px;">
+<div style="display: flex; justify-content: space-between; padding-bottom: 6px;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">Owed to you</span><span style="font-size: 13px; font-weight: 600;">₱7,407</span></div>
+<div style="display: flex; align-items: center; gap: 12px; min-height: 50px; border-top: 1px solid {{t.sep}};"><span style="width: 30px; height: 30px; border-radius: 15px; background: {{t.card2}}; display: grid; place-items: center; font-weight: 700; font-size: 13px;">KR</span><div style="flex-grow: 1; display: flex; flex-direction: column;"><span style="font-size: 15px;">Kuya Ramon</span><span style="font-size: 12px; color: {{t.dim}};">Not counted in runway</span></div><span style="font-size: 15px; font-weight: 600;">₱7,407</span></div>
+</section>
+</div>
+<div style="display: flex; flex-direction: column; gap: 16px;">
+<section style="background: {{t.card}}; border-radius: 20px; padding: 14px 20px;">
+<div style="display: flex; justify-content: space-between; padding-bottom: 6px;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">Credit</span><span style="font-size: 13px; font-weight: 600; color: {{t.neg}};">−₱16,194</span></div>
+<sc-for list="{{credit}}" as="c" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid {{t.sep}};"><div style="display: flex; justify-content: space-between;"><span style="font-size: 15px;">{{c.k}}</span><span style="font-size: 15px; font-weight: 600;">{{c.v}}</span></div><div style="height: 6px; border-radius: 3px; background: {{t.track}};"><div style="height: 6px; border-radius: 3px; width: {{c.w}}; background: {{c.c}};"></div></div><span style="font-size: 12px; color: {{c.sc}};">{{c.s}}</span></div>
+</sc-for>
+</section>
+<section style="background: {{t.card}}; border-radius: 20px; padding: 14px 20px 6px;">
+<div style="display: flex; justify-content: space-between; padding-bottom: 6px;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">Recurring and installments</span><span style="font-size: 13px; font-weight: 600;">₱12,070 a month</span></div>
+<sc-for list="{{rec}}" as="r" hint-placeholder-count="6">
+<div style="display: flex; align-items: center; min-height: 40px; border-top: 1px solid {{t.sep}};"><span style="flex-grow: 1; font-size: 15px;">{{r.k}}</span><span style="font-size: 12px; color: {{r.dc}}; margin-right: 14px;">{{r.due}}</span><span style="font-size: 15px; font-weight: 600; width: 90px; text-align: right;">{{r.v}}</span></div>
+</sc-for>
+</section>
+<section style="background: {{t.card}}; border-radius: 20px; padding: 14px 20px; display: flex; flex-direction: column; gap: 10px;">
+<div style="display: flex; justify-content: space-between;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">iPhone balance widget</span><span style="font-size: 12px; color: {{t.dim}};">Pick up to 3</span></div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap;">
+<sc-for list="{{widget}}" as="w" hint-placeholder-count="6"><button style="height: 32px; padding: 0 12px; border: 1px solid {{w.bd}}; border-radius: 16px; background: {{w.bg}}; color: {{w.fg}}; font-size: 13px; font-weight: 600;">{{w.k}}</button></sc-for>
+</div>
+</section>
+</div>
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+theme(d){return d?{bg:'#000000',card:'#1C1C1E',card2:'#2C2C2E',text:'#F5F5F7',dim:'#A1A1A6',sep:'#38383A',accent:'#0A84FF',accentTint:'rgba(10,132,255,.2)',pos:'#30D158',neg:'#FF453A',warn:'#FF9F0A',track:'#2C2C2E'}:{bg:'#F2F2F7',card:'#FFFFFF',card2:'#E9E9EE',text:'#1C1C1E',dim:'#6C6C70',sep:'#E5E5EA',accent:'#2463EB',accentTint:'#EAF0FE',pos:'#157A50',neg:'#C4382D',warn:'#B45309',track:'#E9E9EE'};}
+renderVals(){
+var s=this.state||{}, dark=s.dark!=null?s.dark:!!this.props.dark, t=this.theme(dark), self=this;
+function W(k,on){return {k:k,bg:on?t.accentTint:'transparent',fg:on?t.accent:t.text,bd:on?t.accent:t.sep};}
+function A(k,s,v,p,dot){return {k:k,s:s,v:v,p:p||'',dot:dot,i:k.charAt(0)};}
+function R(k,due,v,soon){return {k:k,due:due,v:v,dc:soon?t.warn:t.dim};}
+return {t:t,dark:dark,toggle:function(){self.setState({dark:!dark});},
+totals:[{k:'Assets',v:'₱119,414',s:'Cash ₱74,107 · Invested ₱37,900 · Owed ₱7,407',c:t.text},{k:'Liabilities',v:'−₱16,194',s:'2 credit lines',c:t.neg},{k:'Net worth',v:'₱103,220',s:'▲ ₱41,220 since August',c:t.text}],
+cash:[A('BPI Banko','5.00% a year · monthly interest','₱26,050','','#E5484D'),A('MariBank','3.25% a year · daily interest','₱13,074','','#F59E0B'),A('Wise Savings','Emergency fund · USD','₱13,861','$227.10','#8B5CF6'),A('Wise','USD','₱12,280','$200.00','#8B5CF6'),A('GCash','E-wallet','₱4,566','','#3B82F6'),A('Cash','Wallet','₱4,238','','#8E8E93'),A('CIMB','2.60% a year','₱38','','#3B82F6')],
+credit:[{k:'RCBC Hexagon Platinum',v:'−₱12,194',w:'12%',c:t.accent,s:'₱87,806 available of ₱100,000',sc:t.dim},{k:'SPayLater',v:'−₱4,000',w:'100%',c:t.warn,s:'Limit reached',sc:t.warn}],
+rec:[R('Laptop installment','8 months left','₱4,711',true),R('BIR','Government','₱2,000'),R('Water bill','Bills','₱2,000'),R('Fibre internet','Bills','₱1,699'),R('SSS','Government','₱760'),R('PhilHealth · Pag-IBIG','Government','₱900')],
+widget:[W('BPI Banko ✓',true),W('GCash ✓',true),W('Wise ✓',true),W('MariBank'),W('Cash'),W('RCBC Hexagon')]};
+}
+}
+</script>
+</body>
+</html>

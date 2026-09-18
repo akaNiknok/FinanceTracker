@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Summary phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
+button,input{font-family:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; position: relative; overflow: hidden; background: {{t.bg}}; color: {{t.text}}; font-variant-numeric: tabular-nums;">
+<div style="padding: 16px 16px 170px; display: flex; flex-direction: column; gap: 12px;">
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 0 4px;">
+<button style="display: flex; align-items: center; gap: 4px; min-height: 44px; padding: 0 14px; border: 0; border-radius: 22px; background: {{t.card}}; color: {{t.text}}; font-size: 15px; font-weight: 600;">September 2026<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></button>
+<button onClick="{{toggle}}" aria-label="Switch light or dark" style="width: 44px; height: 44px; border: 0; border-radius: 22px; background: {{t.card}}; color: {{t.text}}; display: grid; place-items: center;">
+<sc-if value="{{dark}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></sc-if>
+<sc-if value="{{light}}" hint-placeholder-val="{{true}}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg></sc-if>
+</button>
+</div>
+<div style="padding: 0 4px;"><h1 style="margin: 0; font-size: 34px; line-height: 41px; font-weight: 700; letter-spacing: -0.5px;">Summary</h1><div style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: {{t.dim}};"><span style="width: 7px; height: 7px; border-radius: 4px; background: {{t.pos}};"></span>Synced just now</div></div>
+
+<section style="background: {{t.card}}; border-radius: 20px; padding: 16px 20px 0; overflow: hidden; display: flex; flex-direction: column; gap: 2px;">
+<div style="font-size: 13px; font-weight: 600; color: {{t.dim}};">Net worth</div>
+<div style="font-size: 38px; line-height: 44px; font-weight: 700; letter-spacing: -1px;">₱103,220</div>
+<div style="display: flex; gap: 8px; align-items: center; font-size: 13px; color: {{t.dim}};"><span style="background: {{t.posTint}}; color: {{t.pos}}; font-weight: 700; padding: 2px 8px; border-radius: 8px;">▲ ₱41,220</span><span>since August</span></div>
+<svg width="390" height="54" viewBox="0 0 350 56" preserveAspectRatio="none" style="display: block; margin: 8px -20px 0;">
+<path d="M0,31.4 L70,28.3 L140,26 L210,26.9 L280,25.1 L350,6.6 L350,56 L0,56 Z" fill="{{t.liq}}" fill-opacity=".16"></path>
+<path d="M0,31.4 L70,28.3 L140,26 L210,26.9 L280,25.1 L350,6.6" fill="none" stroke="{{t.liq}}" stroke-width="2.2" vector-effect="non-scaling-stroke"></path>
+</svg>
+</section>
+
+<section style="background: {{t.card}}; border-radius: 20px; padding: 16px 20px 6px; display: flex; flex-direction: column; gap: 8px;">
+<div style="display: flex; justify-content: space-between;"><span style="font-size: 13px; font-weight: 600; color: {{t.dim}};">Left to spend</span><span style="font-size: 13px; color: {{t.dim}};">11 days left</span></div>
+<div style="display: flex; align-items: baseline; gap: 8px;"><span style="font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">₱19,201</span><span style="font-size: 15px; color: {{t.dim}};">of ₱28,800</span></div>
+<div style="display: flex; height: 8px; border-radius: 4px; background: {{t.track}}; overflow: hidden; gap: 2px;"><div style="width: 21.9%; background: {{t.ess}};"></div><div style="width: 11.4%; background: {{t.rew}};"></div></div>
+<div style="font-size: 15px; color: {{t.dim}};">About <b style="color: {{t.text}};">₱1,745 a day</b> keeps you on budget.</div>
+<div style="display: flex; flex-direction: column;">
+<sc-for list="{{segs}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 10px; min-height: 44px; border-top: 1px solid {{t.sep}};"><span style="width: 10px; height: 10px; border-radius: 5px; background: {{g.color}};"></span><span style="flex-grow: 1; font-size: 16px;">{{g.label}}</span><span style="font-size: 15px; font-weight: 600;">{{g.value}}</span></div>
+</sc-for>
+</div>
+</section>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+<button style="border: 0; text-align: left; color: inherit; background: {{t.card}}; border-radius: 20px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px;">
+<span style="display: flex; justify-content: space-between; width: 100%; font-size: 13px; font-weight: 600; color: {{t.dim}};">Free in<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></span>
+<span style="font-size: 24px; font-weight: 700;">10y 1m</span><span style="font-size: 12px; color: {{t.pos}}; font-weight: 600;">On track · Oct 2036</span>
+</button>
+<button style="border: 0; text-align: left; color: inherit; background: {{t.card}}; border-radius: 20px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px;">
+<span style="display: flex; justify-content: space-between; width: 100%; font-size: 13px; font-weight: 600; color: {{t.dim}};">Runway<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></span>
+<span style="font-size: 24px; font-weight: 700;">5.2 mo</span><span style="font-size: 12px; color: {{t.dim}};">Target 4 mo · ₱65,320</span>
+</button>
+</div>
+</div>
+<div style="position: absolute; left: 0; bottom: 0;"><dc-import name="TabBar" active="summary" dark="{{dark}}" hint-size="390px,156px"></dc-import></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;dark&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false},&quot;$preview&quot;:{&quot;width&quot;:390,&quot;height&quot;:844}}">
+class Component extends DCLogic {
+theme(d){return d?{bg:'#000000',card:'#1C1C1E',text:'#F5F5F7',dim:'#A1A1A6',sep:'#38383A',pos:'#30D158',posTint:'rgba(48,209,88,.16)',ess:'#64D2FF',rew:'#FF9F0A',gro:'#BF5AF2',track:'#2C2C2E',liq:'#0A84FF'}:{bg:'#F2F2F7',card:'#FFFFFF',text:'#1C1C1E',dim:'#6C6C70',sep:'#E5E5EA',pos:'#157A50',posTint:'#E3F5EC',ess:'#0E7C86',rew:'#D97706',gro:'#7C5CFA',track:'#E9E9EE',liq:'#2463EB'};}
+renderVals(){
+var s=this.state||{}, dark=s.dark!=null?s.dark:!!this.props.dark, t=this.theme(dark), self=this;
+return {t:t,dark:dark,light:!dark,toggle:function(){self.setState({dark:!dark});},
+segs:[{label:'Essentials',value:'₱17,697 left',color:t.ess},{label:'Rewards',value:'₱1,504 left',color:t.rew},{label:'Growth',value:'Funded ✓',color:t.gro}]};
+}
+}
+</script>
+</body>
+</html>

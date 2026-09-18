@@ -5,6 +5,8 @@ description: How the PWA in worker/public/ is built — screens, the gs() data p
 
 # The SPA frontend
 
+**The look is `DESIGN.md` (repo root) — read it before changing anything visible.** This skill is the mechanics; that file is the tokens, layout, components and motion. The v3 redesign is in progress per `V3_PLAN.md` while that file exists: where a paragraph below describes v2 chrome (Inter, text-glyph nav, the dark-only palette), the plan's phase for it wins.
+
 Files this skill covers.
 
 | File | Purpose |
