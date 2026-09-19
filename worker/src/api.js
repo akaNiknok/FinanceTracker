@@ -31,6 +31,7 @@ import {
   isInvestedNetWorth, isPulseAcct, isSharesAcct, NOT_SHARES_SRC, resolveAccount, resolveCategory
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
+import { parse } from './gemini.js';
 
 // The Ledger's column names, which are still the sheet's — the Tax screen renders
 // these strings and LEDGER_COL_ORDER in app.js sorts by them.
@@ -939,11 +940,12 @@ export async function getInvestments(args, env) {
 
 export async function getBootstrap(args, env) {
   const r = await refs(env);
-  const [{ accounts, fx }, meta, recurring, minRow] = await Promise.all([
+  const [{ accounts, fx }, meta, recurring, minRow, recent] = await Promise.all([
     accountsList(env, r),
     metaAll(env),
     getRecurring({}, env),
-    env.DB.prepare('SELECT MIN(date) AS d FROM transactions').first()
+    env.DB.prepare('SELECT MIN(date) AS d FROM transactions').first(),
+    recentSets(env, r)
   ]);
   const categories = {};
   r.categories.forEach((c) => {
@@ -960,9 +962,45 @@ export async function getBootstrap(args, env) {
     fxUsdPhp: fx.USD || null,
     widgetAccounts: widgetNames(meta[WIDGET_META]),   // the Accounts screen's widget picker
     smartLists: smartLists(meta[SMART_META]),         // Activity's saved filters
+    quickPicks: recent.quickPicks,                    // the add sheet's "Or repeat one" chips
+    descCategory: recent.descCategory,                // the add field's instant category guess
     // Oldest ledger month, so the month pickers reach all history.
     minMonth: minRow && minRow.d ? monthOf(minRow.d) : null
   };
+}
+
+/**
+ * The add field's memory, from ONE query over the last 90 days of non-transfer rows,
+ * grouped by (description, category, account, amount). quickPicks = the 8 most repeated
+ * sets; descCategory = lower-cased description -> the category of its LATEST use.
+ */
+async function recentSets(env, r) {
+  const { results } = await env.DB.prepare(
+    "SELECT description AS d, category_id AS c, account_id AS a, amount_u AS u, COUNT(*) AS n, MAX(date || id) AS last " +
+    "FROM transactions WHERE to_account_id IS NULL AND description IS NOT NULL AND description != '' " +
+    "AND date >= date(?, '-90 days') GROUP BY lower(description), category_id, account_id, amount_u"
+  ).bind(manilaToday()).all();
+  const descCategory = {}, latest = {};
+  results.forEach((x) => {
+    const k = x.d.toLowerCase();
+    if (!(k in latest) || x.last > latest[k]) { latest[k] = x.last; descCategory[k] = r.catById[x.c].name; }
+  });
+  const quickPicks = results.slice()
+    .sort((a, b) => b.n - a.n || (b.last > a.last ? 1 : b.last < a.last ? -1 : 0)).slice(0, 8)
+    .map((x) => ({ Description: x.d, Category: r.catById[x.c].name, Account: r.acctById[x.a].name, Amount: fromU(x.u) }));
+  return { quickPicks, descCategory };
+}
+
+/**
+ * GET {text} — the add field's parse on Return: the bot's own Gemini call, same prompt,
+ * so its category rules hold. A read (it writes nothing); the SPA saves through
+ * createTransaction/createTransfer afterwards, so the offline queue still applies.
+ */
+export async function getParse(args, env) {
+  const text = String(args.text || '').trim().slice(0, 500);
+  if (!text) return { status: 'success', intent: 'log', items: [], error: 'Nothing to parse.' };
+  const p = await parse(env, await refs(env), text);
+  return { status: 'success', intent: p.intent || 'log', items: p.error ? [] : (p.items || []), error: p.error || null };
 }
 
 // ── iOS widgets (widgets/FinanceTracker.js) ─────────────────────────────────

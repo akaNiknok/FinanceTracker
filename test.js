@@ -770,6 +770,19 @@ describe('Gmail courier watermark (vm)', () => {
       assert.ok(P('300').some((t) => t.k === 'minAmount' && t.v === '300'), 'a bare number is "at least"');
       assert.deepStrictEqual(P('gcash').pop(), { k: 'search', v: 'gcash' });
       assert.deepStrictEqual(P('  '), []);
+      // parseAdd: the add field's instant, local pass.
+      const qctx = { accounts: ['GCash', 'GrabPay', 'Wise USD', 'Maya'], descCategory: { vitamins: 'Health: Medical' } };
+      const A = (t) => JSON.parse(JSON.stringify(app.parseAdd(t, qctx)));
+      assert.deepStrictEqual(A('vitamins 620 gcash'),
+        { Amount: 620, Account: 'GCash', ToAccount: '', Category: 'Health: Medical', Description: 'Vitamins' });
+      assert.strictEqual(A('grab 312 gcash').Account, 'GCash', 'the last account named wins');
+      assert.strictEqual(A('grab 312 gcash').Description, 'Grab', 'an earlier prefix match stays text');
+      assert.strictEqual(A('lunch 1.5k').Amount, 1500);
+      assert.strictEqual(A('refund -₱1,200.50 maya').Amount, -1200.5);
+      assert.deepStrictEqual([A('gcash to maya 500').Account, A('gcash to maya 500').ToAccount, A('gcash to maya 500').Description], ['GCash', 'Maya', '']);
+      assert.strictEqual(A('500 wise usd').Account, 'Wise USD', 'a two-word name');
+      assert.strictEqual(A('go to the gym 300').ToAccount, '', '"to" without accounts on both sides is text');
+      assert.deepStrictEqual(A('coffee'), { Amount: null, Account: '', ToAccount: '', Category: '', Description: 'Coffee' });
       assert.deepStrictEqual(JSON.parse(JSON.stringify(app.activeTokens({ month: '', type: 'Expense', minAmount: '300' }))),
                              [{ k: 'type', v: 'Expense' }, { k: 'minAmount', v: '300' }], 'month "" means all months: no token');
       assert.strictEqual(app.tokenText('month', '2026-Sep'), 'September 2026');

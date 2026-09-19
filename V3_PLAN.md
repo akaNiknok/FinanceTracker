@@ -82,7 +82,7 @@ Done when: seed-data figures match the old dashboard exactly, every tooltip's in
 - **"Needs review" is out of scope for v3.0.** It needs an additive `reviewed_at` column and a rule for clearing it. Offer "From Gmail" / "From Telegram" source lists instead, and log it as a TODO in MEMORY.md.
 Done when: every old filter (search, date, month, type, category, account) can be expressed, and the new ones work. Bulk edit works with touch and with the mouse, and `test-api.js` covers the new args and the handler.
 
-### Phase 4 — Type to add and ⌘K  ☐
+### Phase 4 — Type to add and ⌘K  ☑
 - The add field parses as you type:
   - **Instant, local:** the amount and the account (fuzzy match on account names, `fuzzyScore`), and the category from the last use of the same description.
   - **On Return, or when the local pass finds no category:** a new read route `getParse` → `gemini.parse` (the bot's parser, the same prompt, so its category rules hold).

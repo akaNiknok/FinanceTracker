@@ -250,7 +250,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 12;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 13;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists; 13 = bootstrap.quickPicks + descCategory
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -591,13 +591,235 @@ window.addEventListener('offline',function(){ netSeen(false); });
 // Back online is not "synced": clear the flag, and let the next answer stamp the time.
 window.addEventListener('online',function(){ net.offline=false; syncUI(); });
 
-/* The add field. Phase 1: the text becomes the description of the full form.
- * V3_PLAN Phase 4 makes it parse. */
-function addSubmit(){
-  var inp=$('#addInput'), text=inp.value.trim();
-  inp.value=''; inp.blur();
-  withBoot(function(){ openTxModal(text?{Date:newTxDate(),Description:text,Category:''}:null); });
+/* ════ The add field: type to add, search or jump (V3_PLAN Phase 4) ════
+ * parseAdd is the instant, local pass: the amount, the account (a name typed in full or
+ * as a 3+ letter prefix), and the category the same description had last time
+ * (getBootstrap.descCategory). Two accounts make a transfer only with "to" between
+ * them, so "grab 312 gcash" stays an expense even with a GrabPay account. Gemini
+ * (getParse, the bot's parser) fills what is left on Return, or after a pause when the
+ * local pass has an amount but no category. */
+function parseAdd(text,ctx){
+  var norm=function(s){ return String(s).toLowerCase().replace(/[^a-z0-9]/g,''); };
+  var words=String(text||'').trim().split(/\s+/).filter(Boolean), out={Amount:null,Account:'',ToAccount:'',Category:'',Description:''};
+  for(var i=0;i<words.length;i++){
+    var m=/^([-+]?)[₱$]?(\d[\d,]*(?:\.\d+)?)(k?)$/i.exec(words[i]);
+    if(m){ out.Amount=Number(m[2].replace(/,/g,''))*(m[3]?1000:1)*(m[1]==='-'?-1:1); words.splice(i,1); break; }
+  }
+  function acct(w){
+    var n=norm(w); if(!n) return null;
+    var hit=ctx.accounts.filter(function(a){ return norm(a)===n; });
+    if(!hit.length&&n.length>=3) hit=ctx.accounts.filter(function(a){ return norm(a).indexOf(n)===0; })
+      .sort(function(a,b){ return fuzzyScore(w,b)-fuzzyScore(w,a); });
+    return hit[0]||null;
+  }
+  var found=[];   // [{i, n (words), name}]; a two-word name is tried first
+  for(i=0;i<words.length;i++){
+    var two=i+1<words.length&&acct(words[i]+words[i+1]);
+    if(two&&norm(two)===norm(words[i]+words[i+1])){ found.push({i:i,n:2,name:two}); i++; continue; }
+    var one=acct(words[i]); if(one) found.push({i:i,n:1,name:one});
+  }
+  var drop={}, to=-1, src=null, dst=null;
+  words.forEach(function(w,j){ if(/^(to|->|→)$/i.test(w)) to=j; });
+  if(to>=0){
+    src=found.filter(function(f){ return f.i<to; }).pop(); dst=found.filter(function(f){ return f.i>to; })[0];
+    if(!src||!dst||src.name===dst.name) src=dst=null;
+  }
+  var use=src?[src,dst]:found.length?[found[found.length-1]]:[];   // "desc amount account": the last name wins
+  use.forEach(function(f){ drop[f.i]=1; if(f.n===2) drop[f.i+1]=1; });
+  if(src){ drop[to]=1; out.Account=src.name; out.ToAccount=dst.name; }
+  else if(use.length) out.Account=use[0].name;
+  var d=words.filter(function(w,j){ return !drop[j]; }).join(' ');
+  out.Description=d?d.charAt(0).toUpperCase()+d.slice(1):'';
+  out.Category=out.ToAccount?'':((ctx.descCategory||{})[d.toLowerCase()]||'');
+  return out;
 }
+function qaCtx(){
+  return {accounts:acctOptions().map(function(o){ return o.value; }), descCategory:(S.boot&&S.boot.descCategory)||{}};
+}
+function catType(c){ var x=((S.boot&&S.boot.categories)||{})[c]; return String((x&&x.Type)||''); }
+
+var QA={open:false, text:'', ai:null, aiFor:'', aiBusy:false, over:{}, kind:'', t:0, sel:0, rows:[]};
+// The draft = the local parse, then Gemini's answer for the same text, then the owner's own picks.
+function qaDraft(){
+  var d=parseAdd(QA.text,qaCtx()), ai=QA.aiFor===QA.text.trim()&&QA.ai;
+  if(ai){
+    ['Amount','Account','ToAccount','Category'].forEach(function(k){ if(!d[k]&&ai[k]) d[k]=ai[k]; });
+    if(ai.Description!=null) d.Description=ai.Description;
+    if(ai.Date) d.Date=ai.Date;
+  }
+  Object.keys(QA.over).forEach(function(k){ d[k]=QA.over[k]; });
+  if(!d.Account){ var la=prefGet('lastAcct'); if(la&&qaCtx().accounts.indexOf(la)>=0) d.Account=la; }
+  d.Date=d.Date||newTxDate();
+  var kind=QA.kind||(d.ToAccount?'xfer':catType(d.Category)==='Income'?'in':'out');
+  if(kind==='xfer'){ if(catType(d.Category)!=='Transfer') d.Category=catType('Transfer: Internal')?'Transfer: Internal':''; }
+  else { d.ToAccount=''; if(d.Category&&catType(d.Category)!==(kind==='in'?'Income':'Expense')) d.Category=''; }
+  d.kind=kind; return d;
+}
+function qaComplete(d){ return !!(d.Amount&&d.Account&&d.Category&&(d.kind!=='xfer'||(d.ToAccount&&d.ToAccount!==d.Account))); }
+
+// ⌘K: jump rows (screens) and the Activity search. Text with a digit is an add, not a jump.
+function qaJumps(text){
+  var q=text.trim(); if(!q) return [];
+  var rows=[];
+  if(!/\d/.test(q)) document.querySelectorAll('#nav .nav-item[data-screen]').forEach(function(b){
+    var sc=fuzzyScore(q,b.title);
+    if(sc>=40) rows.push({sc:sc,label:'Go to '+b.title,icon:'chevron',screen:b.dataset.screen});
+  });
+  rows.sort(function(a,b){ return b.sc-a.sc; });
+  rows.push({label:'Search Activity for “'+q+'”',icon:'search',search:q});
+  return rows;
+}
+
+function qaShow(){
+  if(!$('#qa')){
+    var bd=el('div','qa-bd'); bd.onclick=function(){ qaHide(); $('#addInput').blur(); }; $('#app').appendChild(bd);
+    var p=el('div','qa'); p.id='qa'; $('.addbar').appendChild(p);
+    // A tap inside must not blur the field (the keyboard would drop mid-edit).
+    p.addEventListener('mousedown',function(e){ if(!e.target.closest('input')) e.preventDefault(); });
+  }
+  QA.open=true; document.body.classList.add('qa-on'); qaDraw();
+}
+function qaHide(){ QA.open=false; document.body.classList.remove('qa-on'); var p=$('#qa'); if(p) p.innerHTML=''; }
+function qaReset(){
+  clearTimeout(QA.t); QA.text=''; QA.ai=null; QA.aiFor=''; QA.over={}; QA.kind=''; QA.sel=0;
+  $('#addInput').value=''; qaHide();
+}
+
+function qaDraw(){
+  var p=$('#qa'); if(!p||!QA.open) return;
+  p.innerHTML='';
+  var text=QA.text.trim(), d=qaDraft(), jumps=d.Amount?[]:qaJumps(text), picks=(S.boot&&S.boot.quickPicks)||[];
+  var adding=!!text&&(!!d.Amount||jumps.length===1);   // no amount and no screen match: still an add, with Search under it
+  QA.rows=(adding?[{save:1}]:[]).concat(jumps);
+  if(QA.sel>=QA.rows.length) QA.sel=0;
+  if(adding){
+    var card=el('div','qa-card'+(QA.sel===0&&QA.rows.length>1?' sel':''));
+    var seg=el('div','seg-toggle qa-seg');
+    [['out','Spent'],['in','Earned'],['xfer','Moved']].forEach(function(k){
+      var b=el('button',k[0]===d.kind?'on':'',k[1]); b.type='button'; b.setAttribute('aria-pressed',String(k[0]===d.kind));
+      b.onclick=function(){ QA.kind=k[0]; qaDraw(); };
+      seg.appendChild(b);
+    });
+    card.appendChild(seg);
+    var n=Number(d.Amount)||0, sign=d.kind==='xfer'?'':(d.kind==='out')===(n>0)?'−':'+';
+    card.appendChild(el('div','qa-amt '+(n?d.kind:'ph'),n?esc(sign+moneyCur(Math.abs(n),acctCurrency(d.Account))):'No amount yet'));
+    card.appendChild(el('div','qa-desc',esc(d.Description||'No description')));
+    var g=el('div','ed-group qa-rows');
+    var want=d.kind==='xfer'?'Transfer':d.kind==='in'?'Income':'Expense';
+    var cats=Object.keys(S.boot.categories||{}).filter(function(c){ return catType(c)===want; }).sort();
+    qaRow(g,'Category',d.Category,catItems(cats),'Category');
+    qaRow(g,d.kind==='xfer'?'From':'Account',d.Account,acctOptions(),'Account');
+    if(d.kind==='xfer') qaRow(g,'To',d.ToAccount,acctOptions(),'ToAccount');
+    var dr=el('label','ed-row'); dr.appendChild(el('span','ed-lab','Date'));
+    var di=inputEl('date',d.Date); di.className='ed-in ed-date';
+    di.onchange=function(){ QA.over.Date=di.value; }; dr.appendChild(di); g.appendChild(dr);
+    card.appendChild(g);
+    card.appendChild(el('div','qa-hint',QA.aiBusy?'Reading it…':qaComplete(d)?'Return saves · works offline and syncs later':'Return fills the rest, or opens the full form'));
+    p.appendChild(card);
+  }
+  if(jumps.length){
+    var list=el('div','ed-group qa-jumps');
+    jumps.forEach(function(j,i){
+      var k=i+(adding?1:0), b=el('button','ed-row ed-link qa-jump'+(QA.sel===k?' sel':''),icon(j.icon)+'<span class="ed-txt">'+esc(j.label)+'</span>');
+      b.type='button'; b.onclick=function(){ qaRun(k); }; list.appendChild(b);
+    });
+    p.appendChild(list);
+  }
+  if(picks.length&&(!text||adding)){
+    p.appendChild(el('div','qa-lab','Or repeat one'));
+    var chips=el('div','qa-chips');
+    picks.forEach(function(k){
+      var c=el('button','qa-chip',esc(k.Description)+' <b>'+esc(moneyCur(k.Amount,acctCurrency(k.Account)))+'</b>'); c.type='button';
+      c.onclick=function(){
+        QA.over={Category:k.Category,Account:k.Account}; QA.kind=''; QA.sel=0;
+        $('#addInput').value=QA.text=k.Description+' '+k.Amount; qaDraw();
+      };
+      chips.appendChild(c);
+    });
+    p.appendChild(chips);
+  }
+  if(!p.children.length) qaHide();
+}
+function qaRow(g,label,value,items,key){
+  var b=el('button','ed-row ed-link'); b.type='button';
+  b.appendChild(el('span','ed-lab',esc(label)));
+  var it=items.filter(function(i){ return i.value===value; })[0];
+  b.appendChild(el('span','ed-val',it?edDot(it.color)+'<span class="ed-txt">'+esc(it.label)+'</span>':'<span class="ed-ph">Choose</span>'));
+  b.insertAdjacentHTML('beforeend',icon('chevron'));
+  b.onclick=function(){ openPicker(label,items,value||'',function(v){ QA.over[key]=v; qaDraw(); }); };
+  g.appendChild(b);
+}
+
+// Gemini, once per text. Offline or a failure keeps the local parse and the typed text.
+function qaAsk(){
+  var text=QA.text.trim();
+  if(!text||QA.aiFor===text||net.offline) return Promise.resolve();
+  QA.aiBusy=true; qaDraw();
+  return gs('api_getParse',{text:text}).then(function(r){
+    if(QA.text.trim()===text){ QA.aiFor=text; QA.ai=(r.items||[])[0]||null; }
+  }).catch(function(){ if(QA.text.trim()===text){ QA.aiFor=text; QA.ai=null; } })
+    .then(function(){ QA.aiBusy=false; qaDraw(); });
+}
+function qaInput(){
+  QA.text=$('#addInput').value; QA.sel=0; QA.kind='';
+  if(!QA.text.trim()) QA.over={};
+  if(!S.boot) return withBoot(qaInput);
+  if(QA.open) qaDraw(); else qaShow();
+  clearTimeout(QA.t);
+  var d=qaDraft();
+  if(d.Amount&&!d.Category&&d.kind!=='xfer') QA.t=setTimeout(qaAsk,700);
+}
+function qaRun(k){
+  var r=QA.rows[k]; if(!r) return;
+  if(r.save) return qaSave();
+  qaReset(); $('#addInput').blur();
+  if(r.search){ S.tx.filters={month:'',search:r.search}; S.tx.offset=0; }
+  go(r.screen||'transactions');
+}
+// Save a whole draft. Else ask Gemini once, then fall back to the filled full form.
+function qaSave(){
+  if(!S.boot) return withBoot(qaSave);
+  var d=qaDraft(), text=QA.text.trim();
+  if(!text) return;
+  if(!qaComplete(d)&&QA.aiFor!==text&&!net.offline) return qaAsk().then(function(){ if(QA.text.trim()===text) qaSave(); });
+  var xfer=d.kind==='xfer', amount=Number(d.Amount);
+  var payload={Date:d.Date,Category:d.Category,Account:d.Account,Amount:amount,Description:d.Description};
+  if(xfer) payload.ToAccount=d.ToAccount;
+  qaReset(); $('#addInput').blur();
+  if(!qaComplete(d)){
+    if(!amount) payload.Amount='';
+    (xfer?openTransferModal:openTxModal)(payload);
+    return;
+  }
+  if(!xfer) prefSet('lastAcct',d.Account);
+  commitTx({t:null,payload:payload,isEdit:false,create:xfer?'api_createTransfer':'api_createTransaction',
+            addedMsg:xfer?'Transfer added':'Added',failMsg:xfer?'Transfer failed':'Add failed',
+            reopen:xfer?openTransferModal:openTxModal});
+}
+function qaKey(e){
+  if(e.key==='Enter'){ e.preventDefault(); if(QA.text.trim()) qaRun(QA.sel); }
+  else if(e.key==='Escape'){ if(QA.text) qaReset(); else qaHide(); this.blur(); }
+  else if((e.key==='ArrowDown'||e.key==='ArrowUp')&&QA.open&&QA.rows.length>1){
+    e.preventDefault(); var n=QA.rows.length; QA.sel=(QA.sel+(e.key==='ArrowDown'?1:n-1))%n; qaDraw();
+  }
+}
+// iPhone: the docked add bar rides on top of the keyboard. iOS pans the page to show a
+// focused field, so the visual viewport's bottom edge is what is really visible.
+function qaFollowKeyboard(){
+  if(!window.visualViewport) return;
+  var bar=$('.addbar'), inp=$('#addInput');
+  function fit(){
+    bar.style.transform='';
+    if(matchMedia('(min-width:768px)').matches||document.activeElement!==inp){ bar.style.removeProperty('--qa-max'); return; }
+    var vv=visualViewport, r=bar.getBoundingClientRect(), dy=Math.min(0,Math.round(vv.offsetTop+vv.height-r.bottom));
+    if(dy) bar.style.transform='translateY('+dy+'px)';
+    bar.style.setProperty('--qa-max',Math.max(160,Math.round(r.top+dy-vv.offsetTop-56))+'px');
+  }
+  visualViewport.addEventListener('resize',fit); visualViewport.addEventListener('scroll',fit);
+  inp.addEventListener('focus',function(){ setTimeout(fit,60); });
+  inp.addEventListener('blur',function(){ setTimeout(fit,60); });
+}
+
 function wireShell(){
   document.querySelectorAll('.theme-btn').forEach(wireThemeBtn);
   applyTheme(themePref());
@@ -605,12 +827,19 @@ function wireShell(){
   $('.add-kbd').textContent=MOD+' K';
   $('#addInput').placeholder=matchMedia('(min-width:768px)').matches
     ? 'Add “grab 312 gcash”, search, or jump to a screen' : 'coffee 180 gcash';
-  $('#addInput').addEventListener('keydown',function(e){
-    if(e.key==='Enter'){ e.preventDefault(); addSubmit(); }
-    else if(e.key==='Escape'){ this.value=''; this.blur(); }
+  var inp=$('#addInput');
+  inp.addEventListener('keydown',qaKey);
+  inp.addEventListener('input',qaInput);
+  inp.addEventListener('focus',function(){ if(!QA.open) withBoot(qaShow); });
+  qaFollowKeyboard();
+  // The + opens the full form, carrying whatever is typed (a plain click on the field focuses it).
+  $('.add-plus').addEventListener('click',function(e){
+    e.preventDefault();
+    withBoot(function(){
+      var d=qaDraft(), x=d.kind==='xfer', f=QA.text.trim()?{Date:d.Date,Account:d.Account,ToAccount:x?d.ToAccount:'',Amount:d.Amount||'',Description:d.Description,Category:d.Category}:null;
+      qaReset(); inp.blur(); (x?openTransferModal:openTxModal)(f);
+    });
   });
-  // The + opens the form; a plain click on the field focuses it (the <label> does that).
-  $('.add-plus').addEventListener('click',function(e){ e.preventDefault(); addSubmit(); });
   document.addEventListener('keydown',function(e){
     var mod=e.metaKey||e.ctrlKey;
     if(!$('#modalRoot').hidden) return;   // a modal owns the keys while it is up
@@ -3201,7 +3430,8 @@ function openPicker(title,items,cur,done){
   q.oninput=draw;
   q.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); var f=draw(); if(f[0]) pick(f[0].value); } };
   if(items.length>8) page.body.appendChild(q);
-  page.body.appendChild(list); draw(); pushPage(page);
+  page.body.appendChild(list); draw();
+  if(edOpen()) pushPage(page); else openEditor(page);   // the add field's chips open one alone
   var on=list.querySelector('.on'), sc=page.body;
   if(on) sc.scrollTop=on.getBoundingClientRect().top-sc.getBoundingClientRect().top-sc.clientHeight/2;
   if(items.length>8&&matchMedia('(pointer:fine)').matches) q.focus();   // a phone keeps the keyboard down
