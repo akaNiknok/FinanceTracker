@@ -106,11 +106,12 @@ Done when: "vitamins 620 gcash" + Return saves the right row online, offline it 
 - iPhone: the More sheet holds Investments, Swap, Tax, Admin.
 Done when: nothing that Accounts shows today is lost, and the figures match the old screen.
 
-### Phase 6 — Tools, polish, release v3.0.0  ☐
+### Phase 6 — Tools, polish, release v3.0.0  ☐ (all but the release: PR #106)
 - Swap: an input list, the hero result, and the fair-rate range bar (the Wise floor → the fair rate → the ceiling, plus the mid-market mark). **Record this swap** opens `openTransferModal`, filled in: from a USD account, to a PHP account, Amount = USD, ToAmount = the ₱ result. The implied-rate rule then stamps the fair rate.
 - Tax: quarter tiles (filed status from `Filed?`), the "not in the ledger" banner, the table with the typed BSP-rate cell, and the BSP tooltip.
 - Admin: the table picker as a segmented control, locked columns marked (a natural key is in `add` but not in `edit`), paging and CSV unchanged.
 - Motion pass (the DESIGN.md table). Sweep the old CSS for dead rules.
 - Sync the Scriptable widget colours to the new tokens.
+- **Consistency sweep (owner, 2026-09-19):** walk every screen, sheet, modal and state (empty, loading, offline, error) of the whole PWA, and fix what disagrees: labels and terms (one word for one thing), money format (balance rows keep centavos, the owner's call; totals and tiles are whole pesos), dates, spacing, radii, icons, button styles, ⓘ tooltips, focus rings, dark-mode colours, and any v2 leftover. List what was fixed in the PR.
 - Update README where the human's world changed (fonts gone, new screens, the smart_lists key if Phase 3 did not add it). Run a final 3 × 2 check of every screen.
 - Release: `npm version major --no-git-tag-version` (3.0.0, which stamps `brand-ver`). Delete this file and `design/`, then `npm run release`. The owner merges, the release runs, and later revisions ship as v3.0.x / v3.x.

@@ -17,9 +17,10 @@
  * "cached"). Colours are the SPA's own tokens (worker/public/app.css).
  */
 const K_URL = 'financetracker.url', K_COOKIE = 'financetracker.cookie';
+// The dark theme's tokens (DESIGN.md "Colour"): the widget is always dark.
 const C = {
-  text: '#e9ecf2', dim: '#9aa3b4', faint: '#6d768a', accent: '#5b8cff',
-  pos: '#3ecf8e', neg: '#ff7373', warn: '#ffb454', over: '#d95757'
+  card: '#1C1C1E', text: '#F5F5F7', dim: '#A1A1A6', accent: '#0A84FF',
+  pos: '#30D158', neg: '#FF453A', warn: '#FF9F0A', over: '#FF453A'
 };
 const col = (hex, a) => new Color(hex, a == null ? 1 : a);
 const SCREEN = { recent: 'transactions', balances: 'accounts', networth: 'dashboard', segments: 'dashboard' };
@@ -120,13 +121,8 @@ async function load() {
 // ── building blocks ─────────────────────────────────────────────────────────
 function shell(kind) {
   const w = new ListWidget();
-  // The SPA's dark surface with its hero's accent glow in the top-left corner: a
-  // tinted-glass slab. In the iOS clear/tinted home screen, iOS replaces it anyway.
-  const g = new LinearGradient();
-  g.colors = [col('#1d2640'), col('#141925'), col('#0d0f14')];
-  g.locations = [0, 0.5, 1];
-  g.startPoint = new Point(0, 0); g.endPoint = new Point(1, 1);
-  w.backgroundGradient = g;
+  // The dark --card: tiles are flat in v3. In the iOS clear/tinted home screen, iOS replaces it anyway.
+  w.backgroundColor = col(C.card);
   w.setPadding(PAD, PAD, PAD, PAD);
   w.refreshAfterDate = new Date(Date.now() + 30 * 60e3);
   if (Keychain.contains(K_URL)) w.url = Keychain.get(K_URL) + '/?screen=' + (SCREEN[kind] || 'dashboard');
@@ -149,7 +145,7 @@ function header(w, title, right) {
   h.addSpacer(6);
   text(h, title.toUpperCase(), 10, C.dim, 'semi');
   h.addSpacer();
-  if (right) text(h, right, 10, C.faint, 'med');
+  if (right) text(h, right, 10, C.dim, 'med');
   w.addSpacer(9);
 }
 function glyph(stack, ch, color) {
@@ -179,7 +175,7 @@ function recent(w, d) {
     text(v, t.Description || String(t.Category).replace(/^[^:]*:\s*/, ''), 12, C.text, 'semi');
     const sub = v.addStack();
     text(sub, (dir < 0 ? '−' : dir > 0 ? '+' : '') + amt, 11, xfer ? C.text : color, 'bold');
-    text(sub, ' · ' + dayLabel(t.Date), 11, C.faint);
+    text(sub, ' · ' + dayLabel(t.Date), 11, C.dim);
   });
   w.addSpacer();
 }
@@ -245,15 +241,15 @@ function networth(w, d, W) {
   w.addSpacer(2);
   const r = w.addStack();
   text(r, (delta >= 0 ? '▲ ' : '▼ ') + compact(Math.abs(delta)), 11, delta >= 0 ? C.pos : C.neg, 'bold');
-  text(r, ' · ' + s.length + ' mo', 11, C.faint, 'med');
+  text(r, ' · ' + s.length + ' mo', 11, C.dim, 'med');
   w.addSpacer();
   const img = w.addImage(sparkline(s.map((x) => x.value), W, 40));
   img.imageSize = new Size(W, 40);
   w.addSpacer(3);
   const lab = w.addStack();
-  text(lab, s[0].month.slice(5), 9, C.faint, 'med');
+  text(lab, s[0].month.slice(5), 9, C.dim, 'med');
   lab.addSpacer();
-  text(lab, s[s.length - 1].month.slice(5), 9, C.faint, 'med');
+  text(lab, s[s.length - 1].month.slice(5), 9, C.dim, 'med');
 }
 
 function meterImage(pct, isOver, p, W) {
@@ -291,10 +287,10 @@ function segments(w, d, W) {
     const h = w.addStack(); h.bottomAlignContent();
     text(h, b.label, 12, C.text, b.hero ? 'bold' : 'semi');
     h.addSpacer(6);
-    text(h, b.pct == null ? '' : Math.round(b.pct) + '%', 10, b.isOver ? C.neg : C.faint, 'semi');
+    text(h, b.pct == null ? '' : Math.round(b.pct) + '%', 10, b.isOver ? C.neg : C.dim, 'semi');
     h.addSpacer();
     text(h, money(b.actual, b.currency), 12, b.isOver ? C.neg : C.text, 'bold');
-    text(h, ' / ' + (b.target == null ? '—' : money(b.target, b.currency)), 11, C.faint, 'med');
+    text(h, ' / ' + (b.target == null ? '—' : money(b.target, b.currency)), 11, C.dim, 'med');
     w.addSpacer(3);
     const img = w.addImage(meterImage(b.pct, b.isOver, pace(b.period), W));
     img.imageSize = new Size(W, 12);

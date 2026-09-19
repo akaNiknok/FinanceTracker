@@ -64,7 +64,15 @@ button{font-family:inherit;cursor:pointer}
 ::-webkit-scrollbar-thumb{background:var(--card-3);border-radius:8px}
 ::-webkit-scrollbar-track{background:transparent}
 ::selection{background:var(--accent-tint)}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+/* Reduce Motion (DESIGN.md "Motion"): every move becomes a 150ms fade. The keyframes
+ * are redefined as opacity only, the loops stop, and nothing scales on press. */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.15s!important;animation-delay:0s!important;transition-duration:.15s!important}
+  @keyframes pop{from{opacity:0}} @keyframes sheetUp{from{opacity:0}} @keyframes fade{from{opacity:0}} @keyframes rowIn{from{opacity:0}}
+  @keyframes edIn{from{opacity:0}} @keyframes edOut{to{opacity:0}} @keyframes edFade{to{opacity:0}}
+  .mini-spin,.pending,.sync-dot,.skeleton{animation:none!important}
+  :active{transform:none!important}
+}
 .ico{width:24px;height:24px;flex:none;display:block}
 
 /* Not height:100% — on iOS standalone that stops short of the screen bottom. --app-h is
@@ -95,7 +103,7 @@ button{font-family:inherit;cursor:pointer}
 .addbar{position:relative}
 .qa{position:absolute;left:0;right:0;bottom:100%;display:flex;flex-direction:column;gap:12px;padding:12px 16px;
   background:var(--bg);border-radius:16px 16px 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.12);
-  max-height:60vh;overflow-y:auto;overscroll-behavior:contain;animation:sheetUp .25s cubic-bezier(.2,.8,.2,1)}
+  max-height:60vh;overflow-y:auto;overscroll-behavior:contain;animation:sheetUp .32s cubic-bezier(.2,.8,.2,1)}
 .qa:empty{display:none}
 .qa-bd{display:none;position:fixed;inset:0;z-index:19;background:rgba(0,0,0,.4)}
 .qa-on .qa-bd{display:block}
@@ -119,7 +127,7 @@ button{font-family:inherit;cursor:pointer}
 .qa-empty{padding-top:24px;font-size:15px}
 @media(max-width:767px){
   .qa-on .addbar{position:fixed;left:0;right:0;top:0;height:var(--app-h,100dvh);z-index:30;display:flex;flex-direction:column;
-    background:var(--bg);padding:calc(env(safe-area-inset-top) + var(--edge)) 12px max(8px,env(safe-area-inset-bottom));animation:sheetUp .25s cubic-bezier(.2,.8,.2,1)}
+    background:var(--bg);padding:calc(env(safe-area-inset-top) + var(--edge)) 12px max(8px,env(safe-area-inset-bottom));animation:sheetUp .32s cubic-bezier(.2,.8,.2,1)}
   .qa-on .qa-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;order:-2;margin:0 -4px}
   .qa-on .qa{order:-1;position:static;flex:1;min-height:0;max-height:none;margin:0 -12px;padding:4px 16px 12px;
     background:none;box-shadow:none;border-radius:0;animation:none}
@@ -184,7 +192,7 @@ button{font-family:inherit;cursor:pointer}
 .tip-btn .ico{width:17px;height:17px}
 .tip-btn:hover,.tip-btn[aria-expanded=true]{color:var(--accent)}
 .tip{position:fixed;z-index:80;max-width:min(360px,calc(100vw - 24px));background:var(--tip);color:#F5F5F7;border-radius:14px;
-  padding:12px 14px;font-size:13px;line-height:1.45;box-shadow:var(--shadow);animation:pop .2s cubic-bezier(.2,.8,.2,1);text-align:left;
+  padding:12px 14px;font-size:13px;line-height:1.45;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1);text-align:left;
   font-weight:400;text-transform:none;letter-spacing:0}
 .tip[hidden]{display:none}
 .tip-t{font-weight:600;font-size:14px;margin-bottom:4px}
@@ -208,33 +216,18 @@ button{font-family:inherit;cursor:pointer}
 .main{grid-area:main;padding:calc(env(safe-area-inset-top) + max(16px,var(--edge))) max(16px,(100% - 1080px)/2) 16px;width:100%;min-width:0;min-height:0;
   overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .screen{animation:fade .25s ease}
-.screen-title{font-size:21px;font-weight:750;letter-spacing:-.2px;margin:2px 0 4px}
+/* DESIGN.md "Typography": a large title (34) on iPhone and iPad, a title (26) from 1200px. */
+.screen-title{font-size:34px;line-height:40px;font-weight:700;letter-spacing:-.5px;margin:2px 0 4px}
 .screen-sub{color:var(--dim);font-size:13px;margin:0 0 16px}
 
-/* ── Cards / grid ────────────────────────────────────────────────────────── */
+/* ── Cards ──────────────────────────────────────────────────────────────── */
 .card{background:var(--card);border-radius:var(--radius);padding:18px;margin-bottom:16px}
-.card-h{font-size:13px;font-weight:600;color:var(--dim);margin:0 0 12px}
-.card-h-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-/* top-level stat tiles need the same rhythm as .card, which carries its own margin */
-.screen>.stat,.screen>.grid{margin-bottom:14px}
-.grid{display:grid;gap:12px}
-.grid-2{grid-template-columns:repeat(2,1fr)}
-.grid-3{grid-template-columns:repeat(3,1fr)}
-.grid-auto{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
-
-/* ── Stat tiles / hero ───────────────────────────────────────────────────── */
-.stat{background:var(--card);border-radius:var(--radius);padding:16px 18px;min-width:0}
-.stat-label{font-size:13px;color:var(--dim);font-weight:600}
-.stat-value{font-size:22px;font-weight:750;margin-top:5px;letter-spacing:-.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.stat-sub{font-size:12px;color:var(--dim);margin-top:3px}
-.hero{background:var(--card)}
-.hero .stat-value{font-size:clamp(30px,7vw,42px);line-height:1.12;margin-top:7px}
 
 .lg-key{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:baseline}
 
 /* ── Misc text ───────────────────────────────────────────────────────────── */
-.pos{color:var(--pos)} .neg{color:var(--neg)} .amt.xfer{color:var(--accent)} .warn{color:var(--warn)} .dim{color:var(--dim)} .faint{color:var(--dim)}
-.mono{font-variant-numeric:tabular-nums}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .amt.xfer{color:var(--accent)} .warn{color:var(--warn)} .dim{color:var(--dim)}
+
 .row-between{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;background:var(--card-3);color:var(--dim)}
 .pill.pos{background:var(--pos-tint);color:var(--pos)}
@@ -279,6 +272,7 @@ button{font-family:inherit;cursor:pointer}
 .t-pair .tile{padding:14px 16px}
 .seg{display:flex;background:var(--card-2);border-radius:9px;padding:2px}
 .seg>button{border:0;border-radius:7px;padding:6px 14px;min-height:32px;background:none;color:var(--dim);font-size:13px;font-weight:600}
+.seg>button:active{transform:scale(.97)}
 .seg>button.on{background:var(--card);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .hist-plot{position:relative;touch-action:pan-y}
 .hist-lg{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:4px 0}
@@ -375,7 +369,7 @@ button.a-row:active{background:var(--card-2)}
 .r-row .a-s{flex:none}
 .a-chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px}
 .a-chips .chip{height:36px;font-size:14px;font-weight:600}
-#debtsCard .card{margin:0}
+#debtsCard{display:contents}
 @media(min-width:768px){
   .a-tot{background:none;padding:0;gap:16px;margin-bottom:16px}
   .a-tot .tile{background:var(--card);border-radius:20px;padding:16px 20px;align-items:stretch;text-align:left;gap:2px}
@@ -449,21 +443,71 @@ button.h-row:active{background:var(--card-2)}
 @media(min-width:768px){ .t-pulse,.t-hold{grid-column:span 2} }
 @media(min-width:1200px){ .t-hold{grid-column:span 4} }
 
-/* ── Meters (budgets / utilization): track = lighter step of the same ramp ── */
-.meter{position:relative;height:10px;border-radius:6px;background:var(--accent-tint);margin-top:9px}
-.meter.warn{background:var(--warn-tint)}
-.meter.over{background:var(--neg-tint)}
-.meter-fill{position:absolute;left:0;top:0;bottom:0;border-radius:6px;background:var(--accent);transition:width .4s ease;min-width:2px}
-.meter.warn .meter-fill{background:var(--warn)}
-.meter.over .meter-fill{background:var(--chart-out)}
-.meter.thin{height:6px;margin-top:7px}
+/* ── Swap (v3 Phase 6): inputs as a grouped list, then the result tiles. Side by
+ * side from 1200px. ── */
+.sw{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
+.sw-in{padding:0;gap:0;overflow:hidden}
+.sw-f{display:flex;align-items:center;gap:12px;min-height:56px;padding:0 20px;border-top:1px solid var(--sep)}
+.sw-f:first-child{border-top:0}
+.sw-f>span{flex:1;display:flex;flex-direction:column;min-width:0}
+.sw-k{font-size:15px} .sw-s{font-size:12px;color:var(--dim)}
+.sw-f input{width:130px;text-align:right;border:0;outline:none;background:none;color:var(--text);font:inherit;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.sw-f:focus-within{box-shadow:inset 3px 0 0 var(--accent)}
+.sw-split{padding:14px 20px 16px;border-top:1px solid var(--sep)}
+.sw-sh{display:flex;justify-content:space-between;font-size:15px;margin-bottom:6px}
+.sw-split input{width:100%;height:28px;margin:0;-webkit-appearance:none;appearance:none;background:none}
+.sw-split input::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent) var(--v,50%),var(--track) var(--v,50%))}
+.sw-split input::-moz-range-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent) var(--v,50%),var(--track) var(--v,50%))}
+.sw-split input::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;margin-top:-12px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sw-split input::-moz-range-thumb{width:28px;height:28px;border:0;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sw-out{display:flex;flex-direction:column;gap:12px;min-width:0}
+.sw-rate{font-size:17px;font-weight:600}
+.sw-range{position:relative;height:66px;margin-top:10px;font-size:12px;color:var(--dim)}
+.sw-lo,.sw-hi{position:absolute;top:0} .sw-lo{left:0} .sw-hi{right:0}
+.sw-bar{position:absolute;left:0;right:0;top:24px;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--pos),var(--accent))}
+.sw-bar b{position:absolute;top:-8px;width:3px;height:28px;margin-left:-1.5px;border-radius:2px;background:var(--text)}
+.sw-mid{position:absolute;top:0;width:2px;height:12px;margin-left:-1px;background:#fff;opacity:.85}
+.sw-fair{position:absolute;top:46px;transform:translateX(-50%);font-weight:600;color:var(--text);white-space:nowrap}
+.sw-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.sw-pair .fig{font-size:24px}
+.btn.sw-rec{align-self:flex-start;min-height:44px;border-radius:22px;padding:0 18px;font-size:15px}
+@media(min-width:768px){ .sw,.sw-out,.sw-pair{gap:16px} .sw-pair .fig{font-size:26px} }
+@media(min-width:1200px){ .sw{grid-template-columns:420px minmax(0,1fr)} }
 
-/* legacy thin bar (credit utilization etc.) */
-.bar{height:8px;border-radius:6px;background:var(--card-3);overflow:hidden;margin-top:8px}
-.bar.thin{height:5px;margin-top:6px}
-.bar-fill{height:100%;border-radius:6px;background:var(--accent);transition:width .4s ease}
-.bar-fill.over{background:var(--chart-out)}
-.bar-fill.warn{background:var(--warn)}
+/* ── Tax (v3 Phase 6): quarter tiles, the unlinked-salary banner, the table. ── */
+.tax-q{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.tax-q .fig{font-size:24px}
+.tax-q .tile-l,.tax-q .pill{white-space:nowrap}
+.tax-q .tile-h{gap:6px}
+.tile.ring{box-shadow:0 0 0 2px var(--warn)}
+.tax-warn{display:flex;align-items:center;gap:12px;background:var(--warn-tint);border-radius:16px;padding:12px 16px;margin-bottom:12px;font-size:14px}
+.tax-warn>.ico{width:20px;height:20px;color:var(--warn);flex:none}
+.tax-warn .grow{flex:1;min-width:0}
+.tax-warn .btn{background:var(--warn);border-color:var(--warn);color:#fff;border-radius:999px;flex:none}
+.tax-tbl{padding:4px 8px}
+.tax-tbl .tbl-wrap{max-height:none}
+table.tbl th.num,table.tbl td.num{text-align:right}
+table.tbl th .tip-btn{vertical-align:middle;margin-left:2px}
+.typed{display:inline-block;min-width:70px;padding:4px 8px;border-radius:8px;background:var(--card-2)}
+.typed.empty{color:var(--dim)}
+table.tbl td.ed-cell:hover .typed{box-shadow:inset 0 0 0 1px var(--accent)}
+.q-select.q-pill{border:0;border-radius:999px;height:28px;padding:0 10px;font-size:13px;font-weight:600;color:var(--dim)}
+.q-select.q-pill.on{background:var(--pos-tint);color:var(--pos)}
+@media(min-width:768px){ .tax-q{gap:16px;margin-bottom:16px} .tax-warn{margin-bottom:16px} .tax-q .fig{font-size:26px} }
+@media(min-width:1200px){ .tax-q{grid-template-columns:repeat(4,minmax(0,1fr))} }
+table.tbl .icon-btn{background:none;color:var(--dim);width:32px;height:32px}
+table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
+
+/* ── Admin (v3 Phase 6): the table picker is a segmented control that scrolls
+ * sideways when it does not fit. ── */
+.adm-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.adm-seg{overflow-x:auto;scrollbar-width:none;max-width:100%;flex:0 1 auto}
+.adm-seg::-webkit-scrollbar{display:none}
+.adm-seg>button{white-space:nowrap;flex:none}
+.adm-tbl{padding:4px 8px 0}
+.adm-tbl .tbl-wrap{max-height:none}
+.adm-tbl th .ico{display:inline-block;width:12px;height:12px;margin-left:4px;vertical-align:-1px}
+.adm-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 8px 12px;font-size:13px;color:var(--dim)}
 
 /* ── Lists / rows ────────────────────────────────────────────────────────── */
 .list{display:flex;flex-direction:column}
@@ -471,9 +515,6 @@ button.h-row:active{background:var(--card-2)}
 .litem:last-child{border-bottom:none}
 .litem .ic{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-size:16px;flex:none;
   background:var(--card-3);color:var(--dim)}
-.litem .ic.in{background:var(--pos-tint);color:var(--pos)}
-.litem .ic.out{background:var(--neg-tint);color:var(--neg)}
-.litem .ic.xfer{background:var(--accent-tint);color:var(--accent)}
 .litem .grow{flex:1;min-width:0}
 .litem .t1{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .litem .t2{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
@@ -482,7 +523,7 @@ button.h-row:active{background:var(--card-2)}
 .litem.click{cursor:pointer;border-radius:12px}
 @media(hover:hover){.litem.click:hover{background:var(--card-2)}}   /* iOS keeps :hover after a tap */
 /* in-flight (optimistic) row: dimmed with a spinner in the icon slot */
-.litem.pending{opacity:.6;animation:pendPulse 1.4s ease-in-out infinite}
+.litem.pending{opacity:.6;animation:rowIn .25s cubic-bezier(.2,.8,.2,1),pendPulse 1.4s ease-in-out .25s infinite}
 .mini-spin{width:16px;height:16px;border:2px solid var(--sep);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
 @keyframes pendPulse{0%,100%{opacity:.6}50%{opacity:.4}}
 
@@ -496,7 +537,6 @@ button.h-row:active{background:var(--card-2)}
 .btn.danger{color:var(--neg);border-color:var(--neg-tint)}
 .btn.danger:hover{background:var(--neg-tint)}
 .btn.sm{padding:6px 11px;font-size:12.5px;min-height:32px}
-.btn.ghost{background:none;border-color:transparent}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
 
 /* ── Forms / modal ───────────────────────────────────────────────────────── */
@@ -509,7 +549,7 @@ button.h-row:active{background:var(--card-2)}
 .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(3px)}
 /* max-height:100% (not 90vh) so the card fits the JS-set visual-viewport height when the iOS keyboard is up. */
 .modal-card{position:relative;background:var(--card);border-radius:20px;
-  width:100%;max-width:460px;max-height:100%;overflow:auto;box-shadow:var(--shadow);animation:pop .2s ease}
+  width:100%;max-width:460px;max-height:100%;overflow:auto;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
 .modal-h{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--sep);
   position:sticky;top:0;background:var(--card);z-index:2}   /* title and Save stay in view on a long form */
 .modal-h h3{margin:0;font-size:16px}
@@ -557,7 +597,7 @@ button.h-row:active{background:var(--card-2)}
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 .toast-root{position:fixed;left:0;right:0;bottom:calc(150px + env(safe-area-inset-bottom));z-index:60;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .toast{background:var(--tip);border:1px solid transparent;color:#F5F5F7;padding:10px 16px;border-radius:999px;
-  font-size:13px;font-weight:600;box-shadow:var(--shadow);animation:pop .2s ease}
+  font-size:13px;font-weight:600;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
 .toast.ok{border-color:var(--pos-tint)} .toast.err{border-color:var(--neg-tint)}
 
 /* ── Table (Tax / wide lists) ────────────────────────────────────────────── */
@@ -590,18 +630,18 @@ table.tbl td.editing{padding:0}
 
 /* ── Loaders / empty ─────────────────────────────────────────────────────── */
 .empty{text-align:center;color:var(--dim);padding:34px 14px;font-size:14px}
-.empty .empty-ico{display:block;font-size:26px;margin-bottom:8px;opacity:.7}
+.empty>.ico{margin:0 auto 8px;width:26px;height:26px;opacity:.7}
 /* Loading placeholders: shimmer bars laid out inside the REAL .card/.stat/.litem
    boxes (see skeletonHTML in App.html), so the layout doesn't jump when data lands. */
 .skeleton{background:linear-gradient(90deg,var(--card-2),var(--card-3),var(--card-2));background-size:200% 100%;
   animation:shimmer 1.2s infinite;border-radius:8px;height:14px}
 .skeleton+.skeleton{margin-top:8px}
 .filters .skeleton{margin-top:0}
-@media (prefers-reduced-motion:reduce){.skeleton{animation:none}}
 
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@keyframes pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:none}}
+@keyframes rowIn{from{opacity:0;transform:translateY(-8px)}}
 @keyframes shimmer{to{background-position:-200% 0}}
 
 .litem.edit{overflow:visible}                      /* let inline-edit dropdown escape the row */
@@ -640,7 +680,7 @@ table.tbl td.editing{padding:0}
 .tok-x::before{content:"";position:absolute;inset:-9px}      /* 44px target */
 .tok-x .ico{width:14px;height:14px;stroke-width:2.6}
 .tok-menu{position:absolute;left:0;top:calc(100% + 6px);z-index:30;width:min(380px,100%);background:var(--card);
-  border:1px solid var(--sep);border-radius:12px;box-shadow:var(--shadow);padding:6px;animation:pop .2s cubic-bezier(.2,.8,.2,1)}
+  border:1px solid var(--sep);border-radius:12px;box-shadow:var(--shadow);padding:6px;animation:pop .32s cubic-bezier(.2,.8,.2,1)}
 .tok-menu[hidden]{display:none}
 .tok-opt{display:flex;align-items:center;gap:10px;min-height:40px;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:14px}
 .tok-opt .tok-f{width:72px;flex:none;font-size:12px}
@@ -658,7 +698,9 @@ table.tbl td.editing{padding:0}
 .act-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .act-hint{font-size:12px;color:var(--dim)}
 .act-count{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:32px;font-size:13px;color:var(--dim);padding:0 4px;margin:8px 0 4px}
-.pager{margin-top:12px}
+.pager{display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:12px;font-size:13px;color:var(--dim)}
+.adm-foot .pager{margin:0}
+.pager .link-btn:disabled{opacity:.4;cursor:default}
 .day{margin-bottom:14px}
 .day-h{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 4px 6px;font-size:13px;font-weight:600;color:var(--dim)}
 .day-h .ld-date{border:0;background:none;color:inherit;font:inherit;padding:4px 0;min-height:32px;cursor:pointer}
@@ -695,7 +737,7 @@ table.tbl td.editing{padding:0}
 .tx-tr.click{cursor:pointer}
 .tx-tr.click:hover{background:color-mix(in srgb,var(--card-2) 45%,transparent)}
 .tx-tr.sel{background:var(--accent-tint)}
-.tx-tr.pending{opacity:.6;animation:pendPulse 1.4s ease-in-out infinite}
+.tx-tr.pending{opacity:.6;animation:rowIn .25s cubic-bezier(.2,.8,.2,1),pendPulse 1.4s ease-in-out .25s infinite}
 .tx-td{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tx-td.editing{overflow:visible}
 .tx-tr .r{text-align:right}
@@ -726,7 +768,7 @@ table.tbl td.editing{padding:0}
 /* The bulk bar floats at the bottom of the scroller while Select mode has a selection. */
 .bulk-bar{position:sticky;bottom:12px;z-index:25;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:4px;
   width:max-content;max-width:100%;margin:12px auto 0;padding:6px 6px 6px 16px;border-radius:16px;background:var(--tip);color:#F5F5F7;
-  box-shadow:var(--shadow);font-size:14px;animation:pop .2s cubic-bezier(.2,.8,.2,1)}
+  box-shadow:var(--shadow);font-size:14px;animation:pop .32s cubic-bezier(.2,.8,.2,1)}
 .bulk-bar[hidden]{display:none}
 .bulk-count{font-weight:600;margin-right:8px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .bulk-bar button{height:36px;min-width:44px;padding:0 12px;border:0;border-radius:10px;background:rgba(255,255,255,.12);color:inherit;font-size:13px}
@@ -839,7 +881,7 @@ table.tbl td.editing{padding:0}
   .add-plus{width:36px;height:36px;border-radius:9px;background:none;color:var(--accent)}
   .add-field input{font-size:16px}
   .qa{bottom:auto;top:calc(100% + 6px);left:max(24px,(100% - 1080px)/2);right:auto;width:min(520px,calc(100% - 48px));
-    border-radius:16px;box-shadow:var(--shadow);max-height:min(70vh,640px);animation:pop .2s ease}
+    border-radius:16px;box-shadow:var(--shadow);max-height:min(70vh,640px);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
   .qa-bd{background:rgba(0,0,0,.15)}
   .nav{display:flex;flex-direction:column;align-items:center;gap:6px;border-top:0;border-right:1px solid var(--sep);
     background:var(--side);backdrop-filter:none;-webkit-backdrop-filter:none;height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;
@@ -864,7 +906,6 @@ table.tbl td.editing{padding:0}
   .nav .sync-label{display:none}
   .main{padding:12px max(24px,(100% - 1080px)/2) calc(24px + env(safe-area-inset-bottom))}
   .toast-root{bottom:28px}
-  .screen-title{font-size:23px}
 }
 @media(min-width:768px) and (hover:hover) and (pointer:fine){ .add-kbd{display:inline-block} }
 
@@ -893,24 +934,12 @@ table.tbl td.editing{padding:0}
   .nav .sync-label{display:inline}
   .nav .theme-btn{width:36px;height:36px}
 }
-/* ── Responsive: desktop → two-column card layout ────────────────────────── */
-/* Every screen is a flat list of cards appended to .screen, so the layout lives
- * on the parent — no per-card wrappers. Multi-column, NOT a 2-col grid: grid
- * rows are as tall as their tallest card, so one long account list leaves a
- * half-screen void beside it; multicol balances the columns instead. Opt in
- * with .cols (Dashboard, Accounts, Budgets); Transactions/Tax/Admin/Swap stay
- * one column because a wide table or the tx rail already owns the row.
- * .wide breaks the flow and runs full width; it is set in JS, never by
- * :has(svg) — a chart is appended at rAF, so the column count would change
- * AFTER the chart measured the host it drew into. */
+/* ── Responsive: 1200px and wider ─────────────────────────────────────────── */
 @media(min-width:1200px){
   .main{padding:24px max(28px,(100% - 1440px)/2) calc(24px + env(safe-area-inset-bottom))}
-  .cols{columns:2;column-gap:14px}
-  .cols .card,.cols>.stat,.cols>.grid{break-inside:avoid}
-  .cols>.screen-head,.cols>.screen-title,.cols>.screen-sub,.cols>.wide{column-span:all}
+  .screen-title{font-size:26px;line-height:32px;letter-spacing:-.3px}
 }
 @media(max-width:520px){
-  .grid-2,.grid-3{grid-template-columns:1fr}
   .field-row{grid-template-columns:1fr}
   .main{padding-left:16px;padding-right:16px}
   .card{padding:15px}
