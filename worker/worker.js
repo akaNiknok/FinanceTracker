@@ -35,7 +35,7 @@
  */
 import {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
-  getLedger, listTransactions, getDebts, listTable, getExportAll, getWidget, setWidgetAccounts, setSmartLists,
+  getLedger, listTransactions, getDebts, listTable, getExportAll, getWidget, getParse, setWidgetAccounts, setSmartLists,
   createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
   bulkUpdateTransactions, bulkDeleteTransactions, updateLedgerCell, appendLedgerRow,
   deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
@@ -56,7 +56,8 @@ export const ROUTES_READ = {
   getDebts,         // open debts per receivable account
   listTable,        // admin grid
   getExportAll,     // backup puller + the admin screen's CSV
-  getWidget         // the iOS Scriptable widgets
+  getWidget,        // the iOS Scriptable widgets
+  getParse          // the add field's Gemini parse (writes nothing)
 };
 
 export const ROUTES_WRITE = {

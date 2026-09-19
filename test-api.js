@@ -307,6 +307,31 @@ function d1(db) {
       await api.setSmartLists({ lists: [] }, env);
     });
 
+    test('getBootstrap: quickPicks and descCategory from the last 90 days', async () => {
+      const b = await api.getBootstrap({}, env);
+      assert.ok(Array.isArray(b.quickPicks) && b.quickPicks.length <= 8);
+      b.quickPicks.forEach((p) => assert.ok(p.Description && p.Category && p.Account && p.Amount));
+      const ID = 'ui-qp-1';
+      await api.createTransaction({ ID, Date: new Date().toISOString().slice(0, 10), Category: 'Expense: Food', Description: 'Zz Vitamins', Account: 'Maya', Amount: 620 }, env);
+      try { assert.strictEqual((await api.getBootstrap({}, env)).descCategory['zz vitamins'], 'Expense: Food'); }
+      finally { await api.deleteTransaction({ ID }, env); }
+    });
+
+    test('getParse: the bot parser, no text never calls Gemini', async () => {
+      const real = globalThis.fetch;
+      let calls = 0;
+      globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+        intent: 'log', error: null, query: null,
+        items: [{ Date: '2026-08-20', Category: 'Expense: Food', Description: 'Vitamins', Account: 'Maya', Amount: 620 }] }) }] } }] }), { status: 200 }); };
+      try {
+        assert.deepStrictEqual((await api.getParse({ text: ' ' }, env)).items, []);
+        assert.strictEqual(calls, 0);
+        const r = await api.getParse({ text: 'vitamins 620 maya' }, Object.assign({}, env, { GEMINI_API_KEY: 'x' }));
+        assert.strictEqual(r.items[0].Amount, 620);
+        assert.strictEqual(r.error, null);
+      } finally { globalThis.fetch = real; }
+    });
+
     test('getBudgets: percent of income, a USD cap at live FX, transfers counted', async () => {
       const b = await api.getBudgets({ month: '2026-Aug' }, env);
       const by = Object.fromEntries(b.budgets.map((x) => [x.segment, x]));
