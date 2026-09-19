@@ -1226,9 +1226,28 @@ function monthFromText(lo, now){
   var y=+(m[1]||m[3])||(i<=now.getMonth()?now.getFullYear():now.getFullYear()-1);
   return y+'-'+MONTHS[i];
 }
+// "sep 17", "17 september", "sep 17 2025", "9/17", "9/17/2025" → "2026-09-17".
+// No year = the latest one not in the future.
+function dateFromText(lo, now){
+  var m=/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/.exec(lo), mo, d, y;
+  if(m){ mo=+m[1]-1; d=+m[2]; y=m[3]; }
+  else {
+    m=/^([a-z]{3,})\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?$/.exec(lo);
+    var r=/^(\d{1,2})\s+([a-z]{3,})\.?(?:,?\s+(\d{4}))?$/.exec(lo);
+    if(!m&&r) m=[r[0],r[2],r[1],r[3]];
+    if(!m) return null;
+    for(mo=0;mo<12;mo++) if(MONTHS_FULL[mo].toLowerCase().indexOf(m[1])===0) break;
+    d=+m[2]; y=m[3];
+  }
+  if(!(mo>=0&&mo<12)||d<1) return null;
+  if(!y){ y=now.getFullYear(); if(new Date(y,mo,d)>now) y--; }
+  var dt=new Date(+y,mo,d);
+  return dt.getMonth()===mo?isoDate(dt):null;
+}
 /* The token grammar: what the typed text could mean, best guess first. The field's
  * dropdown shows these; Enter takes the first. ctx = {categories, accounts, segments, now}.
  *   "exact words" → Text only · >500 ≥500 <1k ≤300 → Amount only · 2026-09-18 → Date only
+ *   sep 17, 17 sep, 9/17 → Date first, then Text
  *   otherwise any of: Month, Type (spent/earned/moved), Source (gmail, telegram…),
  *   Segment, Amount (a bare number = at least), the 3 best Category and Account
  *   matches, and always Text contains. */
@@ -1240,6 +1259,7 @@ function parseTokens(text, ctx){
   var cmp=/^(>=|<=|>|<|≥|≤)\s*(.+)$/.exec(q), n=cmp?amountOf(cmp[2]):null;
   if(n!=null) return [{k:/[>≥]/.test(cmp[1])?'minAmount':'maxAmount',v:String(n)}];
   if(/^\d{4}-\d{2}-\d{2}$/.test(q)) return [{k:'date',v:q}];
+  var dd=dateFromText(lo, ctx.now||new Date()); if(dd) out.push({k:'date',v:dd});
   var mk=monthFromText(lo, ctx.now||new Date()); if(mk) out.push({k:'month',v:mk});
   function starts(words){ return lo.length>=2&&words.some(function(w){ return w.indexOf(lo)===0; }); }
   if(starts(['spent','expense','expenses'])) out.push({k:'type',v:'Expense'});
@@ -1276,11 +1296,8 @@ function setTxFilters(f){ S.tx.filters=f; S.tx.offset=0; clearSel(); renderTrans
 
 /* —— smart lists: built-in presets in code, saved ones in meta.smart_lists —— */
 function builtinLists(){
-  var cats=(S.boot&&S.boot.categories)||{};
   var out=[{name:'This month',filters:{month:monthKey(new Date())}},
            {name:'Big spends, ₱5,000+',filters:{type:'Expense',minAmount:'5000'}}];
-  // ponytail: "Subscriptions" is one category; a recurring-row match if that proves too narrow.
-  if(cats['Shopping: Software Tools']) out.push({name:'Subscriptions',filters:{category:'Shopping: Software Tools'}});
   out.push({name:'From Gmail',filters:{source:'gm'}},{name:'From Telegram',filters:{source:'tg'}});
   return out;
 }
@@ -1653,7 +1670,7 @@ function txView(t){
   // Foreign-currency tx: the NATIVE amount in its own symbol, the peso figure beside it.
   var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(Math.abs(amtPhp));
   return {isXfer:isXfer, dir:dir, isForeign:isForeign, amtPhp:amtPhp, seg:seg, tint:tint,
-          amt:(dir<0?'−':(dir>0?'+':''))+mainAmt, amtCls:dir>0?'pos':''};
+          amt:(dir<0?'−':(dir>0?'+':''))+mainAmt, amtCls:isXfer?'xfer':(dir>0?'pos':(dir<0?'neg':''))};
 }
 // A category/account/date that adds itself as a filter token when clicked.
 function tokLink(html,k,v){
@@ -1779,8 +1796,10 @@ function txTableRow(t,opts){
   return r;
 }
 
-/* —— swipe for Edit / Delete (touch only; the modal and Select mode offer both too) —— */
-var swOpen=null;   // the one row whose actions are showing
+/* —— swipe: left shows Delete, right selects the row (touch only; a tap opens the
+ * modal, which also has Delete, and Select mode has both) —— */
+var swOpen=null;   // the one row whose Delete is showing
+var SW=76;         // the width of the Delete button
 function swRest(w){ w.lastChild.style.transform=''; setTimeout(function(){ if(swOpen!==w) w.classList.remove('sw-on'); },320); }
 function swClose(){
   if(!swOpen) return false;
@@ -1788,14 +1807,13 @@ function swClose(){
 }
 function swipeWrap(row,t){
   var w=el('div','swipe'), acts=el('div','swipe-acts');
-  var eb=el('button','sw-edit','Edit'), db=el('button','sw-del','Delete');
-  eb.type=db.type='button';
-  eb.onclick=function(){ swClose(); openTxModal(t); };
+  var sb=el('div','sw-sel',icon('check')), db=el('button','sw-del','Delete');
+  db.type='button';
   db.onclick=function(){ swClose(); confirmDelete(t); };
-  acts.appendChild(eb); acts.appendChild(db); w.appendChild(acts); w.appendChild(row);
+  acts.appendChild(sb); acts.appendChild(db); w.appendChild(acts); w.appendChild(row);
   var x0=null, y0=0, dx=0, base=0, drag=false;
   row.addEventListener('touchstart',function(e){
-    var p=e.touches[0]; x0=p.clientX; y0=p.clientY; dx=0; drag=false; base=swOpen===w?-152:0;
+    var p=e.touches[0]; x0=p.clientX; y0=p.clientY; dx=0; drag=false; base=swOpen===w?-SW:0;
     if(swOpen&&swOpen!==w) swClose();
   },{passive:true});
   row.addEventListener('touchmove',function(e){
@@ -1806,14 +1824,19 @@ function swipeWrap(row,t){
       if(Math.abs(p.clientY-y0)>Math.abs(dx)){ x0=null; return; }   // a scroll, not a swipe
       drag=true; row.style.transition='none'; w.classList.add('sw-on');
     }
-    row.style.transform='translateX('+Math.max(-152,Math.min(0,base+dx))+'px)';
+    var x=Math.max(-SW,Math.min(SW,base+dx));
+    w.classList.toggle('sw-right',x>0);
+    row.style.transform='translateX('+x+'px)';
   },{passive:true});
   row.addEventListener('touchend',function(){
     if(x0==null||!drag){ x0=null; return; }
     x0=null; row.style.transition='';
+    if(base+dx>60){   // right: enter Select mode with this row picked
+      swOpen=null; S.tx.edit=true; S.tx.sel={}; S.tx.sel[t.ID]=true; renderTransactions(); return;
+    }
     var open=base+dx<-60;
     swOpen=open?w:null;
-    if(open) row.style.transform='translateX(-152px)'; else swRest(w);
+    if(open) row.style.transform='translateX(-'+SW+'px)'; else swRest(w);
   });
   return w;
 }
@@ -2793,8 +2816,10 @@ function updateBulkBar(){
   var bar=$('#bulkBar'); if(!bar) return;
   var n=selCount();
   bar.hidden=!n; bar.innerHTML=''; if(!n) return;
-  var net=0; (S.tx.rows||[]).forEach(function(t){ if(S.tx.sel[t.ID]) net+=txNet(t); });
-  bar.appendChild(el('span','bulk-count',n+' selected'+(Math.round(net)?' · '+fmtNet(net):'')));
+  // A transfer nets to 0, so it shows as its own "moved" figure instead.
+  var net=0, moved=0;
+  (S.tx.rows||[]).forEach(function(t){ if(!S.tx.sel[t.ID]) return; if(txIsXfer(t)) moved+=Math.abs(Number(t['Amount (PHP)'])||0); else net+=txNet(t); });
+  bar.appendChild(el('span','bulk-count',n+' selected'+(Math.round(net)?' · '+fmtNet(net):'')+(Math.round(moved)?' · '+money(moved,true)+' moved':'')));
   function add(label,cls,fn){ var b=el('button',cls,label); b.type='button'; b.onclick=fn; bar.appendChild(b); return b; }
   add('Category','',openBulkRecat);
   add('Account','',openBulkReassign);

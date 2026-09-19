@@ -8,7 +8,7 @@ Apple's HIG principles (hierarchy, harmony, consistency), applied to one goal: *
 3. **Edit where you read.** Change a value in place. Do not add a Save step when the change can be undone.
 4. **One app on three devices.** iPhone, iPad and PC show the same tiles in the same order. Only the columns and the navigation change. Every action works with touch and with a mouse.
 5. **Explain every derived number.** A figure that the app calculates gets an ⓘ tooltip. The tooltip shows the formula with the live inputs.
-6. **Calm by default.** Colour carries meaning, not decoration. Most amounts are plain text.
+6. **Calm by default.** Colour carries meaning, not decoration. A transaction amount is coloured by its direction; every other figure is plain text unless it is a state.
 
 ## Colour
 Tokens live on `:root` in `app.css`. Light is the default. `[data-theme=dark]` and `prefers-color-scheme: dark` (when the theme is Auto) switch to dark.
@@ -24,7 +24,7 @@ Tokens live on `:root` in `app.css`. Light is the default. `[data-theme=dark]` a
 | `--track` | `#E9E9EE` | `#2C2C2E` | Empty part of a bar or meter |
 | `--accent` | `#2463EB` | `#0A84FF` | Actions, selection, focus and links only. Also the liquid net-worth series. |
 | `--pos` | `#157A50` | `#30D158` | Income amounts, "on track" states |
-| `--neg` | `#C4382D` | `#FF453A` | Errors, destructive actions, liabilities, over budget |
+| `--neg` | `#C4382D` | `#FF453A` | Errors, destructive actions, liabilities, over budget, expense amounts |
 | `--warn` | `#B45309` | `#FF9F0A` | Due soon, needs review, limit reached |
 | `--ess` | `#0E7C86` | `#64D2FF` | Essentials segment |
 | `--rew` | `#D97706` | `#FF9F0A` | Rewards segment |
@@ -35,7 +35,7 @@ Tokens live on `:root` in `app.css`. Light is the default. `[data-theme=dark]` a
 | `--bar` | `rgba(249,249,251,.94)` | `rgba(18,18,20,.94)` | Tab bar (blurred) |
 Each semantic token also has a `-tint` variant: a 12–18% wash for chip and icon-tile backgrounds. `app.css` derives it with `color-mix()`, so a tint follows its theme with no second value.
 Rules:
-- **Amounts.** An expense is plain `--text` with a "−". Income is `--pos` with a "+". A transfer is plain text with no sign. Red is never the colour of ordinary spending.
+- **Amounts.** In a transaction row (list, table, Recent tile): an expense is `--neg` with a "−". Income (and a refund) is `--pos` with a "+". A transfer is `--accent` with no sign, the same as its ⇄ tile. Totals and nets (day headers, result line, bulk bar) stay plain text. The owner chose coloured row amounts on 2026-09-19; the sign still carries the direction for a CVD reader.
 - **Colour is never the only channel.** In/out bars keep a fixed position (in left, out right) and a legend. A status also has a word ("Limit reached", "Funded ✓").
 - **Check chart colours** against `--card` for 3:1 contrast in both themes when a series colour changes. The Scriptable widgets (`widgets/FinanceTracker.js`) copy these tokens, so change them in the same commit.
 - **Account colours** (`accounts.color`) appear only as the dot or initial tile of that account.
@@ -74,7 +74,7 @@ Radius: tile 20, list group 16, field and button 12, chip 999 (pill), icon tile 
 - **Grouped list**: rows of at least 44px (56–60 on iPhone) with a hairline inset past the icon. Row layout, left to right: icon tile (tinted), title and subtitle, value, chevron (only when the row opens something).
 - **Segmented control**: `--card-2` track with the selected segment on `--card`. Use it for 2–4 exclusive options (Spent / Earned / Moved, 6M / 1Y / 2Y).
 - **Chip or token**: pill, 28–36px tall. A filter token is `--accent-tint` with `--accent` text and an × to remove it. The field label ("Account", "Amount") sits inside the pill at 80% opacity.
-- **Transaction row**: the icon tile carries the first letter of the title, tinted by segment (`--ess`, `--rew`, `--gro`); income is `--pos`, a transfer is `--accent` with ⇄, anything else `--card-2`. On a phone, rows group under day headers, one card per day, and a left swipe shows Edit and Delete. From 1200px, Activity shows the same rows as a table (Date, Description, Category, Account, Amount) beside a filter pane (smart lists, then the accounts with balances).
+- **Transaction row**: the icon tile carries the first letter of the title, tinted by segment (`--ess`, `--rew`, `--gro`); income is `--pos`, a transfer is `--accent` with ⇄, anything else `--card-2`. On a phone, rows group under day headers, one card per day, a left swipe shows Delete, and a right swipe enters Select mode with that row picked (a tap already opens the edit view). From 1200px, Activity shows the same rows as a table (Date, Description, Category, Account, Amount) beside a filter pane (smart lists, then the accounts with balances).
 - **Tooltip (ⓘ)**: one component for mouse and touch. It opens on hover and focus on a pointer device, and on a tap on the ⓘ on touch. Esc or a tap outside closes it. Content, in order: a title that is a plain question or answer, one sentence on what the number means, the formula as rows with live values (the result rows in bold), then what the figure leaves out. Keep it under 360px wide.
 - **Bottom sheet** (iPhone and iPad): grab handle, Reset / title / Done header, primary button at the bottom. On PC the same content opens as a popover or a side panel.
 - **Bulk bar**: floating `--tip` pill at the bottom centre. It shows "N selected · total", then the actions, with Delete last in `--neg`.
@@ -101,7 +101,7 @@ Reduce Motion replaces all of it with a 150ms fade (the existing `prefers-reduce
 
 ## Input parity and keys
 - Touch targets are at least 44×44px. Nothing works only on hover. Every hover affordance has a tap or focus path.
-- Swipe actions on iPhone rows (Edit, Delete) also exist in the row's edit view and in Select mode.
+- Swipe actions on iPhone rows (Delete, Select) also exist in the row's edit view and the Select button.
 - Shortcuts (shown as ⌘ on Apple devices, Ctrl on others): **⌘K / Ctrl K** focuses the add field, **Esc** closes the top layer, **↑ ↓** move through a list, **Enter** opens the row, **⌘⇧L / Ctrl Shift L** switches light and dark.
 - Theme has three states: Auto (follows the system), Light, Dark. The button cycles Light and Dark. A long press or right-click on it offers Auto. The choice is stored per device in `localStorage`, and `<meta name="theme-color">` follows it.
 

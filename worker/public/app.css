@@ -196,7 +196,7 @@ button{font-family:inherit;cursor:pointer}
 .lg-key{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:baseline}
 
 /* ── Misc text ───────────────────────────────────────────────────────────── */
-.pos{color:var(--pos)} .neg{color:var(--neg)} .warn{color:var(--warn)} .dim{color:var(--dim)} .faint{color:var(--dim)}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .amt.xfer{color:var(--accent)} .warn{color:var(--warn)} .dim{color:var(--dim)} .faint{color:var(--dim)}
 .mono{font-variant-numeric:tabular-nums}
 .row-between{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;background:var(--card-3);color:var(--dim)}
@@ -334,7 +334,7 @@ button.cat-row{min-height:44px;cursor:pointer}
 .litem .amt{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
 .litem .amt .amt-sub{display:block;font-weight:500;font-size:11px;color:var(--dim);text-align:right}
 .litem.click{cursor:pointer;border-radius:12px}
-.litem.click:hover{background:var(--card-2)}
+@media(hover:hover){.litem.click:hover{background:var(--card-2)}}   /* iOS keeps :hover after a tap */
 /* in-flight (optimistic) row: dimmed with a spinner in the icon slot */
 .litem.pending{opacity:.6;animation:pendPulse 1.4s ease-in-out infinite}
 .mini-spin{width:16px;height:16px;border:2px solid var(--sep);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
@@ -354,16 +354,19 @@ button.cat-row{min-height:44px;cursor:pointer}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
 
 /* ── Forms / modal ───────────────────────────────────────────────────────── */
-.modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:16px}
+.modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;
+  padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
 .modal-root[hidden]{display:none}
 .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(3px)}
 /* max-height:100% (not 90vh) so the card fits the JS-set visual-viewport height when the iOS keyboard is up. */
 .modal-card{position:relative;background:var(--card);border-radius:20px;
   width:100%;max-width:460px;max-height:100%;overflow:auto;box-shadow:var(--shadow);animation:pop .2s ease}
-.modal-h{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--sep)}
+.modal-h{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--sep);
+  position:sticky;top:0;background:var(--card);z-index:2}   /* title and Save stay in view on a long form */
 .modal-h h3{margin:0;font-size:16px}
 .modal-b{padding:18px}
-.modal-f{padding:14px 18px;border-top:1px solid var(--sep);display:flex;gap:8px;justify-content:flex-end}
+.modal-f{padding:14px 18px;border-top:1px solid var(--sep);display:flex;gap:8px;justify-content:flex-end;
+  position:sticky;bottom:0;background:var(--card);z-index:2}
 .field{margin-bottom:13px}
 .field label{display:block;font-size:12px;font-weight:600;color:var(--dim);margin-bottom:5px}
 .field input,.field select,.field textarea{width:100%;background:var(--card-2);color:var(--text);
@@ -473,7 +476,7 @@ table.tbl td.editing{padding:0}
 .inline-edit .combo-input{padding:3px 7px;font-size:12.5px;background:var(--card-3);border:1px solid var(--accent);border-radius:6px}
 
 /* ── Activity (DESIGN.md: token field, chips, bulk bar) ─────────────────── */
-.act-head{margin-bottom:10px}
+.act-head{margin-bottom:10px;min-height:44px}   /* Select and Done differ in height; the title must not move */
 .act-sel{font-size:17px;font-weight:400;min-height:44px}
 .tok-wrap{position:relative;margin-bottom:10px}
 .tok-field{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:46px;padding:6px 10px;background:var(--card);
@@ -525,10 +528,12 @@ table.tbl td.editing{padding:0}
 .cat-dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;vertical-align:middle}
 .swipe{position:relative;overflow:hidden;border-bottom:1px solid var(--sep)}
 .swipe:last-child{border-bottom:0}
-.swipe-acts{position:absolute;top:0;right:0;bottom:0;display:flex;visibility:hidden}
+.swipe-acts{position:absolute;inset:0;display:flex;justify-content:flex-end;visibility:hidden}
 .swipe.sw-on .swipe-acts{visibility:visible}   /* hidden at rest: the row's anti-aliased edge let red show through */
 .swipe-acts button{width:76px;border:0;color:#fff;font-size:14px;font-weight:600}
-.swipe-acts .sw-edit{background:var(--accent)}
+.swipe-acts .sw-sel{display:none;flex:1;align-items:center;padding-left:26px;background:var(--accent);color:#fff}
+.swipe.sw-right .sw-sel{display:flex}
+.swipe.sw-right .sw-del{display:none}
 .swipe-acts .sw-del{background:var(--neg)}
 .swipe>.litem{position:relative;background:var(--card);border-bottom:0;touch-action:pan-y;transition:transform .32s cubic-bezier(.2,.8,.2,1)}
 /* The table (1200px and wider) and its filter pane */
