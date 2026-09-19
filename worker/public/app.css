@@ -354,6 +354,9 @@ button.cat-row{min-height:44px;cursor:pointer}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
 
 /* ── Forms / modal ───────────────────────────────────────────────────────── */
+/* iOS zooms the page into any field under 16px when it takes focus. !important because
+ * the smaller field styles below are more specific. */
+@media(pointer:coarse){ input,select,textarea{font-size:16px!important} }
 .modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;
   padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
 .modal-root[hidden]{display:none}
@@ -526,8 +529,7 @@ table.tbl td.editing{padding:0}
 .tok-link{cursor:pointer;border-radius:4px}
 .tok-link:hover{color:var(--accent)}
 .cat-dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;vertical-align:middle}
-.swipe{position:relative;overflow:hidden;border-bottom:1px solid var(--sep)}
-.swipe:last-child{border-bottom:0}
+.swipe{position:relative;overflow:hidden}   /* the row keeps its own separator, so Select mode (no wrapper) is the same height */
 .swipe-acts{position:absolute;inset:0;display:flex;justify-content:flex-end;visibility:hidden}
 .swipe.sw-on .swipe-acts{visibility:visible}   /* hidden at rest: the row's anti-aliased edge let red show through */
 .swipe-acts button{width:76px;border:0;color:#fff;font-size:14px;font-weight:600}
@@ -535,7 +537,7 @@ table.tbl td.editing{padding:0}
 .swipe.sw-right .sw-sel{display:flex}
 .swipe.sw-right .sw-del{display:none}
 .swipe-acts .sw-del{background:var(--neg)}
-.swipe>.litem{position:relative;background:var(--card);border-bottom:0;touch-action:pan-y;transition:transform .32s cubic-bezier(.2,.8,.2,1)}
+.swipe>.litem{position:relative;background:var(--card);touch-action:pan-y;transition:transform .32s cubic-bezier(.2,.8,.2,1)}
 /* The table (1200px and wider) and its filter pane */
 .tx-table{padding:0}
 .tx-table:not(.sel-mode){overflow:hidden}
