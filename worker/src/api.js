@@ -122,7 +122,7 @@ async function accountsList(env, r) {
   // Budgets screen (which asks for USD explicitly) shows a figure.
   const fx = await fxMap(env, r.accounts.map((a) => a.currency)
     .concat(Object.values(prices).map((p) => p.currency)).concat(['USD']));
-  return { accounts: shapeAccounts(r, net, prices, fx), fx };
+  return { accounts: shapeAccounts(r, net, prices, fx), fx, prices };
 }
 
 // ── reads ────────────────────────────────────────────────────────────────────
@@ -785,14 +785,18 @@ const quarterOf = (d) => d.slice(0, 4) + '-Q' + Math.ceil(+d.slice(5, 7) / 3);
 
 export async function getInvestments(args, env) {
   const r = await refs(env);
-  const { accounts } = await accountsList(env, r);
+  const { accounts, prices } = await accountsList(env, r);
+  const symOf = Object.fromEntries(r.accounts.map((a) => [a.name, a.symbol]));
   // Share-priced accounts only: a broker's cash balance (IBKR, subtype "For
   // Investment") is money waiting to buy, not a position, and the SPA's Assets card
   // already lists it. The SPA hides these same accounts from that card in turn.
   const positions = accounts.filter((a) => a.isShares).map((a) => ({
     name: a.name, subtype: a.subtype, currency: a.currency,
     quantity: a.balanceNative,
-    valuePhp: a.balancePhp
+    valuePhp: a.balancePhp,
+    // The quote behind valuePhp, for the Investments table's Price column.
+    ...(() => { const p = prices[symOf[a.name]];
+      return { price: p ? p.price : null, priceCurrency: p ? p.currency : null, pricedAt: p ? p.priced_at : null }; })()
   }));
   const total = positions.reduce((s, p) => s + (p.valuePhp || 0), 0);
   positions.forEach((p) => { p.weightPct = total ? Math.round((p.valuePhp || 0) / total * 1000) / 10 : 0; });
@@ -927,10 +931,12 @@ export async function getInvestments(args, env) {
     status: 'success',
     totalValuePhp: q2(total), totalCostPhp: q2(totalCostPhp),
     totalGainPhp: q2(total - totalCostPhp), positions,
-    pulse: { currentQuarter: quarterOf(manilaToday()), quarters },
+    // excluded = the holdings the pulse skips (an EF park like IB01), named in its footnote.
+    pulse: { currentQuarter: quarterOf(manilaToday()), quarters,
+             excluded: positions.filter((p) => !pulseSymbols.has(p.name)).map((p) => p.name) },
     runway,
     coreTargets: { 60: 'Core', 25: 'Growth', 15: 'Speculative' },
-    // Reference figures for the Accounts card, not a computed thing. These SUM TO 85
+    // Reference figures for the Investments allocation tile, not a computed thing. These SUM TO 85
     // ON PURPOSE: Stability was removed in v2.3.0 (the EF accrues as unspent residue,
     // which no monthly meter can track — the runway card is its only measure), and the
     // missing 15 IS that residue. Do not "correct" it back to 100.

@@ -690,6 +690,11 @@ describe('Gmail courier watermark (vm)', () => {
       // The tooltip body escapes its inputs and bolds only the result rows.
       const tipH = app.tipHTML({ title: 'A<b>', rows: [['In', '1'], ['Out', '2', true]], note: 'n' });
       assert.ok(tipH.includes('A&lt;b&gt;') && !tipH.includes('A<b>'), 'tipHTML must escape');
+      // Accounts rows: interest_rate is a fraction, and a 0% rate says nothing.
+      assert.strictEqual(app.rateText({ interestRate: 0.0325, interestFrequency: 'Monthly' }), '3.25% a year · monthly interest');
+      assert.strictEqual(app.rateText({ interestRate: 0.05, interestFrequency: 'None' }), '5.00% a year');
+      assert.strictEqual(app.rateText({ interestRate: 0 }), '');
+      assert.ok(app.signedPhp(-5).startsWith('−') && !app.signedPhp(5).startsWith('−'), 'a liability reads with a real minus');
       assert.strictEqual((tipH.match(/class="b"/g) || []).length, 2, 'only the bold row carries class b');
       // A new transaction defaults to the date the list is filtered to, not today.
       app.S.screen = 'transactions'; app.S.tx.filters = { date: '2026-02-14' };

@@ -250,7 +250,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 13;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists; 13 = bootstrap.quickPicks + descCategory
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 14;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists; 13 = bootstrap.quickPicks + descCategory; 14 = positions carry price + pulse.excluded
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -495,7 +495,7 @@ function boot(){
   // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
   if(p.get('tx')) openTxById(p.get('tx'));
   (warm ? revalidateBoot() : ensureBoot().then(function(){
-    if(S.screen==='dashboard'||S.screen==='accounts') render();
+    if(S.screen==='dashboard'||S.screen==='accounts'||S.screen==='investments') render();
   })).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
   // Launching IS a reconnect signal: the 'online' event doesn't fire for an app that
   // was closed while offline and reopened with a connection.
@@ -916,9 +916,9 @@ document.addEventListener('scroll',tipClose,true);
 /* The screen table — the single list of what a screen name may be. Also what `go()`
  * validates against, so a retired name can't stick in the URL or in localStorage.
  * (Function declarations hoist, so naming them here at load time is safe.) */
-var SCREEN_FNS={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
+var SCREEN_FNS={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,investments:renderInvestments,
                 exchange:renderExchange,tax:renderTax,admin:renderAdmin};
-var SECONDARY_SCREENS={exchange:1,tax:1,admin:1};
+var SECONDARY_SCREENS={investments:1,exchange:1,tax:1,admin:1};
 /* Last screen, so a browser reload comes back where you were. The parent URL
  * (?screen=, pushed below) is the primary channel; localStorage covers reloads
  * that drop it — an iOS home-screen shortcut reopens its start_url, not the
@@ -2096,102 +2096,140 @@ function fmtDate(d){
 /* ════════════════════════════════════════════════════════════════════════
  *  ACCOUNTS
  * ════════════════════════════════════════════════════════════════════════ */
+function isRecv(a){ return /receivable/i.test(a.subtype||''); }
+function signedPhp(n,big){ return n==null?'—':(n<0?'−':'')+money(Math.abs(n),big); }
+// The initial tile. An account's own colour is only ever this tile or a dot
+// (DESIGN.md), drawn as a tint so a pale colour still reads in both themes.
+function acctTile(label,c){
+  var s=c?' style="background:color-mix(in srgb,'+c+' 22%,transparent);color:color-mix(in srgb,'+c+' 70%,var(--text))"':'';
+  return '<span class="a-ic"'+s+'>'+label+'</span>';
+}
+function rateText(a){
+  if(!a.interestRate) return '';
+  return (Math.round(a.interestRate*10000)/100).toFixed(2)+'% a year'+
+    (a.interestFrequency&&a.interestFrequency!=='None'?' · '+a.interestFrequency.toLowerCase()+' interest':'');
+}
+function acctRow(a){
+  var r=el('button','a-row'); r.type='button';
+  var sub=esc(rateText(a)||a.subtype||''), subCls='', meter='';
+  if(a.currency&&a.currency!=='PHP') sub+=(sub?' · ':'')+esc(a.currency);
+  if(isRecv(a)) sub=a.netWorthPhp<0?'You owe them · shortens runway':'Not counted in runway';
+  if(a.isLiability&&a.creditLimit>0){
+    var u=(a.balancePhp||0)/a.creditLimit, full=a.availableCredit!=null&&a.availableCredit<=0;
+    meter=bar6([[u,'var(--'+(full?'warn':'accent')+')']]).outerHTML;
+    sub=full?'Limit reached':money(a.availableCredit,true)+' available of '+money(a.creditLimit,true);
+    if(full) subCls=' warn';
+  }
+  var foreign=a.currency&&a.currency!=='PHP';
+  r.innerHTML=acctTile(esc(String(a.name).charAt(0).toUpperCase()),isHex6(a.color)?a.color:'')+
+    '<span class="a-mid"><span class="a-t">'+esc(a.name)+'</span>'+meter+'<span class="a-s'+subCls+'">'+sub+'</span></span>'+
+    '<span class="a-v"><span class="'+((a.netWorthPhp||0)<0?'neg':'')+'">'+signedPhp(a.netWorthPhp)+'</span>'+
+    (foreign?'<small>'+moneyCur(a.balanceNative,a.currency)+'</small>':'')+'</span>'+icon('chevron');
+  r.onclick=function(){ openAccountModal(a); };
+  return r;
+}
+// A titled group: the label outside the card on a phone, inside it from 768px.
+function acctGroup(title,right,rows,cls){
+  var g=el('section','a-grp'+(cls?' '+cls:''));
+  g.appendChild(el('div','a-gh','<span>'+esc(title)+'</span><span>'+right+'</span>'));
+  var l=el('div','a-list'); rows.forEach(function(n){ l.appendChild(n); });
+  g.appendChild(l); return g;
+}
+
 function renderAccounts(){
   if(!S.cache['accounts']) loading('accounts');
   return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
     var accs=res.accounts||[];
-    var w=el('div','screen cols');
-    w.appendChild(el('div','screen-title','Accounts'));
-
+    var cash=[],credit=[],recv=[],shares=[];
+    accs.forEach(function(a){ (a.isShares?shares:a.isLiability?credit:isRecv(a)?recv:cash).push(a); });
+    function sum(l,f){ return l.reduce(function(s,a){ return s+(f?f(a):(a.netWorthPhp||0)); },0); }
     // Same split as netWorthTotals() in api.js: a NEGATIVE receivable is money the
-    // owner owes, so it counts as a liability, not an asset worth less. Tiles show
-    // liabilities positive, so a negative net worth adds its absolute value here.
-    var assets=0,liab=0;
-    accs.forEach(function(a){
-      var nw=a.netWorthPhp||0;
-      if(a.isLiability) liab+=(a.balancePhp||0);
-      else if(nw<0 && /receivable/i.test(a.subtype||'')) liab-=nw;
-      else assets+=nw;
-    });
-    var top=el('div','grid grid-2');
-    top.appendChild(tile('Total assets', money(assets,true), accs.length+' accounts tracked'));
-    top.appendChild(tile('Total liabilities', money(liab,true), 'credit lines and money owed back'));
-    w.appendChild(top);
-    // The runway card lands here, under both tiles, once loadInvestments fills it.
-    var rwh=el('div'); rwh.id='runwayCard';
-    w.appendChild(rwh);
+    // owner owes, so it is a liability, not an asset worth less.
+    var lent=sum(recv,function(a){ return Math.max(0,a.netWorthPhp||0); }), owe=sum(recv)-lent;
+    var cashT=sum(cash), invT=sum(shares), assets=cashT+invT+lent, liab=sum(credit)+owe;
+    var nLent=recv.filter(function(a){ return a.netWorthPhp>0; }).length;
 
-    // group by type. Share-priced accounts are left out: the Holdings card lists
-    // every one of them, with weight and gain, and its rows open the same modal.
-    var groups={};
-    accs.forEach(function(a){ if(a.isShares) return; var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
-    Object.keys(groups).sort().forEach(function(t){
-      var card=el('div','card');
-      var sum=0; groups[t].forEach(function(a){ sum+=(a.balancePhp||0); });
-      var h=el('div','row-between'); h.style.marginBottom='12px';
-      var ttl=el('div','card-h',esc(t)+' <span style="opacity:.55">· '+groups[t].length+'</span>'); ttl.style.margin='0'; h.appendChild(ttl);
-      h.appendChild(el('div','dim mono',money(sum)));
-      card.appendChild(h);
-      var l=el('div','list');
-      groups[t].forEach(function(a){ l.appendChild(accountRow(a)); });
-      card.appendChild(l); w.appendChild(card);
-    });
+    var w=el('div','screen');
+    var head=el('div','screen-head'); head.appendChild(el('div','screen-title','Accounts')); w.appendChild(head);
+    w.appendChild(el('div','screen-sub',accs.length+' accounts'+(nLent?' · '+nLent+' owe you':'')));
 
-    // Holdings: the share accounts above, re-cut by portfolio weight. Filled by a
-    // separate cachedCall — the 'accounts' payload is pre-seeded from getBootstrap
-    // and shared with the edit-mode rail, so its shape must not change.
-    // Recurring & installments — from the Budgets screen (merged into the Dashboard
-    // in v2.14.0). It belongs beside the liabilities: an installment IS one. Read off
-    // getBootstrap, which already carries the rows, so the screen gains no fetch; a
-    // cold load paints it on the boot re-render.
-    var rec=((S.boot&&S.boot.recurring)||[]);
-    if(rec.length){
-      var rcard=el('div','card');
-      rcard.appendChild(el('div','card-h','Recurring & installments'));
-      var rl=el('div','list');
-      rec.forEach(function(o){
-        var amt=o.Amount, ml=o['Months Left'];
-        var r=el('div','litem');
-        r.innerHTML='<div class="ic">⟳</div><div class="grow"><div class="t1">'+esc(o.Description||'')+'</div>'+
-          '<div class="t2">'+esc(o.Group||'')+(ml!=null&&ml!==''?(' · '+esc(ml)+' mo left'):'')+'</div></div>'+
-          '<div class="amt">'+(amt!=null&&amt!==''?money(amt):'—')+'</div>';
-        rl.appendChild(r);
-      });
-      rcard.appendChild(rl); w.appendChild(rcard);
+    var tot=el('div','a-tot');
+    function cell(label,fig,cls,foot,spec){
+      var t=sumTile('',label,null,spec); t.appendChild(el('div','fig'+(cls?' '+cls:''),fig));
+      t.appendChild(el('div','tile-foot',foot)); tot.appendChild(t);
     }
+    cell('Assets',money(assets,true),'','Cash '+money(cashT,true)+' · Invested '+money(invT,true)+(lent?' · Owed '+money(lent,true):''));
+    cell(twoLabels('Liabilities','Owe'),signedPhp(liab,true),liab<0?'neg':'',
+      credit.length+' credit line'+(credit.length===1?'':'s')+(owe?' · '+money(-owe,true)+' you owe':''));
+    cell(twoLabels('Net worth','Net'),signedPhp(assets+liab,true),'','Assets − liabilities',{title:'What you own minus what you owe',
+      text:'Every account at today\'s balance, prices and exchange rate. The same figure as Summary.',
+      rows:[['Assets',money(assets,true)],['− Liabilities',money(-liab,true)],['= Net worth',signedPhp(assets+liab,true),true]],
+      note:'Money you lent counts as an asset. Money you owe through a receivable counts as a liability.'});
+    w.appendChild(tot);
 
-    var dbt=el('div'); dbt.id='debtsCard';
-    w.appendChild(dbt);
-
-    var inv=el('div'); inv.id='invCards';
-    w.appendChild(inv);
-    if(S.boot) w.appendChild(widgetCard());
+    var body=el('div','a-body'), L=el('div','a-col'), R=el('div','a-col');
+    body.appendChild(L); body.appendChild(R); w.appendChild(body);
+    L.appendChild(acctGroup('Cash and banks',money(cashT,true),cash.map(acctRow)));
+    if(credit.length) L.appendChild(acctGroup('Credit','<span class="neg">'+signedPhp(sum(credit),true)+'</span>',credit.map(acctRow)));
+    if(shares.length){
+      var ir=el('button','a-row'); ir.type='button';
+      ir.innerHTML=acctTile(icon('investments'),'var(--gro)')+'<span class="a-mid"><span class="a-t">Holdings</span>'+
+        '<span class="a-s">'+shares.length+' positions · average cost and gain</span></span>'+
+        '<span class="a-v">'+money(invT,true)+'</span>'+icon('chevron');
+      ir.onclick=function(){ go('investments'); };
+      L.appendChild(acctGroup('Investments',money(invT,true),[ir]));
+    }
+    var rt=sum(recv)>=0&&!owe?'Owed to you':(lent?'Owed to you and by you':'You owe');
+    if(recv.length) R.appendChild(acctGroup(rt,signedPhp(sum(recv),true),recv.map(acctRow)));
+    var dbt=el('div'); dbt.id='debtsCard'; R.appendChild(dbt);
+    var rc=recurringGroup(); if(rc) R.appendChild(rc);
+    if(S.boot) R.appendChild(widgetPicker(accs));
     paint(w);
-    loadInvestments();
     loadDebts();
   }).catch(showErr);
 }
 
-/* Home-screen widget: which 3 accounts the iOS balance widget shows (meta
- * widget_accounts, read by getWidget). Seeded from getBootstrap, so no fetch. */
-function widgetCard(){
-  var c=el('div','card');
-  c.appendChild(el('div','card-h','Home-screen widget · balances'));
-  var cur=S.boot.widgetAccounts||[], opts=[{value:'',label:'(none)'}].concat(acctOptions());
-  var combos=[0,1,2].map(function(i){
-    var f=el('div','field','<label>Account '+(i+1)+'</label>');
-    var k=comboEl(opts, cur[i]||'', {placeholder:'(none)'});
-    f.appendChild(k); c.appendChild(f); return k;
+// Recurring and installments, off getBootstrap (no fetch). Sorted by group; an
+// installment says how many months are left.
+function recurringGroup(){
+  var rec=((S.boot&&S.boot.recurring)||[]).slice();
+  if(!rec.length) return null;
+  var fx=(S.boot&&S.boot.fxUsdPhp)||0, total=0;
+  rec.sort(function(a,b){ return (a.Group||'~').localeCompare(b.Group||'~'); });
+  var rows=rec.map(function(o){
+    var cur=o.Currency||'PHP', amt=o.Amount, ml=o['Months Left'];
+    if(amt!==''&&amt!=null) total+=cur==='PHP'?amt:(cur==='USD'?amt*fx:0);
+    var r=el('div','a-row r-row');
+    r.innerHTML='<span class="a-mid"><span class="a-t">'+esc(o.Description||'')+'</span></span>'+
+      '<span class="a-s">'+(ml!==''&&ml!=null?esc(ml)+' months left':esc(o.Group||'Monthly'))+'</span>'+
+      '<span class="a-v">'+(amt!==''&&amt!=null?(cur==='PHP'?money(amt,true):moneyCur(amt,cur)):'—')+'</span>';
+    return r;
   });
-  var save=el('button','btn sm primary','Save');
-  save.onclick=function(){
-    save.disabled=true;
-    gs('api_setWidgetAccounts',{names:combos.map(function(k){return k.value;}).filter(Boolean)})
-      .then(function(res){ S.boot.widgetAccounts=res.widgetAccounts; toast('Widget accounts saved','ok'); })
-      .catch(function(e){ toast(e.message||String(e),'err'); }).then(function(){ save.disabled=false; });
-  };
-  c.appendChild(save);
-  return c;
+  return acctGroup('Recurring and installments',money(total,true)+' a month',rows);
+}
+
+/* The iOS balance widget's accounts (meta widget_accounts, read by getWidget),
+ * seeded from getBootstrap. A tap saves at once: edit where you read. */
+function widgetPicker(accs){
+  var g=acctGroup('iPhone balance widget','Pick up to 3',[],'a-wid');
+  var box=el('div','a-chips'); $('.a-list',g).appendChild(box);
+  function draw(){
+    var cur=S.boot.widgetAccounts||[];
+    box.innerHTML='';
+    accs.forEach(function(a){
+      var on=cur.indexOf(a.name)>=0, c=el('button','chip'+(on?' on':''),esc(a.name)+(on?icon('check'):''));
+      c.type='button'; c.setAttribute('aria-pressed',on);
+      c.onclick=function(){
+        if(!on&&cur.length>=3){ toast('Pick up to 3. Remove one first.'); return; }
+        var prev=cur, next=on?cur.filter(function(n){return n!==a.name;}):cur.concat([a.name]);
+        S.boot.widgetAccounts=next; draw();
+        gs('api_setWidgetAccounts',{names:next}).then(function(res){ S.boot.widgetAccounts=res.widgetAccounts; saveCache(); draw(); })
+          .catch(function(e){ S.boot.widgetAccounts=prev; draw(); toast(e.message||String(e),'err'); });
+      };
+      box.appendChild(c);
+    });
+  }
+  draw(); return g;
 }
 
 /* Open debts per receivable — the itemised balance behind each IOU account.
@@ -2266,188 +2304,141 @@ function loadDebts(){
   }).catch(showErr);
 }
 
-/* Investment positions as a card on Accounts (read-only). */
-function loadInvestments(){
+/* ════════════════════════════════════════════════════════════════════════
+ *  INVESTMENTS (v3 Phase 5): invested with gain, the quarterly pulse,
+ *  allocation, and the holdings table. One getInvestments payload — the same
+ *  cache key Summary's runway tile reads.
+ * ════════════════════════════════════════════════════════════════════════ */
+var INV_COLORS=['var(--gro)','var(--accent)','var(--ess)','var(--rew)','var(--pos)','var(--warn)'];
+// Colour per holding: its account colour, else a token slot by NAME (not rank),
+// so a ticker keeps its colour across the pulse, allocation and table.
+function invColors(pos){
+  var names=pos.map(function(p){return p.name;}).sort(), m={};
+  names.forEach(function(n,i){ m[n]=acctColor(n)||INV_COLORS[i%INV_COLORS.length]; });
+  return m;
+}
+function gainSpec(inv){
+  return {title:'Gain uses average cost',
+    text:'Value today minus what the shares cost, at the peso rate on each buy day.',
+    rows:[['Value today',money(inv.totalValuePhp,true)],['− Cost',money(inv.totalCostPhp,true)],
+          ['= Gain',signedMoney(inv.totalGainPhp),true]],
+    note:'A sale takes cost out in proportion, so the average cost never moves on a sale. Gain includes currency moves.'};
+}
+function qLabel(k){ var m=/^(\d{4})-(Q\d)$/.exec(k); return m?(m[2]+' '+m[1]):k; }
+
+function renderInvestments(){
+  if(!S.cache['investments']) loading('accounts');
   return cachedCall('investments', function(et){return gs('api_getInvestments',null,et);}, function(inv){
-    var host=$('#invCards'); if(!host) return;
-    host.innerHTML='';
-    var rwh=$('#runwayCard'); if(rwh) rwh.innerHTML='';
-    var positions=inv.positions||[];
-    if(!positions.length) return;
+    var pos=inv.positions||[], col=invColors(pos);
+    var w=el('div','screen');
+    var head=el('div','screen-head'); head.appendChild(el('div','screen-title','Investments')); w.appendChild(head);
+    var asOf=pos.reduce(function(m,p){ return p.pricedAt&&p.pricedAt>m?p.pricedAt:m; },'');
+    w.appendChild(el('div','screen-sub',asOf?'Prices as of '+esc(fmtDate(asOf)):'No prices yet'));
+    if(!pos.length){ w.appendChild(el('div','tile','<div class="tile-foot">No holdings yet.</div>')); paint(w); return; }
+    var g=el('div','sum inv'); w.appendChild(g);
 
-    var card=el('div','card');
-    var h=el('div','row-between'); h.style.marginBottom='12px';
-    var ttl=el('div','card-h','Holdings <span style="opacity:.55">· '+positions.length+'</span>'); ttl.style.margin='0';
-    var tot=usdOf(inv.totalValuePhp);
-    h.appendChild(ttl); h.appendChild(el('div','dim mono',money(inv.totalValuePhp)+(tot?' · '+tot:'')));
-    card.appendChild(h);
-    // Unrealized gain against historical cost: what the buy legs cost in pesos on the
-    // day they were paid, versus what the positions are worth now. It carries market
-    // AND currency movement, which is right for a peso-denominated owner.
-    if(inv.totalCostPhp){
-      var gsev=inv.totalGainPhp>=0?'pos':'neg';
-      var gr=el('div','row-between'); gr.style.cssText='margin:-6px 0 10px;font-size:12px';
-      gr.innerHTML='<span class="dim">cost '+money(inv.totalCostPhp,true)+'</span>'+
-        '<span class="'+gsev+'" style="font-weight:600">'+signedMoney(inv.totalGainPhp)+
-        ' · '+signedPct(100*inv.totalGainPhp/inv.totalCostPhp)+'</span>';
-      card.appendChild(gr);
-    }
-
-    // Color follows the entity: the account's own color when set, else a stable
-    // slot from the validated fallback palette (assigned by name, not by rank).
-    var fallback=['#3987e5','#199e70','#c98500','#9085e9','#e66767','#d55181','#d95926','#eb6834'];
-    var holdOrder=positions.map(function(p){return p.name;});
-    var names=holdOrder.slice().sort();
-    function posColor(p){ return acctColor(p.name)||fallback[names.indexOf(p.name)%fallback.length]; }
-    // one stacked allocation bar (part-to-whole), 2px surface gaps between fills
-    var stack=el('div'); stack.style.cssText='display:flex;gap:2px;height:14px;margin:2px 0 16px';
-    positions.forEach(function(p){
-      var seg=el('div'); seg.title=p.name+' · '+pct(p.weightPct);
-      seg.style.cssText='flex:'+Math.max(p.weightPct||0,.5)+';background:'+posColor(p)+';border-radius:4px;min-width:5px';
-      stack.appendChild(seg);
-    });
-    card.appendChild(stack);
-
-    // The Assets card no longer lists share accounts, so these rows carry its tap:
-    // the account modal, off the 'accounts' payload the screen already painted from.
-    var accByName={};
-    ((S.cache.accounts&&S.cache.accounts.data.accounts)||[]).forEach(function(a){ accByName[a.name]=a; });
-    var l=el('div','list');
-    positions.forEach(function(p){
-      var acc=accByName[p.name];
-      var r=el('div','litem'+(acc?' click':''));
-      if(acc) r.onclick=function(){ openAccountModal(acc); };
-      var q=p.quantity!=null?(num(p.quantity)+' · '):'';
-      var pc=posColor(p);
-      // Average cost is the entry price a sale does NOT move (average-cost method), so
-      // it stays comparable to the live quote. The gain beside the value is peso gain
-      // against historical cost; it is text as well as color.
-      var cost=p.avgCostNative!=null?(' · avg '+moneyCur(p.avgCostNative,p.costCurrency)):'';
-      var gain=p.gainPhp==null?'':('<span class="amt-sub '+(p.gainPhp>=0?'pos':'neg')+'">'+
-        signedMoney(p.gainPhp)+(p.gainPct==null?'':' · '+signedPct(p.gainPct))+'</span>');
-      r.innerHTML='<div class="ic" style="color:'+pc+';background:'+pc+'22">▲</div>'+
-        '<div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
-        '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of portfolio'+esc(cost)+'</div></div>'+
-        '<div class="amt">'+money(p.valuePhp)+
-        (gain||(usdOf(p.valuePhp)?'<span class="amt-sub">'+usdOf(p.valuePhp)+'</span>':''))+'</div>';
-      l.appendChild(r);
-    });
-    card.appendChild(l); host.appendChild(card);
-
-    // Quarterly pulse: buys per quarter (transfers into the GROWTH ticker accounts,
-    // derived server-side — no category discipline needed; an EF park like IB01 is a
-    // share account but never a pulse buy, the runway card measures it). One bar per
-    // quarter on a COMMON scale (width = share of the biggest quarter), segments
-    // colored per ticker with the SAME posColor as Holdings, so identity carries
-    // across the two cards. Identity is never color-alone: the detail line names
-    // each ticker with its amount. Current quarter with no buys is an empty
-    // dashed track — the absence is the message.
-    var pl=inv.pulse;
-    if(pl){
-      var qc=el('div','card');
-      qc.appendChild(el('div','card-h','Quarterly pulse'));
-      var qs=pl.quarters||[];
-      var maxT=Math.max.apply(null,[1].concat(qs.map(function(q){return q.totalUsd||0;})));
-      var qhost=el('div'); qhost.style.cssText='display:flex;flex-direction:column;gap:14px';
-      function qlabel(k){ var m=/^(\d{4})-(Q\d)$/.exec(k); return m?(m[2]+' '+m[1]):k; }
-      function qrow(label,right){
-        var w=el('div');
-        w.innerHTML='<div class="row-between"><div style="font-weight:600">'+esc(label)+'</div>'+
-          '<div class="mono" style="font-weight:700">'+right+'</div></div>';
-        return w;
-      }
-      var track='height:14px;border-radius:4px;margin-top:6px;border:1px dashed var(--warn);opacity:.6';
-      if(!qs.length||qs[0].quarter!==pl.currentQuarter){
-        var w0=qrow(qlabel(pl.currentQuarter),'<span class="warn" style="font-size:12px;font-weight:600">not invested yet</span>');
-        var tr=el('div'); tr.style.cssText=track;
-        w0.appendChild(tr);
-        qhost.appendChild(w0);
-      }
-      qs.forEach(function(q){
-        // merge buys per ticker (a quarter can buy the same one twice). Sells are held
-        // apart: they already NET the quarter's total server-side, and a bar drawn from
-        // a mixed sum would size a segment by money that left again.
-        var order=[],agg={},sells=[];
-        q.buys.forEach(function(b){
-          if(b.side==='sell'){ sells.push(b); return; }
-          if(!agg[b.symbol]){agg[b.symbol]={symbol:b.symbol,currency:b.currency,amount:0,quantity:0};order.push(b.symbol);}
-          agg[b.symbol].amount+=b.amount||0; agg[b.symbol].quantity+=b.quantity||0;
-        });
-        // Holdings order, so a ticker sits in the same place on both cards.
-        function rank(s){ var i=holdOrder.indexOf(s); return i<0?holdOrder.length:i; }
-        order.sort(function(a,b){ return rank(a)-rank(b); });
-        var w=qrow(qlabel(q.quarter),moneyCur(q.totalUsd,'USD'));
-        // A quarter whose only activity was a sale has still parked nothing, so it gets
-        // the same dashed empty track as a quarter with no activity at all: the bar
-        // measures money going IN, and there is none to size it with.
-        var bar=el('div');
-        if(!order.length){ bar.style.cssText=track; }
-        else bar.style.cssText='display:flex;gap:2px;height:14px;margin-top:6px;width:'+
-          Math.max(6,Math.round(100*(q.totalUsd||0)/maxT))+'%';
-        order.forEach(function(sym){
-          var b=agg[sym], seg=el('div');
-          seg.title=sym+' · '+moneyCur(b.amount,b.currency)+' · '+num(b.quantity)+' sh';
-          seg.style.cssText='flex:'+Math.max(b.amount,1)+';background:'+posColor({name:sym})+';border-radius:4px;min-width:5px';
-          bar.appendChild(seg);
-        });
-        w.appendChild(bar);
-        var det=order.map(function(sym){return esc(sym)+' '+moneyCur(agg[sym].amount,agg[sym].currency);}).join(' · ');
-        var dl=el('div','',det);
-        dl.style.cssText='font-size:12px;color:var(--dim);margin-top:4px';
-        w.appendChild(dl);
-        if(sells.length){
-          var sl=el('div','neg','sold · '+sells.map(function(b){
-            return b.symbol+' '+moneyCur(b.amount,b.currency)+' ('+num(b.quantity)+' sh)';}).join(' · '));
-          sl.style.cssText='font-size:12px;margin-top:2px';
-          w.appendChild(sl);
-        }
-        qhost.appendChild(w);
-      });
-      qc.appendChild(qhost); host.appendChild(qc);
-    }
-
-    // Emergency runway: the whole cash-like pool (Liquid + EF − credit − money lent) vs the
-    // 4-months-of-expenses rule — EF is commingled, so the pool IS the fund.
-    // Stat-tile shape: peso pool as the value (the "how much EF do I have"
-    // answer), months-of-runway as the pill, a severity meter against the target
-    // (fill + same-ramp track, like the budget meters). The months figure and the
-    // support line restate the state, so color is never the only channel.
-    var rw=inv.runway;
-    if(rw&&rw.efPhp!=null){
-      var rc=el('div','card');
-      var rh=el('div','row-between'); rh.style.marginBottom='2px';
-      var rt=el('div','card-h','Emergency runway'); rt.style.margin='0';
-      rh.appendChild(rt);
-      if(rw.targetPhp!=null) rh.appendChild(el('div','dim','target '+money(rw.targetPhp,true)));
-      rc.appendChild(rh);
-      var sev=rw.months==null?'':(rw.months>=rw.targetMonths?'pos':(rw.months>=rw.targetMonths/2?'warn':'neg'));
-      var vr=el('div','row-between');
-      vr.innerHTML='<div class="stat-value" style="font-size:26px">'+money(rw.efPhp,true)+'</div>'+
-        (rw.months!=null?('<span class="pill '+sev+'">'+rw.months+' / '+rw.targetMonths+' mo</span>'):'');
-      rc.appendChild(vr);
-      if(rw.targetPhp){
-        var m=el('div','meter '+(sev==='neg'?'over':(sev==='warn'?'warn':'')));
-        m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,Math.round(100*rw.efPhp/rw.targetPhp))+'%"></div>';
-        rc.appendChild(m);
-      }
-      var sub=el('div','dim','Cash + IB01 − credit − money you owe; money lent is left out'+
-        (rw.avgMonthlyExpensePhp?' · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo':''));
-      sub.style.cssText='font-size:12px;margin-top:8px';
-      rc.appendChild(sub);
-      if(rwh) rwh.appendChild(rc);
-    }
-
-    // targets reference
-    var tc=el('div','card');
-    tc.appendChild(el('div','card-h','Strategy targets (reference)'));
-    var seg=inv.segmentTargets||{}, core=inv.coreTargets||{};
-    var html='<div class="dim" style="font-size:13px">Core allocation: ';
-    html+=Object.keys(core).map(function(k){return esc(core[k])+' '+esc(k)+'%';}).join(' · ');
-    html+='</div><div class="dim" style="font-size:13px;margin-top:6px">Segments: ';
-    html+=Object.keys(seg).map(function(k){return esc(k)+' '+esc(seg[k])+'%';}).join(' · ');
-    html+='</div>';
-    tc.innerHTML+=html; host.appendChild(tc);
+    var t=sumTile('t-inv','Invested',null,gainSpec(inv)), gn=inv.totalGainPhp||0;
+    t.appendChild(el('div','fig',money(inv.totalValuePhp,true)));
+    if(inv.totalCostPhp) t.appendChild(el('div','inv-gain '+(gn>=0?'pos':'neg'),(gn>=0?'▲ ':'▼ ')+money(Math.abs(gn),true)+
+      ' · '+pct(Math.abs(100*gn/inv.totalCostPhp))+(gn>=0?' over':' under')+' cost'));
+    var usd=usdOf(inv.totalValuePhp); if(usd) t.appendChild(el('div','tile-foot',usd));
+    g.appendChild(t);
+    if(inv.pulse) g.appendChild(pulseTile(inv.pulse,pos,col));
+    g.appendChild(allocTile(inv,pos,col));
+    g.appendChild(holdingsTile(inv,pos,col));
+    paint(w);
   }).catch(showErr);
+}
+
+/* Buys per quarter into the GROWTH tickers (server-side, by account subtype; an EF
+ * park like IB01 is left out). One bar per quarter on a common scale, split by
+ * ticker. The bar measures money going IN, so a sale is a red line under it, and a
+ * quarter with no buys is a dashed empty track. */
+function pulseTile(pl,pos,col){
+  var qs=pl.quarters||[], cur=qs[0]&&qs[0].quarter===pl.currentQuarter?qs[0]:null;
+  var rank=pos.map(function(p){return p.name;});
+  function agg(q){
+    var order=[],m={},sells=[];
+    q.buys.forEach(function(b){
+      if(b.side==='sell'){ sells.push(b); return; }
+      if(!m[b.symbol]){ m[b.symbol]={symbol:b.symbol,currency:b.currency,amount:0,quantity:0}; order.push(b.symbol); }
+      m[b.symbol].amount+=b.amount||0; m[b.symbol].quantity+=b.quantity||0;
+    });
+    order.sort(function(a,b){ return rank.indexOf(a)-rank.indexOf(b); });
+    return {buys:order.map(function(s){return m[s];}),sells:sells};
+  }
+  var spec=function(){
+    var rows=[];
+    if(cur){ var a=agg(cur);
+      a.buys.forEach(function(b){ rows.push([b.symbol,moneyCur(b.amount,b.currency)]); });
+      a.sells.forEach(function(b){ rows.push(['− '+b.symbol+' sold',moneyCur(b.amount,b.currency)]); }); }
+    rows.push(['= '+qLabel(pl.currentQuarter),moneyCur(cur?cur.totalUsd:0,'USD'),true]);
+    return {title:'Did you invest this quarter?',text:'Money moved into growth holdings each quarter, in US dollars. A sale in the quarter comes off.',
+      rows:rows,note:'Buys come from transfers into the ticker accounts, not from categories.'};
+  };
+  var t=sumTile('t-pulse','Quarterly pulse','<b>'+qLabel(pl.currentQuarter)+'</b> · '+moneyCur(cur?cur.totalUsd:0,'USD'),spec);
+  var maxT=Math.max.apply(null,[1].concat(qs.map(function(q){return q.totalUsd||0;})));
+  var list=el('div','pq-list');
+  function quarter(label,right){ var q=el('div','pq'); q.appendChild(el('div','pq-h','<span>'+esc(label)+'</span><b>'+right+'</b>')); list.appendChild(q); return q; }
+  if(!cur) quarter(qLabel(pl.currentQuarter),'<span class="warn">Not invested yet</span>').appendChild(el('div','pq-bar empty'));
+  qs.forEach(function(q){
+    var a=agg(q), w=quarter(qLabel(q.quarter),moneyCur(q.totalUsd,'USD')), bar=el('div','pq-bar');
+    if(!a.buys.length) bar.classList.add('empty');
+    else bar.style.width=Math.max(6,Math.round(100*(q.totalUsd||0)/maxT))+'%';
+    a.buys.forEach(function(b){ var i=el('i'); i.style.flex=Math.max(b.amount,1); i.style.background=col[b.symbol]||'var(--gro)';
+      i.title=b.symbol+' · '+moneyCur(b.amount,b.currency)+' · '+num(b.quantity)+' shares'; bar.appendChild(i); });
+    w.appendChild(bar);
+    if(a.buys.length) w.appendChild(el('div','pq-d',a.buys.map(function(b){ return esc(b.symbol)+' '+moneyCur(b.amount,b.currency); }).join(' · ')));
+    if(a.sells.length) w.appendChild(el('div','pq-d neg','Sold '+a.sells.map(function(b){
+      return esc(b.symbol)+' '+moneyCur(b.amount,b.currency)+' ('+num(b.quantity)+' shares)'; }).join(' · ')));
+  });
+  t.appendChild(list);
+  var ex=pl.excluded||[];
+  t.appendChild(el('div','tile-foot','Growth buys only.'+(ex.length?' '+esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.':'')));
+  return t;
+}
+
+function allocTile(inv,pos,col){
+  var t=sumTile('t-alloc','Allocation');
+  var bar=el('div','alloc'), rows=el('div','alloc-rows');
+  pos.forEach(function(p){
+    var i=el('i'); i.style.flex=Math.max(p.weightPct||0,.5); i.style.background=col[p.name]; i.title=p.name+' · '+pct(p.weightPct); bar.appendChild(i);
+    var r=el('div','alloc-row','<i></i><span>'+esc(p.name)+(/^EF$/i.test(p.subtype||'')?' <span class="dim">· emergency fund</span>':'')+
+      '</span><b>'+pct(p.weightPct)+'</b>');
+    r.firstChild.style.background=col[p.name]; rows.appendChild(r);
+  });
+  t.appendChild(bar); t.appendChild(rows);
+  // Strategy targets: reference figures from getInvestments, not computed.
+  var core=inv.coreTargets||{}, seg=inv.segmentTargets||{};
+  t.appendChild(el('div','tile-foot','Target: '+Object.keys(core).reverse().map(function(k){ return esc(core[k])+' '+esc(k)+'%'; }).join(' · ')+
+    '<br>Segments: '+Object.keys(seg).map(function(k){ return esc(k)+' '+esc(seg[k])+'%'; }).join(' · ')));
+  return t;
+}
+
+/* Average cost is the entry price a sale does NOT move, so it compares with the
+ * live quote. Gain is peso gain against historical cost. A row opens the account. */
+function holdingsTile(inv,pos,col){
+  var t=el('section','tile t-hold');
+  var hd=el('div','h-row h-head','<span class="h-name">Holding</span><span>Shares</span><span>Average cost</span><span>Price</span><span>Value</span>');
+  var gh=el('span','h-gh','Gain'); gh.appendChild(tip(gainSpec(inv))); hd.appendChild(gh);
+  t.appendChild(hd);
+  var byName={};
+  ((S.cache.accounts&&S.cache.accounts.data.accounts)||[]).forEach(function(a){ byName[a.name]=a; });
+  pos.forEach(function(p){
+    var acc=byName[p.name], r=el(acc?'button':'div','h-row');
+    if(acc){ r.type='button'; r.onclick=function(){ openAccountModal(acc); }; }
+    var ac=p.avgCostNative!=null?moneyCur(p.avgCostNative,p.costCurrency):'—';
+    var pr=p.price!=null?moneyCur(p.price,p.priceCurrency):'—';
+    var gain=p.gainPhp==null?'—':signedMoney(p.gainPhp)+(p.gainPct==null?'':' · '+pct(Math.abs(p.gainPct)));
+    r.innerHTML='<span class="h-name">'+acctTile(esc(String(p.name).slice(0,4)),col[p.name])+
+      '<span class="h-n"><b>'+esc(p.name)+'</b><span>'+esc(p.subtype||'')+
+      '</span><span class="h-m">'+num(p.quantity)+' shares · avg '+ac+'</span></span></span>'+
+      '<span class="h-sh">'+num(p.quantity)+'</span><span class="h-ac">'+ac+'</span><span class="h-pr">'+pr+'</span>'+
+      '<span class="h-val">'+money(p.valuePhp,true)+'</span>'+
+      '<span class="h-gain '+(p.gainPhp==null?'':p.gainPhp>=0?'pos':'neg')+'">'+gain+'</span>';
+    t.appendChild(r);
+  });
+  return t;
 }
 
 /* Native amount is the headline (shares qty / USD), PHP equivalent underneath —
@@ -2457,37 +2448,6 @@ function acctMain(a){
   if(a.currency&&a.currency!=='PHP') return moneyCur(a.balanceNative,a.currency);
   return money(a.balancePhp);
 }
-function acctAmtHtml(a){
-  var foreign=a.isShares||(a.currency&&a.currency!=='PHP');
-  // Shares carry no currency of their own (the headline is a quantity), so the sub
-  // line carries both: what it is worth here, and what it is worth in USD.
-  var usd=a.isShares?usdOf(a.balancePhp):'';
-  return '<div class="amt '+(a.isLiability?'neg':'')+'">'+acctMain(a)+
-    (foreign?'<span class="amt-sub">'+money(a.balancePhp)+(usd?' · '+usd:'')+'</span>':'')+'</div>';
-}
-
-function accountRow(a){
-  var r=el('div','litem click');
-  var meta=esc(a.subtype||'');
-  var credit = a.creditLimit?(' · '+money(a.availableCredit)+' avail'):'';
-  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
-    '<div class="grow"><div class="t1">'+esc(a.name)+'</div><div class="t2">'+meta+credit+'</div></div>'+
-    acctAmtHtml(a);
-  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
-    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
-    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
-  }
-  // credit utilization at a glance for credit accounts
-  if(a.isLiability && a.creditLimit>0){
-    var u=Math.min(100,Math.round(100*(a.balancePhp||0)/a.creditLimit));
-    var b=el('div','bar thin');
-    b.innerHTML='<div class="bar-fill '+(u>=90?'over':(u>=60?'warn':''))+'" style="width:'+u+'%"></div>';
-    $('.grow',r).appendChild(b);
-  }
-  r.onclick=function(){ openAccountModal(a); };
-  return r;
-}
-
 /* ════════════════════════════════════════════════════════════════════════
  *  TAX / BIR (Ledger)
  * ════════════════════════════════════════════════════════════════════════ */

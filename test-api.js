@@ -1313,6 +1313,9 @@ function d1(db) {
       assert.strictEqual(p.costPhp, 6000);
       assert.strictEqual(p.valuePhp, 2 * 120 * 50);
       assert.strictEqual(p.gainPhp, 6000);
+      // The quote behind valuePhp, for the Investments table's Price column.
+      assert.deepStrictEqual([p.price, p.priceCurrency, p.pricedAt], [120, 'USD', '2026-08-22']);
+      assert.ok(!inv.pulse.excluded.includes('ACME'), 'a growth ticker is in the pulse');
       assert.strictEqual(p.gainPct, 100);
       assert.strictEqual(inv.totalGainPhp, dbm.q2(inv.totalValuePhp - inv.totalCostPhp));
 
@@ -1375,6 +1378,7 @@ function d1(db) {
       // Out of the pulse: no leg, and the quarter's dollars did not move.
       assert.ok(!inv.pulse.quarters.some((q) => q.buys.some((b) => b.symbol === 'TBILL')),
                 'an EF park landed in the quarterly pulse');
+      assert.deepStrictEqual(inv.pulse.excluded, ['TBILL'], 'the footnote names the EF park');
       const q2q = inv.pulse.quarters.find((x) => x.quarter === '2026-Q2');
       assert.strictEqual(q2q.totalUsd, 100 + 240 - 150, 'the EF park inflated the quarter');
 

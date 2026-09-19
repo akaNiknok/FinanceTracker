@@ -94,7 +94,7 @@ Done when: every old filter (search, date, month, type, category, account) can b
 - Tests: the local parser in `test.js`. `getParse` in `test-api.js` with the Gemini call stubbed. The route-naming guard treats `get*` as a read.
 Done when: "vitamins 620 gcash" + Return saves the right row online, offline it queues or opens the filled form, and a parse failure never loses the typed text.
 
-### Phase 5 — Accounts and Investments  ☐
+### Phase 5 — Accounts and Investments  ☑
 - Accounts:
   - totals row (assets, liabilities, net)
   - cash and banks (with the interest line from `interest_rate` / `interest_frequency`)
