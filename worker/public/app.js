@@ -965,9 +965,35 @@ function render(){
 // screen (cache paint, then the revalidated data a moment later) swaps in place —
 // replaying the fade there read as the page flashing twice on every launch.
 function paint(node){
-  var m=$('#main');
-  if(paint.on===S.screen) node.style.animation='none';
+  var m=$('#main'), same=paint.on===S.screen, old=same?figTexts(m):null;
+  if(same) node.style.animation='none';
   paint.on=S.screen; m.innerHTML=''; m.appendChild(node);
+  if(old) rollFigs(figEls(node), old);
+}
+/* DESIGN.md "Motion": a figure that changes on a repaint (after a save, or when the
+ * revalidated data lands) rolls to its new value over 400ms. Only when the text
+ * around the number is the same, so "₱1,200" → "₱1,350" rolls and "—" → "₱0" snaps. */
+var NUM_RE=/-?[\d,]*\d(\.\d+)?/;
+function figEls(r){ return r.querySelectorAll('.fig,.fig-hero'); }
+function figTexts(r){ return Array.prototype.map.call(figEls(r),function(e){ return e.textContent; }); }
+function rollPlan(a,b){
+  var ma=NUM_RE.exec(a), mb=NUM_RE.exec(b);
+  if(a===b||!ma||!mb||a.replace(NUM_RE,'#')!==b.replace(NUM_RE,'#')) return null;
+  var dec=(mb[1]||'').length?mb[1].length-1:0;
+  return {from:+ma[0].replace(/,/g,''), to:+mb[0].replace(/,/g,''), dec:dec, text:function(v){
+    return b.replace(NUM_RE,v.toLocaleString('en-PH',{minimumFractionDigits:dec,maximumFractionDigits:dec})); }};
+}
+function rollFigs(els, old){
+  if(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+  Array.prototype.forEach.call(els,function(e,i){
+    var p=old[i]!=null&&rollPlan(old[i],e.textContent); if(!p) return;
+    var t0=performance.now(), end=e.textContent;
+    (function step(now){
+      var k=Math.min(1,(now-t0)/400), ease=1-Math.pow(1-k,3);
+      e.textContent=k<1?p.text(p.from+(p.to-p.from)*ease):end;
+      if(k<1&&e.isConnected) requestAnimationFrame(step);
+    })(t0);
+  });
 }
 
 /* ── skeletons ───────────────────────────────────────────────────────────────
@@ -983,17 +1009,14 @@ function skRows(n){
     '<div class="grow">'+skBar(12,(50+(i%3)*14)+'%')+skBar(10,'30%')+'</div>'+skBar(14,'72px')+'</div>';
   return o;
 }
-function skCard(inner){ return '<div class="card">'+inner+'</div>'; }
-function skTiles(n){
-  var o=''; for(var i=0;i<n;i++) o+='<div class="stat">'+skBar(11,'46%')+skBar(24,'70%')+'</div>';
-  return '<div class="grid grid-'+n+'">'+o+'</div>';
-}
+function skTile(inner,cls){ return '<div class="tile'+(cls?' '+cls:'')+'">'+inner+'</div>'; }
+function skFig(){ return skTile(skBar(11,'40%')+skBar(26,'62%')); }
 var SKELS={
-  dashboard:function(){ return '<div class="stat hero">'+skBar(11,'30%')+skBar(34,'58%')+skBar(10,'100%')+'</div>'+
-    skTiles(3)+skCard(skBar(11,'34%')+skBar(150,'100%'))+skCard(skBar(11,'26%')+skRows(4)); },
-  accounts: function(){ return skTiles(2)+skCard(skBar(11,'26%')+skRows(4))+skCard(skBar(11,'26%')+skRows(3)); },
-  list:     function(){ return skBar(46,'100%')+'<div style="height:12px"></div>'+skCard(skRows(7)); },
-  table:    function(){ return skCard(skBar(11,'30%')+skRows(6)); }
+  dashboard:function(){ return '<div class="sum">'+skTile(skBar(11,'30%')+skBar(40,'58%')+skBar(10,'100%'),'t-nw')+
+    skFig()+skFig()+skTile(skBar(11,'34%')+skBar(150,'100%'),'t-hist')+'</div>'; },
+  accounts: function(){ return '<div class="sum">'+skFig()+skFig()+'</div><div style="height:12px"></div>'+skTile(skRows(4)); },
+  list:     function(){ return skBar(46,'100%')+'<div style="height:12px"></div>'+skTile(skRows(7)); },
+  table:    function(){ return skTile(skBar(11,'30%')+skRows(6)); }
 };
 function loading(kind){
   var f=SKELS[kind]||SKELS.table;
@@ -1412,10 +1435,6 @@ function renderDashboard(){
   }).catch(showErr);
 }
 
-function tile(label,val,sub){
-  return el('div','stat','<div class="stat-label">'+esc(label)+'</div><div class="stat-value">'+
-    (typeof val==='string'?val:esc(val))+'</div>'+(sub?'<div class="stat-sub">'+esc(sub)+'</div>':''));
-}
 
 /* ════════════════════════════════════════════════════════════════════════
  *  ACTIVITY (screen key `transactions`). One filter object, S.tx.filters, drawn as
@@ -1602,7 +1621,7 @@ function renderTransactions(){
     main.appendChild(chips);
   }
   var cnt=el('div','act-count'); cnt.id='txCount'; main.appendChild(cnt);
-  var list=el('div','act-list'); list.id='txListCard'; list.innerHTML=skCard(skRows(6)); main.appendChild(list);
+  var list=el('div','act-list'); list.id='txListCard'; list.innerHTML=skTile(skRows(6)); main.appendChild(list);
   var bb=el('div','bulk-bar'); bb.id='bulkBar'; bb.hidden=true; main.appendChild(bb);
   paint(w);
   loadTx(w);
@@ -1762,7 +1781,7 @@ function openFilterSheet(){
 function loadTx(w, silent){
   var st={filters:S.tx.filters, offset:S.tx.offset, limit:S.tx.limit};
   var key='tx|'+JSON.stringify(S.tx.filters||{})+'|'+S.tx.offset+'|'+S.tx.limit;
-  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skCard(skRows(6));
+  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skTile(skRows(6));
   return cachedCall(key, function(et){return fetchTxPage(st,et);}, function(res){
     S.tx.total=res.total; S.tx.net=res.net; S.tx.rows=res.transactions;
     renderTxList();
@@ -1861,7 +1880,7 @@ function renderTxList(){
     }
   }
   c.innerHTML='';
-  if(!allRows.length){ c.appendChild(el('div','card empty','<span class="empty-ico">⌕</span>No transactions match.')); }
+  if(!allRows.length){ c.appendChild(el('div','tile empty',icon('search')+'No transactions match.')); }
   else if(wide){
     var tb=el('div','card tx-table'+(sel?' sel-mode':''));
     tb.appendChild(el('div','tx-tr tx-th',(sel?'<span></span>':'')+'<span>Date</span><span>Description</span><span>Category</span><span>Account</span><span class="r">Amount</span>'));
@@ -1879,18 +1898,7 @@ function renderTxList(){
       day.appendChild(card); c.appendChild(day);
     });
   }
-  // pager (server rows only)
-  if(S.tx.total>S.tx.limit){
-    var pg=el('div','row-between pager');
-    var prev=el('button','btn sm','← Prev'); prev.disabled=S.tx.offset<=0;
-    prev.onclick=function(){S.tx.offset=Math.max(0,S.tx.offset-S.tx.limit);loadTx();};
-    var next=el('button','btn sm','Next →'); next.disabled=S.tx.offset+S.tx.limit>=S.tx.total;
-    next.onclick=function(){S.tx.offset+=S.tx.limit;loadTx();};
-    var info=el('div','dim','Showing '+(S.tx.offset+1)+'–'+Math.min(S.tx.offset+S.tx.limit,S.tx.total));
-    info.style.fontSize='12px';
-    pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
-    c.appendChild(pg);
-  }
+  if(S.tx.total>S.tx.limit) c.appendChild(pagerEl(S.tx.offset,S.tx.limit,S.tx.total,function(o){ S.tx.offset=o; loadTx(); }));
   updateBulkBar();
 }
 
@@ -2250,57 +2258,28 @@ function loadDebts(){
     var host=$('#debtsCard'); if(!host) return;
     host.innerHTML='';
     var people=(res.accounts||[]).filter(function(p){return (p.items||[]).length;});
-    if(!people.length) return;
 
-    var card=el('div','card');
-    var h=el('div','row-between'); h.style.marginBottom='12px';
-    var n=people.reduce(function(s,p){return s+p.items.length;},0);
-    var ttl=el('div','card-h','Debts &amp; IOUs <span style="opacity:.55">· '+n+'</span>'); ttl.style.margin='0';
-    h.appendChild(ttl);
-    card.appendChild(h);
-
-    people.forEach(function(p,i){
+    // One group per person, the same grouped rows as the rest of Accounts.
+    people.forEach(function(p){
       var owed=p.balance>=0;
-      var ph=el('div','row-between');
-      ph.style.cssText='margin:'+(i?'16px':'2px')+' 0 6px;font-size:12px';
-      ph.innerHTML='<span style="font-weight:650">'+esc(p.account)+'</span>'+
-        '<span class="dim">'+(owed?'owes you ':'you owe ')+
-        '<span class="mono '+(owed?'pos':'neg')+'" style="font-weight:650">'+money(Math.abs(p.balance))+'</span></span>';
-      card.appendChild(ph);
-
-      var l=el('div','list');
-      p.items.forEach(function(it){
-        // A part-paid debt is the one worth a bar: it is the only way to see a long
-        // instalment burning down. paid/amount, not open/amount — the bar fills up.
-        var paid=Math.abs(it.amount)-Math.abs(it.open);
-        var r=el('div','litem');
-        // Short date and a bare "of <original>": this line has to survive a 375px
-        // phone beside the amount, and the bar under it already says how far along
-        // the debt is — spelling out "paid" only pushed the total off the edge.
-        // The year only when it is not this one — the usual convention, and here it
-        // is also what keeps the line inside a 375px phone next to the amount.
-        var d=it.date&&parseDate(it.date);
-        var when=d?(MONTHS[d.getMonth()]+' '+d.getDate()+
-          (d.getFullYear()===new Date().getFullYear()?'':', '+d.getFullYear())):'opening balance';
-        // Direction per ITEM, not per account: a spend off the tab (they bought the
-        // owner something) is its own item running against the balance, and the
-        // account's sign drew it as one more thing they owe.
-        var theirs=it.amount>=0;
-        r.innerHTML='<div class="ic '+(theirs?'in':'out')+'">'+(theirs?'←':'→')+'</div>'+
-          '<div class="grow"><div class="t1">'+esc(it.description||'(no description)')+'</div>'+
-          '<div class="t2">'+(theirs===owed?'':(theirs?'owes you · ':'you owe · '))+esc(when)+
-            (paid>0?(' · '+Math.round(100*paid/Math.abs(it.amount))+'% of '+money(Math.abs(it.amount),true)):'')+'</div></div>'+
-          '<div class="amt mono '+(theirs?'pos':'neg')+'">'+money(Math.abs(it.open))+'</div>';
-        if(paid>0){
-          var b=el('div','bar thin');
-          b.innerHTML='<div class="bar-fill" style="width:'+Math.min(100,Math.round(100*paid/Math.abs(it.amount)))+'%"></div>';
-          $('.grow',r).appendChild(b);
-        }
-        l.appendChild(r);
-      });
-      card.appendChild(l);
+      host.appendChild(acctGroup('Open debts with '+p.account,(owed?'Owes you ':'You owe ')+'<span class="'+(owed?'pos':'neg')+'">'+money(Math.abs(p.balance))+'</span>',
+        p.items.map(function(it){
+          // A part-paid debt gets a meter: the only way to see an instalment burn down.
+          var paid=Math.abs(it.amount)-Math.abs(it.open), frac=paid>0?paid/Math.abs(it.amount):0;
+          // Short date, the year only when it is not this one: the line must fit a phone.
+          var d=it.date&&parseDate(it.date);
+          var when=d?(MONTHS[d.getMonth()]+' '+d.getDate()+(d.getFullYear()===new Date().getFullYear()?'':', '+d.getFullYear())):'Opening balance';
+          // Direction per ITEM, not per account: a spend off the tab runs against the balance.
+          var theirs=it.amount>=0;
+          var r=el('div','a-row');
+          r.innerHTML='<span class="a-mid"><span class="a-t">'+esc(it.description||'No description')+'</span>'+
+            (frac?bar6([[frac,'var(--accent)']]).outerHTML:'')+
+            '<span class="a-s">'+(theirs===owed?'':(theirs?'Owes you · ':'You owe · '))+esc(when)+
+            (frac?' · '+Math.round(100*frac)+'% paid of '+money(Math.abs(it.amount),true):'')+'</span></span>'+
+            '<span class="a-v"><span class="'+(theirs?'pos':'neg')+'">'+money(Math.abs(it.open))+'</span></span>';
+          return r;
+        })));
     });
-    host.appendChild(card);
   }).catch(showErr);
 }
 
@@ -2898,16 +2877,8 @@ function renderAdmin(){
     }
     var foot=el('div','adm-foot');
     foot.appendChild(el('span',null,ro?'This table is read-only.':'Click a cell to edit it. Locked columns are keys other tables point at, or derived.'));
-    var pg=el('span','adm-pg');
-    pg.appendChild(el('span',null,res.total?(off+1)+'–'+Math.min(off+ADMIN_PAGE,res.total)+' of '+res.total:'0 rows'));
-    if(res.total>ADMIN_PAGE){
-      var prev=el('button','link-btn','‹ Prev'); prev.type='button'; prev.disabled=off<=0;
-      prev.onclick=function(){ S.admin.offset=Math.max(0,off-ADMIN_PAGE); render(); };
-      var next=el('button','link-btn','Next ›'); next.type='button'; next.disabled=off+ADMIN_PAGE>=res.total;
-      next.onclick=function(){ S.admin.offset=off+ADMIN_PAGE; render(); };
-      pg.appendChild(prev); pg.appendChild(next);
-    }
-    foot.appendChild(pg); card.appendChild(foot);
+    foot.appendChild(pagerEl(off,ADMIN_PAGE,res.total,function(o){ S.admin.offset=o; render(); }));
+    card.appendChild(foot);
     w.appendChild(card);
     paint(w);
   }).catch(showErr);
@@ -3011,6 +2982,16 @@ function downloadCsv(name, cols, rows){
   var url=URL.createObjectURL(new Blob([out],{type:'text/csv'}));
   var a=el('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
   a.remove(); setTimeout(function(){ URL.revokeObjectURL(url); },1000);
+}
+
+/* One pager for Activity and Admin: "1–50 of 312", then Previous and Next. */
+function pagerEl(off,size,total,go){
+  var pg=el('div','pager');
+  pg.appendChild(el('span',null,total?(off+1)+'–'+Math.min(off+size,total)+' of '+total:'No rows'));
+  if(total>size) [['Previous',Math.max(0,off-size),off<=0],['Next',off+size,off+size>=total]].forEach(function(p){
+    var b=el('button','link-btn',p[0]); b.type='button'; b.disabled=p[2]; b.onclick=function(){ go(p[1]); }; pg.appendChild(b);
+  });
+  return pg;
 }
 
 /* —— inline single-field edit (Category / Account / Description / Amount) —— */
@@ -3675,7 +3656,7 @@ function openAccountModal(a){
     s.onclick=function(){ fColor.value=c; colorSet=true; paintSwatches(); };
     swatchRow.appendChild(s);
   });
-  var noneBtn=el('button','swatch none','✕'); noneBtn.type='button'; noneBtn.title='No color';
+  var noneBtn=el('button','swatch none',icon('close')); noneBtn.type='button'; noneBtn.title='No color';
   noneBtn.onclick=function(){ colorSet=false; paintSwatches(); };
   swatchRow.appendChild(noneBtn);
   function paintSwatches(){
