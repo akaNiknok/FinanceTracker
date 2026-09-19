@@ -705,6 +705,11 @@ describe('Gmail courier watermark (vm)', () => {
       assert.strictEqual(tq.map((q) => q.state).join(), 'filed,empty,due,future');
       assert.strictEqual(tq[2].php, 250); assert.strictEqual(tq[2].tax, 20); assert.ok(tq[2].current);
       assert.strictEqual(tq[2].due, '2026-11-15'); assert.strictEqual(tq[3].due, '2027-04-15');
+      // A changed figure rolls only when the text around the number is the same.
+      assert.strictEqual(app.rollPlan('₱1,200', '₱1,350').text(1275), '₱1,275');
+      assert.strictEqual(app.rollPlan('5.2 months', '5.4 months').text(5.3), '5.3 months');
+      assert.strictEqual(app.rollPlan('—', '₱0'), null);
+      assert.strictEqual(app.rollPlan('₱5', '₱5'), null);
       const tipH = app.tipHTML({ title: 'A<b>', rows: [['In', '1'], ['Out', '2', true]], note: 'n' });
       assert.ok(tipH.includes('A&lt;b&gt;') && !tipH.includes('A<b>'), 'tipHTML must escape');
       // Accounts rows: interest_rate is a fraction, and a 0% rate says nothing.

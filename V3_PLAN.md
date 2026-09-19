@@ -106,7 +106,7 @@ Done when: "vitamins 620 gcash" + Return saves the right row online, offline it 
 - iPhone: the More sheet holds Investments, Swap, Tax, Admin.
 Done when: nothing that Accounts shows today is lost, and the figures match the old screen.
 
-### Phase 6 — Tools, polish, release v3.0.0  ☐
+### Phase 6 — Tools, polish, release v3.0.0  ☐ (all but the release: PR #106)
 - Swap: an input list, the hero result, and the fair-rate range bar (the Wise floor → the fair rate → the ceiling, plus the mid-market mark). **Record this swap** opens `openTransferModal`, filled in: from a USD account, to a PHP account, Amount = USD, ToAmount = the ₱ result. The implied-rate rule then stamps the fair rate.
 - Tax: quarter tiles (filed status from `Filed?`), the "not in the ledger" banner, the table with the typed BSP-rate cell, and the BSP tooltip.
 - Admin: the table picker as a segmented control, locked columns marked (a natural key is in `add` but not in `edit`), paging and CSV unchanged.

@@ -984,10 +984,12 @@ function rollPlan(a,b){
     return b.replace(NUM_RE,v.toLocaleString('en-PH',{minimumFractionDigits:dec,maximumFractionDigits:dec})); }};
 }
 function rollFigs(els, old){
-  if(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+  if(document.hidden||(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)) return;
   Array.prototype.forEach.call(els,function(e,i){
     var p=old[i]!=null&&rollPlan(old[i],e.textContent); if(!p) return;
     var t0=performance.now(), end=e.textContent;
+    // rAF stops in a hidden tab: the timer makes sure the real value always lands.
+    setTimeout(function(){ e.textContent=end; },450);
     (function step(now){
       var k=Math.min(1,(now-t0)/400), ease=1-Math.pow(1-k,3);
       e.textContent=k<1?p.text(p.from+(p.to-p.from)*ease):end;
