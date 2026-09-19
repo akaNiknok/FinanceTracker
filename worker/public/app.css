@@ -261,10 +261,20 @@ button{font-family:inherit;cursor:pointer}
 .hist-x{position:relative;height:18px;font-size:12px;color:var(--dim);margin-top:4px;white-space:nowrap}
 .hist-x span{position:absolute;top:0}
 .hist-x .on{color:var(--text);font-weight:600}
-.cat-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) auto;gap:12px;align-items:center;min-height:32px;font-size:14px}
-.cat-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cat-row .bar6{height:8px;border-radius:4px;margin:0}
+.cat-bar{height:12px;border-radius:6px;margin:4px 0 8px;background:none}
+.cat-bar>i{border-radius:3px}
+.cat-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto auto;gap:10px;align-items:center;min-height:32px;font-size:14px;width:100%;
+  border:0;background:none;padding:0;color:inherit;font:inherit;text-align:left}
+button.cat-row{min-height:44px;cursor:pointer}
+.cat-name{display:flex;align-items:center;gap:4px;min-width:0;white-space:nowrap}
+.cat-name>span{overflow:hidden;text-overflow:ellipsis}
+.cat-name .ico{width:14px;height:14px;color:var(--dim);transition:transform .2s}
+.cat-row[aria-expanded=true] .ico{transform:rotate(180deg)}
+.cat-pct{color:var(--dim);font-size:13px;text-align:right;min-width:36px}
 .cat-val{font-weight:600;text-align:right;min-width:72px}
+.cat-sub{margin:0 0 4px 20px;padding-left:10px;border-left:1px solid var(--sep)}
+.cat-sub .cat-row{min-height:28px;font-size:13px}
+.cat-sub .cat-val{font-weight:400}
 .link-btn{border:0;background:none;color:var(--accent);font-size:13px;font-weight:600;min-height:32px;padding:0 4px}
 @media(max-width:767px){
   .hide-phone{display:none}
