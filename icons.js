@@ -12,9 +12,10 @@ const path = require('path');
 
 const OUT_DIR = path.join(__dirname, 'worker', 'public');
 const SIZES = [180, 512];
-// Accent-blue tile, white peso sign, in a 96-unit box. One shape, so it stays legible at
-// 16px favicon size and the glyph sits well inside Android's 80% maskable safe circle
-// (ink diagonal 53.9 vs the 76.8 safe diameter).
+// Accent-blue gradient tile (#4A86FF -> #1D4ED8 at CSS 160deg, DESIGN.md "App icon"),
+// a faint rising line behind a white peso sign, in a 96-unit box. The line is decoration
+// only, so the glyph still reads at 16px favicon size and sits well inside Android's 80%
+// maskable safe circle (ink diagonal 53.9 vs the 76.8 safe diameter).
 const GLYPH = 58;
 // text-anchor="middle" already centres the ink horizontally at x=48 — don't "correct" it.
 // Vertically it does NOT: dominant-baseline="central" is the midpoint of the font's
@@ -22,7 +23,12 @@ const GLYPH = 58;
 // the lift below, measured by pixel-scanning the rendered ink box and verified to hold at
 // font sizes 48/58/66/72 (residual <0.1 unit), so changing GLYPH alone stays centred.
 const ICON = `<svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-  <rect width="96" height="96" fill="#5b8cff"/>
+  <defs><linearGradient id="g" x1=".33" y1="0" x2=".67" y2="1">
+    <stop offset="0" stop-color="#4A86FF"/><stop offset="1" stop-color="#1D4ED8"/>
+  </linearGradient></defs>
+  <rect width="96" height="96" fill="url(#g)"/>
+  <path d="M10 74 L30 60 L44 66 L86 30" fill="none" stroke="#fff" stroke-opacity=".18"
+    stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
   <text x="48" y="${48 - 0.0655 * GLYPH}" font-size="${GLYPH}" font-weight="700" fill="#fff"
     text-anchor="middle" dominant-baseline="central"
     font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">&#8369;</text>

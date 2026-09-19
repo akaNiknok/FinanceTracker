@@ -3,8 +3,8 @@
  * Vanilla JS, served as a static asset by the Cloudflare Worker, which since
  * v2.0.0 IS the backend: /api runs against Cloudflare D1, not Apps Script. The
  * JSON contract did not change with that swap, so nothing in this file did
- * either, apart from the new Admin screen. Seven screens: Dashboard ·
- * Transactions · Accounts · Swap · Tax · Admin.
+ * either, apart from the new Admin screen. Six screens: Summary (key
+ * `dashboard`) · Activity (key `transactions`) · Accounts · Swap · Tax · Admin.
  * ========================================================================== */
 
 /* ── server bridge: /api → Promise ───────────────────────────────────────────
@@ -40,6 +40,7 @@ function gs(fn, arg, etag, _retried){
     init = { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) };
   }
   return fetch(url, init).then(function(res){
+    netSeen(true);
     // The passphrase cookie expired (or was never set). Ask once, then retry —
     // a clean 401 is why /api answers JSON instead of redirecting to a login page.
     if (res.status === 401 && !_retried) return unlock().then(function(){ return gs(fn, arg, etag, true); });
@@ -59,6 +60,7 @@ function gs(fn, arg, etag, _retried){
   }, function(){
     // fetch only rejects on a genuine network failure — a 4xx/5xx resolves — so this
     // branch IS "offline", without trusting navigator.onLine (true on a captive portal).
+    netSeen(false);
     if (body && QUEUEABLE[action] && !flushQueue._busy) return enqueue(fn, body);
     var err = new Error(read ? 'Offline — no cached copy of this yet'
                              : 'Offline — reconnect to save this');
@@ -85,6 +87,7 @@ function queueDrop(id){ queueSet(queue().filter(function(x){ return x.arg.ID !==
 function enqueue(fn, body){
   var q = queue(); q.push({ fn:fn, arg:body }); queueSet(q);
   toast('Saved offline — '+q.length+' waiting to sync','ok');
+  syncUI();
   return { status:'queued' };
 }
 /* Pending rows are derived from the queue, so an offline entry is still on screen
@@ -118,6 +121,7 @@ function flushQueue(){
   }, Promise.resolve()).catch(function(){}).then(function(){
     flushQueue._busy = false;
     rebuildPending();
+    syncUI();
     if(sent){ toast('Synced '+sent+(sent>1?' entries':' entry'),'ok'); afterMutation(); }
   });
 }
@@ -478,8 +482,7 @@ function boot(){
   document.querySelectorAll('.sheet-item').forEach(function(b){
     b.addEventListener('click', function(){ go(b.dataset.screen); });
   });
-  $('#refreshBtn').addEventListener('click', refresh);
-  $('#fab').addEventListener('click', function(){ withBoot(function(){ openTxModal(null); }); });
+  wireShell();
 
   // Browser back/forward moves between screens. Plain History API now that the app
   // is served from its own origin instead of the GAS sandbox iframe (which blocked
@@ -515,15 +518,179 @@ function boot(){
 }
 
 function refresh(){
-  var btn=$('#refreshBtn'); btn.classList.add('spin');
+  var btns=document.querySelectorAll('.sync'); btns.forEach(function(b){ b.classList.add('busy'); });
   S.cache={}; S.boot=null; S.bootEtag=null; _bootPromise=null; saveCache();
   // Also drop the cached shell and retry the queue, which makes Refresh the single
   // answer to both "I deployed and still see the old UI" (new files land next launch,
   // see sw.js) and "this is still waiting to sync".
   if(window.caches) caches.keys().then(function(ks){ ks.forEach(function(n){ caches.delete(n); }); });
   flushQueue();
-  ensureBoot().then(function(){ return render(); }).finally(function(){ btn.classList.remove('spin'); });
+  ensureBoot().then(function(){ return render(); }).finally(function(){ btns.forEach(function(b){ b.classList.remove('busy'); }); });
 }
+
+/* ── shell: theme, sync state, the add field ─────────────────────────────────
+ * The nav, the add bar and the More sheet are static markup in index.html; this
+ * wires them. One nav element is the tab bar, the rail or the sidebar by width
+ * (app.css), so nothing here branches on the layout. */
+
+/* Theme: Auto / Light / Dark per device (DESIGN.md "Input parity and keys").
+ * 'ft.theme' absent = Auto. index.html's head script applies it before first
+ * paint; this is the same rule for a switch at run time. */
+var THEME_BG={light:'#F2F2F7',dark:'#000000'};   // = --bg; the theme-color meta cannot read a var()
+var darkMQ=window.matchMedia?matchMedia('(prefers-color-scheme: dark)'):null;
+function themePref(){ try{ var t=localStorage.getItem('ft.theme'); return t==='light'||t==='dark'?t:'auto'; }catch(e){ return 'auto'; } }
+function themeNow(){ var p=themePref(); return p!=='auto'?p:(darkMQ&&darkMQ.matches?'dark':'light'); }
+function applyTheme(pref, fade){
+  try{ if(pref==='auto') localStorage.removeItem('ft.theme'); else localStorage.setItem('ft.theme',pref); }catch(e){}
+  var root=document.documentElement;
+  if(fade){ root.classList.add('theme-fade'); setTimeout(function(){ root.classList.remove('theme-fade'); },220); }
+  if(pref==='auto') delete root.dataset.theme; else root.dataset.theme=pref;
+  var m=$('meta[name=theme-color]'); if(m) m.content=THEME_BG[themeNow()];
+  var now=themeNow();
+  document.querySelectorAll('.theme-btn').forEach(function(b){
+    // The icon shows where a tap goes: a sun in dark, a moon in light.
+    b.innerHTML=icon(now==='dark'?'sun':'moon');
+    var label='Switch to '+(now==='dark'?'light':'dark')+(pref==='auto'?' (now following the system)':'');
+    b.setAttribute('aria-label',label); b.title=label+' · '+MOD+' Shift L · right-click or hold for Auto';
+  });
+}
+function toggleTheme(){ applyTheme(themeNow()==='dark'?'light':'dark', true); }
+function themeAuto(){ applyTheme('auto', true); toast('Theme follows the system','ok'); }
+function wireThemeBtn(b){
+  var held=null, skip=false;
+  b.addEventListener('click',function(){ if(skip){ skip=false; return; } toggleTheme(); });
+  b.addEventListener('contextmenu',function(e){ e.preventDefault(); themeAuto(); });
+  // Long press on touch = Auto. iOS sends no contextmenu for a button, so time it.
+  b.addEventListener('pointerdown',function(e){
+    if(e.pointerType!=='touch') return;
+    held=setTimeout(function(){ held=null; skip=true; themeAuto(); },550);
+  });
+  ['pointerup','pointerleave','pointercancel'].forEach(function(ev){
+    b.addEventListener(ev,function(){ if(held){ clearTimeout(held); held=null; } });
+  });
+}
+// Auto follows a system switch live, not only at the next launch.
+if(darkMQ&&darkMQ.addEventListener) darkMQ.addEventListener('change',function(){ if(themePref()==='auto') applyTheme('auto'); });
+
+var IS_APPLE=/Mac|iPhone|iPad/.test((typeof navigator!=='undefined'&&(navigator.platform||navigator.userAgent))||'');
+var MOD=IS_APPLE?'⌘':'Ctrl';
+
+/** One icon from the sprite in index.html, as markup. */
+function icon(name){ return '<svg class="ico" aria-hidden="true"><use href="#i-'+name+'"/></svg>'; }
+
+/* Sync state: online / offline / N queued. "Offline" is what gs() last saw (a
+ * fetch that rejected), not navigator.onLine, which reads true on a captive portal. */
+var net={offline:false, at:0};
+function netSeen(ok){
+  net.offline=!ok; if(ok) net.at=Date.now();
+  syncUI();
+}
+/** The words for the sync state. Pure, so test.js can pin them. */
+function syncText(offline, queued, at, now){
+  if(queued) return (offline?'Offline · ':'')+queued+' waiting to sync';
+  if(offline) return 'Offline';
+  if(!at) return 'Synced';
+  var min=Math.floor((now-at)/60000);
+  return min<1?'Synced just now':min<60?'Synced '+min+' min ago':'Synced '+Math.floor(min/60)+' h ago';
+}
+function syncUI(){
+  var q=queue().length, txt=syncText(net.offline,q,net.at,Date.now());
+  document.querySelectorAll('.sync').forEach(function(b){
+    b.classList.toggle('offline',net.offline); b.classList.toggle('queued',!!q);
+    $('.sync-label',b).textContent=txt;
+    b.title=txt+' · tap to refresh'; b.setAttribute('aria-label',b.title);
+  });
+  var more=$('#navMore'); if(more) more.classList.toggle('alert', net.offline||!!q);
+}
+window.addEventListener('offline',function(){ netSeen(false); });
+// Back online is not "synced": clear the flag, and let the next answer stamp the time.
+window.addEventListener('online',function(){ net.offline=false; syncUI(); });
+
+/* The add field. Phase 1: the text becomes the description of the full form.
+ * V3_PLAN Phase 4 makes it parse. */
+function addSubmit(){
+  var inp=$('#addInput'), text=inp.value.trim();
+  inp.value=''; inp.blur();
+  withBoot(function(){ openTxModal(text?{Date:newTxDate(),Description:text,Category:''}:null); });
+}
+function wireShell(){
+  document.querySelectorAll('.theme-btn').forEach(wireThemeBtn);
+  applyTheme(themePref());
+  document.querySelectorAll('.sync').forEach(function(b){ b.addEventListener('click',function(){ closeSheet(); refresh(); }); });
+  $('.add-kbd').textContent=MOD+' K';
+  $('#addInput').placeholder=matchMedia('(min-width:768px)').matches
+    ? 'Add “grab 312 gcash”, search, or jump to a screen' : 'coffee 180 gcash';
+  $('#addInput').addEventListener('keydown',function(e){
+    if(e.key==='Enter'){ e.preventDefault(); addSubmit(); }
+    else if(e.key==='Escape'){ this.value=''; this.blur(); }
+  });
+  // The + opens the form; a plain click on the field focuses it (the <label> does that).
+  $('.add-plus').addEventListener('click',function(e){ e.preventDefault(); addSubmit(); });
+  document.addEventListener('keydown',function(e){
+    var mod=e.metaKey||e.ctrlKey;
+    if(!$('#modalRoot').hidden) return;   // a modal owns the keys while it is up
+    if(mod && !e.shiftKey && (e.key==='k'||e.key==='K')){ e.preventDefault(); $('#addInput').focus(); }
+    else if(mod && e.shiftKey && (e.key==='l'||e.key==='L')){ e.preventDefault(); toggleTheme(); }
+  });
+  syncUI();
+  setInterval(syncUI, 30000);   // "Synced N min ago" ages on its own
+}
+
+/* ── tooltip (ⓘ) ─────────────────────────────────────────────────────────────
+ * DESIGN.md "Tooltip". tip(spec) returns the ⓘ button; the popover is built on
+ * open. spec = {title, text, rows:[[label, value, bold?]], note}. Mouse: hover or
+ * focus opens it. Touch: a tap on the ⓘ. Esc or a tap outside closes it, and
+ * only one is open at a time. */
+function tipHTML(spec){
+  var h='';
+  if(spec.title) h+='<div class="tip-t">'+esc(spec.title)+'</div>';
+  if(spec.text) h+='<div class="tip-p">'+esc(spec.text)+'</div>';
+  if(spec.rows&&spec.rows.length) h+='<div class="tip-rows">'+spec.rows.map(function(r){
+    var c=r[2]?' class="b"':''; return '<span'+c+'>'+esc(r[0])+'</span><span'+c+'>'+esc(r[1])+'</span>';
+  }).join('')+'</div>';
+  if(spec.note) h+='<div class="tip-note">'+esc(spec.note)+'</div>';
+  return h;
+}
+var tipOpen=null;   // {btn, pop}
+function tipClose(){
+  if(!tipOpen) return;
+  tipOpen.btn.setAttribute('aria-expanded','false'); tipOpen.pop.remove(); tipOpen=null;
+}
+function tipShow(btn, spec){
+  if(tipOpen&&tipOpen.btn===btn) return;
+  tipClose();
+  var pop=el('div','tip',tipHTML(typeof spec==='function'?spec():spec));
+  pop.setAttribute('role','tooltip'); pop.id='tip-live';
+  $('#app').appendChild(pop);
+  btn.setAttribute('aria-expanded','true'); btn.setAttribute('aria-describedby','tip-live');
+  tipOpen={btn:btn,pop:pop};
+  // Above the ⓘ when it fits, else below; clamped to the viewport with a 12px margin.
+  var r=btn.getBoundingClientRect(), w=pop.offsetWidth, h=pop.offsetHeight;
+  var x=Math.min(Math.max(12, r.left+r.width/2-w/2), innerWidth-w-12);
+  var y=r.top-h-8>=12 ? r.top-h-8 : Math.min(r.bottom+8, innerHeight-h-12);
+  pop.style.left=x+'px'; pop.style.top=y+'px';
+}
+function tip(spec){
+  var b=el('button','tip-btn',icon('info'));
+  b.type='button'; b.setAttribute('aria-label',(spec.title||'What is this?')); b.setAttribute('aria-expanded','false');
+  var hover=false;
+  if(window.matchMedia&&matchMedia('(hover:hover) and (pointer:fine)').matches){
+    b.addEventListener('mouseenter',function(){ hover=true; tipShow(b,spec); });
+    b.addEventListener('mouseleave',function(){ hover=false; if(document.activeElement!==b) tipClose(); });
+  }
+  b.addEventListener('focus',function(){ if(b.matches(':focus-visible')) tipShow(b,spec); });
+  b.addEventListener('blur',function(){ if(!hover&&tipOpen&&tipOpen.btn===b) tipClose(); });
+  // A click while hovering keeps it open; on touch it toggles.
+  b.addEventListener('click',function(e){
+    e.stopPropagation();
+    if(tipOpen&&tipOpen.btn===b&&!hover) tipClose(); else tipShow(b,spec);
+  });
+  return b;
+}
+document.addEventListener('click',function(e){ if(tipOpen&&!tipOpen.pop.contains(e.target)) tipClose(); });
+document.addEventListener('keydown',function(e){ if(e.key==='Escape') tipClose(); });
+// A fixed popover would float away from its ⓘ on scroll; close it instead.
+document.addEventListener('scroll',tipClose,true);
 
 /* The screen table — the single list of what a screen name may be. Also what `go()`
  * validates against, so a retired name can't stick in the URL or in localStorage.
@@ -642,9 +809,9 @@ function sparklineSVG(values,h){
   });
   var svg=svgEl('svg',{class:'chart-svg stat-spark',viewBox:'0 0 '+w+' '+h,'aria-hidden':'true'});
   svg.appendChild(svgEl('polyline',{points:pts.map(function(p){return p.join(',');}).join(' '),
-    fill:'none',stroke:'var(--text-faint)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
+    fill:'none',stroke:'var(--dim)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
   var lp=pts[pts.length-1];
-  svg.appendChild(svgEl('circle',{cx:lp[0],cy:lp[1],r:3.5,fill:'var(--accent)',stroke:'var(--surface)','stroke-width':2}));
+  svg.appendChild(svgEl('circle',{cx:lp[0],cy:lp[1],r:3.5,fill:'var(--accent)',stroke:'var(--card)','stroke-width':2}));
   return svg;
 }
 // Delta pill: arrow follows direction, color follows whether the move is GOOD
@@ -690,8 +857,8 @@ function labelStep(n,pw){ return Math.ceil(n/Math.max(1,Math.floor(pw/34))); }
 function cashflowChart(cf,width,ns){
   var wrap=el('div','chart-wrap');
   var legend=el('div','chart-legend');
-  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-income)"></span>Income</span>'+
-    '<span class="lg"><span class="lg-key" style="background:var(--chart-spend)"></span>Spending</span>'+
+  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-in)"></span>Income</span>'+
+    '<span class="lg"><span class="lg-key" style="background:var(--chart-out)"></span>Spending</span>'+
     (ns?'<span class="lg"><span class="lg-key" style="background:var(--accent);border-radius:1px;height:3px"></span>Liquid net worth</span>':'');
   wrap.appendChild(legend);
   var W=Math.max(300,width||640),H=200,L=48,R=ns?52:6,T=10,B=26,pw=W-L-R,ph=H-T-B;
@@ -708,9 +875,9 @@ function cashflowChart(cf,width,ns){
   var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':(ns?'Cash flow and liquid net worth':'Cash flow — income vs spending')+', last '+cf.length+' months'});
   [0,.5,1].forEach(function(f){
     var y=T+ph-f*ph;
-    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
+    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--sep)','stroke-width':1}));
     var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
-    if(ns){ var rt=svgEl('text',{x:W-R+8,y:y+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
+    if(ns){ var rt=svgEl('text',{x:W-R+8,y:y+3.5,'text-anchor':'start',fill:'var(--dim)'});
       rt.textContent=compactPhp(lo+(hi-lo)*f); svg.appendChild(rt); }
   });
   // The right axis's own zero: dashed, so a net-worth line below it reads as negative.
@@ -720,7 +887,7 @@ function cashflowChart(cf,width,ns){
       'stroke-dasharray':'3 3','stroke-opacity':0.45}));
     // Label only when it will not sit on top of a tick label.
     if([0,.5,1].every(function(f){ return Math.abs(zy-(T+ph-f*ph))>10; })){
-      var zt=svgEl('text',{x:W-R+8,y:zy+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
+      var zt=svgEl('text',{x:W-R+8,y:zy+3.5,'text-anchor':'start',fill:'var(--dim)'});
       zt.textContent=compactPhp(0); svg.appendChild(zt);
     }
   }
@@ -729,13 +896,13 @@ function cashflowChart(cf,width,ns){
   var tip=el('div','chart-tip'); tip.hidden=true;
   cf.forEach(function(m,i){
     var hI=m.income/max*ph, hS=m.expense/max*ph;
-    if(hI>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]-bw-1,T+ph-hI,bw,hI),fill:'var(--chart-income)'}));
-    if(hS>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]+1,T+ph-hS,bw,hS),fill:'var(--chart-spend)'}));
+    if(hI>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]-bw-1,T+ph-hI,bw,hI),fill:'var(--chart-in)'}));
+    if(hS>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]+1,T+ph-hS,bw,hS),fill:'var(--chart-out)'}));
     // Long windows: label every Nth month, counting back from the newest, so the
     // current month always keeps its (bold) label.
     if((cf.length-1-i)%lblStep===0){
       var lbl=svgEl('text',{x:cx[i],y:H-8,'text-anchor':'middle'});
-      if(i===cf.length-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
+      if(i===cf.length-1){ lbl.setAttribute('fill','var(--dim)'); lbl.setAttribute('font-weight','700'); }
       lbl.textContent=String(m.month).split('-')[1]||m.month;
       svg.appendChild(lbl);
     }
@@ -748,7 +915,7 @@ function cashflowChart(cf,width,ns){
     ns.forEach(function(p,i){
       // Real snapshot / live point → filled dot; estimated (rolled-back) → hollow ring.
       svg.appendChild(svgEl('circle',{cx:cx[i],cy:ly[i],r:i===ns.length-1?4:2.5,
-        fill:p.real?'var(--accent)':'var(--surface)',stroke:p.real?'var(--surface)':'var(--accent)','stroke-width':2}));
+        fill:p.real?'var(--accent)':'var(--card)',stroke:p.real?'var(--card)':'var(--accent)','stroke-width':2}));
     });
   }
   cf.forEach(function(m,i){
@@ -757,8 +924,8 @@ function cashflowChart(cf,width,ns){
     var hit=svgEl('rect',{x:L+band*i,y:T,width:band,height:ph,fill:'transparent'});
     function show(){
       tip.innerHTML='<b>'+esc(monthLabel(m.month))+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-income)"></span>Income <b>'+money(m.income,true)+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-spend)"></span>Spending <b>'+money(m.expense,true)+'</b>'+
+        '<span class="lg-key" style="background:var(--chart-in)"></span>Income <b>'+money(m.income,true)+'</b><br>'+
+        '<span class="lg-key" style="background:var(--chart-out)"></span>Spending <b>'+money(m.expense,true)+'</b>'+
         (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Liquid net worth <b>'+money(ns[i].nw,true)+'</b>'+(ns[i].real?'':' <span style="opacity:.6">est.</span>'):'');
       var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
       var x=sr.left-wr.left+cx[i]/W*sr.width;
@@ -772,7 +939,7 @@ function cashflowChart(cf,width,ns){
     hit.addEventListener('mouseleave',function(){ tip.hidden=true; });
     svg.appendChild(hit);
   });
-  svg.appendChild(svgEl('line',{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:'var(--border-2)','stroke-width':1}));
+  svg.appendChild(svgEl('line',{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:'var(--sep)','stroke-width':1}));
   wrap.appendChild(svg); wrap.appendChild(tip);
   return wrap;
 }
@@ -789,7 +956,7 @@ function cashflowChart(cf,width,ns){
 function netWorthAreaChart(liq,stk,width){
   var wrap=el('div','chart-wrap');
   var legend=el('div','chart-legend');
-  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-invested)"></span>Invested</span>'+
+  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--gro)"></span>Invested</span>'+
     '<span class="lg"><span class="lg-key" style="background:var(--accent)"></span>Liquid</span>';
   wrap.appendChild(legend);
   var W=Math.max(300,width||640),H=200,L=48,R=14,T=10,B=26,pw=W-L-R,ph=H-T-B,n=liq.length;
@@ -808,7 +975,7 @@ function netWorthAreaChart(liq,stk,width){
   // two flat slabs read as one. ponytail: fixed gradient ids — one instance of
   // this chart exists per page, and a duplicate would resolve to an identical def.
   var defs=svgEl('defs',{});
-  [['nwInvGrad','var(--chart-invested)',0.55,0.14],['nwLiqGrad','var(--accent)',0.45,0.10]].forEach(function(g){
+  [['nwInvGrad','var(--gro)',0.55,0.14],['nwLiqGrad','var(--accent)',0.45,0.10]].forEach(function(g){
     var lg=svgEl('linearGradient',{id:g[0],x1:0,y1:0,x2:0,y2:1});
     lg.appendChild(svgEl('stop',{offset:'0%','stop-color':g[1],'stop-opacity':g[2]}));
     lg.appendChild(svgEl('stop',{offset:'100%','stop-color':g[1],'stop-opacity':g[3]}));
@@ -817,7 +984,7 @@ function netWorthAreaChart(liq,stk,width){
   svg.appendChild(defs);
   [0,.5,1].forEach(function(f){
     var y=T+ph-f*ph;
-    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
+    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--sep)','stroke-width':1}));
     var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
   });
   var base=T+ph;
@@ -830,13 +997,13 @@ function netWorthAreaChart(liq,stk,width){
   // Invested top edge: without a line of its own the two bands share a soft
   // colour change and read as one smear.
   svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' '),
-    fill:'none',stroke:'var(--chart-invested)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
+    fill:'none',stroke:'var(--gro)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
   // Total (top-edge) line + real/estimate dots.
   svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yTot[i];}).join(' '),
     fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
   liq.forEach(function(p,i){
     svg.appendChild(svgEl('circle',{cx:x[i],cy:yTot[i],r:i===n-1?4:2.5,
-      fill:p.real?'var(--accent)':'var(--surface)',stroke:p.real?'var(--surface)':'var(--accent)','stroke-width':2}));
+      fill:p.real?'var(--accent)':'var(--card)',stroke:p.real?'var(--card)':'var(--accent)','stroke-width':2}));
   });
   var tip=el('div','chart-tip'); tip.hidden=true;
   var band=pw/Math.max(1,n-1), lblStep=labelStep(n,pw);
@@ -845,14 +1012,14 @@ function netWorthAreaChart(liq,stk,width){
     // y-axis labels and overflow the right edge.
     if((n-1-i)%lblStep===0){
       var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':i===0?'start':(i===n-1?'end':'middle')});
-      if(i===n-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
+      if(i===n-1){ lbl.setAttribute('fill','var(--dim)'); lbl.setAttribute('font-weight','700'); }
       lbl.textContent=String(p.month).split('-')[1]||p.month;
       svg.appendChild(lbl);
     }
     var hit=svgEl('rect',{x:i===0?L:x[i]-band/2,y:T,width:i===0||i===n-1?band/2:band,height:ph,fill:'transparent'});
     function show(){
       tip.innerHTML='<b>'+esc(monthLabel(p.month))+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-invested)"></span>Invested <b>'+money(shr[i],true)+'</b><br>'+
+        '<span class="lg-key" style="background:var(--gro)"></span>Invested <b>'+money(shr[i],true)+'</b><br>'+
         '<span class="lg-key" style="background:var(--accent)"></span>Liquid <b>'+money(p.nw,true)+'</b><br>'+
         'Net worth <b>'+money(tot[i],true)+'</b>'+(p.real?'':' <span style="opacity:.6">est.</span>');
       var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
@@ -865,15 +1032,15 @@ function netWorthAreaChart(liq,stk,width){
     hit.addEventListener('mouseleave',function(){ tip.hidden=true; });
     svg.appendChild(hit);
   });
-  svg.appendChild(svgEl('line',{x1:L,y1:base,x2:W-R,y2:base,stroke:'var(--border-2)','stroke-width':1}));
+  svg.appendChild(svgEl('line',{x1:L,y1:base,x2:W-R,y2:base,stroke:'var(--sep)','stroke-width':1}));
   wrap.appendChild(svg); wrap.appendChild(tip);
   return wrap;
 }
-// Categorical hues in FIXED slot order (validated on --surface: adjacent CVD
+// Categorical hues in FIXED slot order (validated on --card: adjacent CVD
 // ΔE 8.4, normal-vision 19.3, all ≥3:1). Slot 7 is the "Other" bucket — the
 // palette is never cycled, so the slice count is capped instead.
 var PIE_HUES=['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300'];
-var PIE_OTHER='var(--text-faint)';
+var PIE_OTHER='var(--dim)';
 function pieHue(i){ return i<PIE_HUES.length?PIE_HUES[i]:PIE_OTHER; }
 // Donut of expenses by category: slices ordered biggest-first (so adjacent
 // slices are adjacent palette slots), tail folded into "Other". The legend
@@ -1045,8 +1212,8 @@ function renderDashboard(){
         (liabAbs>0?'<div class="split-l" style="flex:'+liabAbs+'"></div>':'');
       hero.appendChild(sb);
       var lg=el('div','split-legend');
-      lg.innerHTML='<span><span class="lg-key" style="background:var(--chart-income)"></span>Assets <b>'+money(assets,true)+'</b></span>'+
-        '<span><span class="lg-key" style="background:var(--chart-neg)"></span>Liabilities <b>'+money(liabAbs,true)+'</b></span>';
+      lg.innerHTML='<span><span class="lg-key" style="background:var(--chart-in)"></span>Assets <b>'+money(assets,true)+'</b></span>'+
+        '<span><span class="lg-key" style="background:var(--chart-out)"></span>Liabilities <b>'+money(liabAbs,true)+'</b></span>';
       hero.appendChild(lg);
     }
     heroes.appendChild(hero);
@@ -1380,7 +1547,7 @@ function pickTxDate(iso){
   renderTransactions();
 }
 
-/* The FAB, the row modal and the Telegram deep link can all write from any screen,
+/* The add field, the row modal and the Telegram deep link can all write from any screen,
  * so repaint the list only when it's actually on screen. */
 function repaintTxList(){
   if(S.screen==='transactions') renderTxList();
@@ -1876,7 +2043,7 @@ function loadInvestments(){
         w.appendChild(bar);
         var det=order.map(function(sym){return esc(sym)+' '+moneyCur(agg[sym].amount,agg[sym].currency);}).join(' · ');
         var dl=el('div','',det);
-        dl.style.cssText='font-size:12px;color:var(--text-faint);margin-top:4px';
+        dl.style.cssText='font-size:12px;color:var(--dim);margin-top:4px';
         w.appendChild(dl);
         if(sells.length){
           var sl=el('div','neg','sold · '+sells.map(function(b){
@@ -2266,7 +2433,7 @@ function exCalc(){
 
   out.innerHTML=
     '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">They send you</div>'+
-      '<div class="stat-value">'+money(dealPhp)+' <span style="font-size:14px;color:var(--text-dim)">for '+moneyCur(usd,'USD')+'</span></div>'+
+      '<div class="stat-value">'+money(dealPhp)+' <span style="font-size:14px;color:var(--dim)">for '+moneyCur(usd,'USD')+'</span></div>'+
       '<div class="stat-sub" style="font-size:15px;font-weight:650;color:var(--text);margin-top:8px">Fair rate ₱'+num(dealPhp/usd)+' per $1</div></div>'+
     '<div class="grid grid-2">'+
       stat('You save vs Wise', '<span class="pos">'+money(dealPhp-wiseNetPhp)+'</span>', 'your '+split+'% of '+money(potPhp)) +
@@ -2644,7 +2811,7 @@ function closeModal(){
 function modalShell(title,bodyNode,footerNodes){
   var c=el('div');
   var h=el('div','modal-h'); h.innerHTML='<h3>'+esc(title)+'</h3>';
-  var x=el('button','icon-btn','✕'); x.onclick=closeModal; h.appendChild(x);
+  var x=el('button','icon-btn',icon('close')); x.setAttribute('aria-label','Close'); x.onclick=closeModal; h.appendChild(x);
   var b=el('div','modal-b'); b.appendChild(bodyNode);
   var f=el('div','modal-f'); (footerNodes||[]).forEach(function(n){f.appendChild(n);});
   c.appendChild(h); c.appendChild(b); c.appendChild(f);
@@ -2771,7 +2938,7 @@ function focusCombo(c){ var i=c&&c.querySelector('.combo-input'); if(i){ i.focus
 function amtField(v){ return (v===''||v==null||isNaN(v))?'':v; }
 
 /* —— transaction ⇄ transfer switcher (new rows only) ——————————————————————
- * The FAB is the only add path on most screens, so a transfer shouldn't mean a detour
+ * The add field is the only add path on most screens, so a transfer shouldn't mean a detour
  * to the Transactions screen: this swaps the modal in place, carrying the shared fields.
  * Edits are excluded — an existing row's shape is fixed. */
 function typeToggleEl(mode,onSwitch){
