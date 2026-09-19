@@ -740,7 +740,14 @@ function render(){
   screenGen++;
   return (SCREEN_FNS[S.screen]||renderDashboard)();
 }
-function paint(node){ var m=$('#main'); m.innerHTML=''; m.appendChild(node); }
+// The .screen fade plays only when a DIFFERENT screen arrives. A repaint of the same
+// screen (cache paint, then the revalidated data a moment later) swaps in place —
+// replaying the fade there read as the page flashing twice on every launch.
+function paint(node){
+  var m=$('#main');
+  if(paint.on===S.screen) node.style.animation='none';
+  paint.on=S.screen; m.innerHTML=''; m.appendChild(node);
+}
 
 /* ── skeletons ───────────────────────────────────────────────────────────────
  * A placeholder shaped like the screen that's coming, instead of a spinner: the
@@ -769,6 +776,7 @@ var SKELS={
 };
 function loading(kind){
   var f=SKELS[kind]||SKELS.table;
+  paint.on=null;   // the real screen after a skeleton still fades in
   $('#main').innerHTML='<div class="screen">'+skBar(21,'34%')+'<div style="height:16px"></div>'+f()+'</div>';
 }
 
