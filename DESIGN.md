@@ -85,7 +85,7 @@ Radius: tile 20, list group 16, field and button 12, chip 999 (pill), icon tile 
 - **Range bar** (Swap): a 12px bar from `--pos` to `--accent` between two labelled ends, a 3px `--text` mark for the result with its label under it, and a thin white mark for the reference value.
 - **Pager**: "1–50 of 312", then Previous and Next as link buttons, at the end of the list. Activity and Admin share it.
 - **Icons**: one inline SVG set (`<symbol>` sprite in `index.html`, used with `<use href="#i-name">`). Specs: 24px grid, 1.9 stroke, round caps and joins, `currentColor`, no fills except the dots of "more". Names: summary, activity, accounts, investments, swap, tax, admin, plus, search, filter, chevron, close, info, mic, sun, moon, check, telegram, mail, lock. No emoji, and no text glyphs as icons.
-- **App icon**: an accent-blue gradient tile (`#4A86FF` → `#1D4ED8`, 160°) with a white ₱ and a faint rising line. The `ICON` SVG in `icons.js` is the only source. It stays square (the platform rounds it).
+- **App icon**: an accent-blue gradient tile (`#4A86FF` → `#1D4ED8`, 160°) with a white ₱ and a faint rising line. A dark twin inverts it: a near-black tile (`#1C1C1E` → `#000`) with the ₱ and the line in the accent gradient; the favicon and apple-touch-icon follow the theme (`-dark` files), the manifest icons stay light (no browser reads a dark manifest icon). The `icon()` SVG in `icons.js` is the only source. It stays square (the platform rounds it).
 
 ## Charts
 - A few charts, and each one answers one question. Draw them in SVG with the tokens above.
