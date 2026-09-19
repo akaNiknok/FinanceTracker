@@ -521,7 +521,7 @@ function refresh(){
   var btns=document.querySelectorAll('.sync'); btns.forEach(function(b){ b.classList.add('busy'); });
   S.cache={}; S.boot=null; S.bootEtag=null; _bootPromise=null; saveCache();
   // Also drop the cached shell and retry the queue, which makes Refresh the single
-  // answer to both "I deployed and still see the old UI" (new files land next launch,
+  // answer to both "I deployed and still see the old UI" (a cached shell on a slow network,
   // see sw.js) and "this is still waiting to sync".
   if(window.caches) caches.keys().then(function(ks){ ks.forEach(function(n){ caches.delete(n); }); });
   flushQueue();
