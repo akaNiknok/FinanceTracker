@@ -171,7 +171,7 @@ The `meta` table holds the settings that were script properties before. Change t
 | `usd_php_fallback` | The exchange rate to use if the live rate is not available. |
 | `fire_real_return` | The return each year, as a percent, after inflation. The Summary countdown uses it. |
 | `owner_email` | It identifies the owner. |
-| `widget_accounts` | The 3 accounts that the balance widget shows, as a JSON list of names. Set it on the screen **Accounts**, card **iPhone balance widget**. |
+| `widget_accounts` | The 3 accounts that the balance widget shows, as a JSON list of names. Set it on the screen **Admin**, card **iPhone balance widget**. |
 | `smart_lists` | The saved filter sets of the screen **Activity**, as a JSON list of `{name, filters}` (20 maximum). Save and remove them on the screen **Activity**. |
 | `tg_last_ids` | The code writes this value. Do not change it manually. |
 | `app_url` | The address of the app. The code writes this value. The rescue cron reads it to build the Edit button. Do not change it manually. |
@@ -206,7 +206,7 @@ The file `widgets/FinanceTracker.js` makes four home-screen widgets with the fre
 | Widget | Size | Parameter | Content | A tap opens |
 | --- | --- | --- | --- | --- |
 | Recent | Small | `recent` | The 3 latest transactions. | Activity |
-| Balances | Small | `balances` | The balances of 3 accounts. Select the accounts on the screen **Accounts**, card **iPhone balance widget**. | Accounts |
+| Balances | Small | `balances` | The balances of 3 accounts. Select the accounts on the screen **Admin**, card **iPhone balance widget**. | Accounts |
 | Net worth | Small | `networth` | The net worth, the change in 6 months and a line of the 6 months. | Summary |
 | Segment targets | Medium | `segments` | Essentials + Rewards, Essentials and Rewards. Each has a bar and a mark for the date in the month. | Summary |
 
