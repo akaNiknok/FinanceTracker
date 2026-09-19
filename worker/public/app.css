@@ -340,6 +340,115 @@ button.cat-row{min-height:44px;cursor:pointer}
 }
 
 
+/* ── Accounts (v3 Phase 5): totals, then grouped lists. A phone shows each group's
+ * label above its card and the totals as one card; from 768px a group is a tile
+ * with its label inside, in two columns. ── */
+.a-tot{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--card);border-radius:20px;padding:14px 0;margin-bottom:12px}
+.a-tot .tile{background:none;border-radius:0;padding:0 8px;gap:0;align-items:center;text-align:center}
+.a-tot .tile+.tile{border-left:1px solid var(--sep)}
+.a-tot .tile-h{min-height:0;justify-content:center}
+.a-tot .tile-l{font-size:12px;font-weight:400;margin:0}
+.a-tot .tip-btn{display:none}
+.a-tot .fig{font-size:17px;letter-spacing:0;white-space:nowrap}
+.a-tot .tile-foot{display:none}
+.a-body,.a-col{display:flex;flex-direction:column;gap:12px}
+.a-grp{display:flex;flex-direction:column;gap:6px}
+.a-gh{display:flex;justify-content:space-between;gap:10px;padding:6px 4px 0;font-size:13px;font-weight:600;color:var(--dim)}
+.a-list{background:var(--card);border-radius:16px;overflow:hidden}
+.a-row{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:8px 16px;border:0;border-top:1px solid var(--sep);
+  background:none;color:inherit;font:inherit;text-align:left;font-variant-numeric:tabular-nums}
+.a-row:first-child{border-top:0}
+button.a-row{cursor:pointer}
+button.a-row:active{background:var(--card-2)}
+@media(hover:hover){button.a-row:hover{background:var(--card-2)}}
+.a-ic{width:32px;height:32px;border-radius:9px;flex:none;display:grid;place-items:center;font-weight:700;font-size:14px;background:var(--card-2);color:var(--dim)}
+.a-ic .ico{width:18px;height:18px}
+.a-mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.a-t{font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a-s{font-size:13px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a-s.warn{color:var(--warn)}
+.a-mid .bar6{margin:3px 0}
+.a-v{display:flex;flex-direction:column;align-items:flex-end;font-size:17px;font-weight:600;white-space:nowrap}
+.a-v small{font-size:12px;font-weight:400;color:var(--dim)}
+.a-row>.ico{width:14px;height:14px;color:var(--dim);flex:none;stroke-width:2.4;transform:rotate(-90deg)}   /* the sprite chevron points down */
+.r-row{min-height:44px}
+.r-row .a-s{flex:none}
+.a-chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px}
+.a-chips .chip{height:36px;font-size:14px;font-weight:600}
+#debtsCard .card{margin:0}
+@media(min-width:768px){
+  .a-tot{background:none;padding:0;gap:16px;margin-bottom:16px}
+  .a-tot .tile{background:var(--card);border-radius:20px;padding:16px 20px;align-items:stretch;text-align:left;gap:2px}
+  .a-tot .tile+.tile{border-left:0}
+  .a-tot .tile-h{justify-content:flex-start}
+  .a-tot .tile-l{font-size:13px;font-weight:600;margin-right:auto}
+  .a-tot .tip-btn{display:inline-grid}
+  .a-tot .fig{font-size:28px;letter-spacing:-.5px}
+  .a-tot .tile-foot{display:block}
+  .a-tot .lg-long{display:inline} .a-tot .lg-short{display:none}
+  .a-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  .a-col{gap:16px}
+  .a-grp{background:var(--card);border-radius:20px;padding:14px 20px 6px;gap:0}
+  .a-gh{padding:0 0 6px}
+  .a-gh>span:last-child{color:var(--text)}
+  .a-list{background:none;border-radius:0;overflow:visible}
+  .a-row,.a-row:first-child{padding:8px 0;min-height:50px;border-top:1px solid var(--sep)}
+  .r-row{min-height:40px}
+  .a-t,.a-v{font-size:15px}
+  .a-s{font-size:12px}
+  .a-ic{width:30px;height:30px;font-size:13px}
+  .a-chips{padding:10px 0 12px}
+}
+@media(max-width:767px){ .a-tot .lg-long{display:none} .a-tot .lg-short{display:inline} }
+
+/* ── Investments (v3 Phase 5): the .sum grid. Holdings is a table from 768px and
+ * a list on a phone. ── */
+.inv{grid-auto-flow:dense}
+.inv-gain{font-size:13px;font-weight:600}
+.pq-list{display:flex;flex-direction:column;gap:12px;margin-top:2px}
+.pq{display:flex;flex-direction:column;gap:4px}
+.pq-h{display:flex;justify-content:space-between;gap:10px;font-size:14px}
+.pq-h b{font-weight:600}
+.pq-bar{display:flex;gap:2px;height:10px}
+.pq-bar>i{display:block;border-radius:5px;min-width:5px}
+.pq-bar.empty{border:1px dashed var(--warn);border-radius:5px;opacity:.6}
+.pq-d{font-size:12px;color:var(--dim)}
+.pq-d.neg{color:var(--neg)}
+.alloc{display:flex;gap:2px;height:12px;border-radius:6px;overflow:hidden;margin:4px 0}
+.alloc>i{display:block;min-width:4px}
+.alloc-rows{display:flex;flex-direction:column;font-size:14px}
+.alloc-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:8px;align-items:center;min-height:28px}
+.alloc-row>i{width:8px;height:8px;border-radius:2px}
+.alloc-row b{font-weight:600}
+.t-hold{padding:0;gap:0}
+.h-row{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(5,minmax(0,1fr));gap:8px;align-items:center;width:100%;min-height:60px;
+  padding:6px 20px;border:0;border-top:1px solid var(--sep);background:none;color:inherit;font:inherit;text-align:right;font-variant-numeric:tabular-nums}
+.h-row:first-child{border-top:0}
+button.h-row{cursor:pointer}
+button.h-row:active{background:var(--card-2)}
+.t-hold>button.h-row:last-child{border-radius:0 0 20px 20px}
+@media(hover:hover){button.h-row:hover{background:var(--card-2)}}
+.h-head{min-height:44px;font-size:12px;font-weight:600;color:var(--dim)}
+.h-gh{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px}
+.h-gh .tip-btn{margin:-6px -6px -6px 0}
+.h-name{display:flex;align-items:center;gap:12px;min-width:0;text-align:left}
+.h-name .a-ic{width:36px;height:36px;border-radius:10px;font-size:11px}
+.h-n{display:flex;flex-direction:column;min-width:0}
+.h-n b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.h-n span{font-size:12px;color:var(--dim)}
+.h-m{display:none}
+.h-val,.h-gain{font-weight:600}
+@media(max-width:767px){
+  .h-head{display:none}
+  .h-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n v" "n g";row-gap:0;padding:10px 16px}
+  .h-name{grid-area:n} .h-val{grid-area:v} .h-gain{grid-area:g;font-size:13px}
+  .h-sh,.h-ac,.h-pr{display:none}
+  .h-n .h-m{display:block}
+  .t-hold>button.h-row:first-of-type{border-top:0}
+}
+@media(min-width:768px){ .t-pulse,.t-hold{grid-column:span 2} }
+@media(min-width:1200px){ .t-hold{grid-column:span 4} }
+
 /* ── Meters (budgets / utilization): track = lighter step of the same ramp ── */
 .meter{position:relative;height:10px;border-radius:6px;background:var(--accent-tint);margin-top:9px}
 .meter.warn{background:var(--warn-tint)}
@@ -799,9 +908,6 @@ table.tbl td.editing{padding:0}
   .cols{columns:2;column-gap:14px}
   .cols .card,.cols>.stat,.cols>.grid{break-inside:avoid}
   .cols>.screen-head,.cols>.screen-title,.cols>.screen-sub,.cols>.wide{column-span:all}
-  /* #invCards is an empty wrapper the investments fetch fills later — dissolve
-   * it, or its four cards are one unbreakable block in one column. */
-  .cols>#invCards{display:contents}
 }
 @media(max-width:520px){
   .grid-2,.grid-3{grid-template-columns:1fr}
