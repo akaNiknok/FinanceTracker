@@ -1697,7 +1697,7 @@ function filterPane(){
   row('All activity',isListOn(all),function(){ setTxFilters({month:''}); });
   builtinLists().forEach(function(l){ row(esc(l.name),isListOn(l),function(){ setTxFilters(listFilters(l)); }); });
   savedLists().forEach(function(l,i){ row(esc(l.name),isListOn(l),function(){ setTxFilters(listFilters(l)); },function(){ deleteList(i); }); });
-  var sv=el('button','link-btn pane-add','+ Save these filters as a list'); sv.type='button'; sv.onclick=openSaveList;
+  var sv=el('button','link-btn pane-add','Save as a smart list'); sv.type='button'; sv.onclick=openSaveList;
   p.appendChild(sv);
   p.appendChild(el('div','pane-h','Accounts'));
   var host=el('div'); host.id='paneAccts'; host.innerHTML=skRows(4); p.appendChild(host);
@@ -2014,7 +2014,7 @@ function txTableRow(t,opts){
     cb.appendChild(chk);
     r.onclick=selectClick(r,t);
   }
-  var dc=cell('dim'), dl=dt?MONTHS[dt.getMonth()]+' '+dt.getDate()+(dt.getFullYear()!==new Date().getFullYear()?', '+dt.getFullYear():''):'';
+  var dc=cell('dim'), dl=dt?shortDate(dt):'';
   if(edit) dc.textContent=dl; else dc.appendChild(tokLink(esc(dl),'date',isoDate(t.Date)));
   var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
   var dsc=cell('');
@@ -2094,11 +2094,13 @@ function parseDate(d){
   var dt=new Date(d); return isNaN(dt.getTime())?null:dt;
 }
 // Intuitive display format, e.g. "June 6, 2026".
+// "19 Sep", with the year only when it is not this one. Day first, as everywhere.
+function shortDate(dt){ return dt.getDate()+' '+MONTHS[dt.getMonth()]+(dt.getFullYear()!==new Date().getFullYear()?' '+dt.getFullYear():''); }
 function fmtDate(d){
   if(!d) return '';
   var dt=parseDate(d);
   if(!dt||isNaN(dt.getTime())) return String(d);
-  return MONTHS_FULL[dt.getMonth()]+' '+dt.getDate()+', '+dt.getFullYear();
+  return dt.getDate()+' '+MONTHS_FULL[dt.getMonth()]+' '+dt.getFullYear();   // day first, like every other date in the app
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -2268,7 +2270,7 @@ function loadDebts(){
           var paid=Math.abs(it.amount)-Math.abs(it.open), frac=paid>0?paid/Math.abs(it.amount):0;
           // Short date, the year only when it is not this one: the line must fit a phone.
           var d=it.date&&parseDate(it.date);
-          var when=d?(MONTHS[d.getMonth()]+' '+d.getDate()+(d.getFullYear()===new Date().getFullYear()?'':', '+d.getFullYear())):'Opening balance';
+          var when=d?shortDate(d):'Opening balance';
           // Direction per ITEM, not per account: a spend off the tab runs against the balance.
           var theirs=it.amount>=0;
           var r=el('div','a-row');
@@ -2594,7 +2596,7 @@ var LEDGER_NUM={'Wise Amount':1,'BSP Reference Rate':1,'Total Income':1,'8% Tax'
 function ledgerText(col,val){
   if(val==null||val==='') return '';
   if(typeof val==='number') return col==='Wise Amount'?moneyCur(val,'USD'):/rate/i.test(col)?String(val):money(val);
-  if(col==='Date Received'&&/^\d{4}-\d\d-\d\d$/.test(val)) return dayMonth(val,true);
+  if(col==='Date Received'&&/^\d{4}-\d\d-\d\d$/.test(val)) return shortDate(parseDate(val));
   if(col==='Reporting Period') return monthLabel(val);
   return String(val);
 }
@@ -2689,7 +2691,7 @@ function openLedgerAdd(cols, derived){
       closeModal(); toast('Row added','ok'); dropCache(); renderTax();
     }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
   };
-  openModal(modalShell('Add ledger row', body, [save]));
+  openModal(modalShell('Add a row to the tax ledger', body, [save]));
 }
 
 function ledgerDeleteRow(row){
@@ -2701,7 +2703,7 @@ function ledgerDeleteRow(row){
     }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Delete this ledger row?', el('div','dim','This permanently removes the row from the Ledger sheet.'), [no,yes]));
+  openModal(modalShell('Delete this ledger row?', el('div','dim','The row leaves the tax ledger. The salary transaction stays.'), [no,yes]));
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -3031,7 +3033,7 @@ function commitInline(t, field, val){
   var patch={ID:t.ID};
   if(field==='Amount'){
     var n=parseFloat(val);
-    if(isNaN(n)){ toast('Enter a valid amount','err'); renderTxList(); return; }
+    if(isNaN(n)){ toast('Enter an amount','err'); renderTxList(); return; }
     if(n===Number(t.Amount)){ renderTxList(); return; }            // no-op
     patch.Amount=n;
   } else {
@@ -3115,7 +3117,7 @@ function openBulkDate(){
   openModal(modalShell('Set date on '+selCount()+' transactions', fieldEl('New date',d), [save]));
 }
 function openBulkDelete(){
-  var body=el('div','dim','Delete '+selCount()+' transactions permanently? This cannot be undone.');
+  var body=el('div','dim','You cannot undo this.');
   var yes=el('button','btn danger','Delete '+selCount());
   yes.onclick=function(){
     // Optimistic: the rows stay on screen as loading until the backend confirms.
@@ -3128,7 +3130,7 @@ function openBulkDelete(){
     }).catch(function(e){ done(); toast(e.message||e,'err'); renderTxList(); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Confirm bulk delete', body, [no,yes]));
+  openModal(modalShell('Delete '+selCount()+' transactions?', body, [no,yes]));
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -3544,7 +3546,7 @@ function openTxModal(t){
     if(period||isEdit) payload.Period=period; // on edit, '' clears the override
     if(fFx&&fFx.value) payload.ExchangeRate=edNum(fFx);
     else if(isEdit) payload.ExchangeRate=''; // cleared (or never set) on edit → re-resolve/clear the stamp (issue #7)
-    if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
+    if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Pick a category and an account, and type an amount','err');return;}
     prefSet('lastAcct',payload.Account);   // the next add defaults to this account
     commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransaction',
               addedMsg:'Added', failMsg:'Add failed', reopen:openTxModal});
@@ -3612,7 +3614,7 @@ function openTransferModal(t){
 }
 
 function confirmDelete(t){
-  var body=el('div','dim','Delete this transaction permanently? This cannot be undone.');
+  var body=el('div','dim','You cannot undo this.');
   var yes=el('button','btn danger','Delete');
   yes.onclick=function(){
     // Optimistic: close instantly and show the row as "loading". It's removed from
@@ -3628,7 +3630,7 @@ function confirmDelete(t){
     });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;   // the editor, if open, is still underneath
-  openModal(modalShell('Confirm delete', body, [no,yes]));
+  openModal(modalShell('Delete this transaction?', body, [no,yes]));
 }
 
 /* —— edit account —— */
@@ -3694,7 +3696,7 @@ function openAccountModal(a){
     if(Object.keys(payload).length===1){toast('No changes','err');return;}
     save.disabled=true; save.textContent='Saving…';
     gs('api_updateAccount',payload).then(function(){
-      closeModal(); toast('Account updated','ok'); dropCache(); renderAccounts();
+      closeModal(); toast('Saved','ok'); dropCache(); renderAccounts();
     }).catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
   };
   openModal(modalShell(a.name, body, [save]));
