@@ -719,19 +719,21 @@ describe('Gmail courier watermark (vm)', () => {
       const held = app.netWorthSeries(cf, 500, {}, false);
       assert.strictEqual(held[2].nw, 500);
       assert.strictEqual(held[0].nw, 500, 'invested holds flat, does not roll back through cash flow');
-      // The cash-flow chart's right axis floats over the net-worth range, so its zero
-      // is NOT the baseline the bars sit on. A negative net worth used to draw above
-      // the left axis's ₱0 and read positive; it must now sit below a dashed zero line.
-      const nsNeg = [{ month: '2026-Jul', nw: 100000, real: true },
-                     { month: '2026-Aug', nw: -9106, real: true }];
-      const chart = app.cashflowChart(cf.slice(1), 640, nsNeg);
+      // The history tile keeps zero in its net-worth domain: a NEGATIVE month must
+      // plot below a dashed zero line, never read as positive (it once did, on the
+      // v2 chart's floating right axis).
+      const liqNeg = [{ month: '2026-Jul', nw: 100000, real: true }, { month: '2026-Aug', nw: -9106, real: true }];
+      const stk0 = liqNeg.map(p => ({ month: p.month, nw: 0, real: true }));
+      const hc = app.historyCharts(cf.slice(1), liqNeg, stk0, false, 600);
       const flat = (n, out = []) => { out.push(n); (n.kids || []).forEach(k => flat(k, out)); return out; };
-      const nodes = flat(chart);
-      const zero = nodes.find(n => n.tag === 'line' && n.attrs['stroke-dasharray']);
-      assert.ok(zero, 'no dashed zero line on the right axis');
-      const line = nodes.find(n => n.tag === 'polyline');
-      const lastY = Number(line.attrs.points.split(' ').pop().split(',')[1]);
-      assert.ok(lastY > Number(zero.attrs.y1), 'a negative net worth must plot BELOW the right axis zero');
+      assert.ok(flat(hc.nw).some(n => n.tag === 'line' && n.attrs['stroke-dasharray']), 'no dashed zero line');
+      assert.ok(hc.yTot[1] > hc.y0, 'a negative net worth must plot BELOW zero');
+      assert.deepStrictEqual(hc.cx, [150, 450], 'both charts share one band per month');
+      // The FI countdown rounds to whole months BEFORE it splits years off.
+      assert.strictEqual(app.yearsMonths(3683), '10y 1m');
+      assert.strictEqual(app.yearsMonths(353), '1y 0m', '11.6 months rounds up to a year');
+      assert.strictEqual(app.yearsMonths(330), '11m');
+      assert.strictEqual(app.yearsMonths(10), 'Under a month');
 
       // A refund is a NEGATIVE Expense row. The list used to read Amount as a magnitude
       // and take its sign from the category type, which printed "- -₱95" and — far

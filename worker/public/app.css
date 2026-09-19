@@ -178,12 +178,8 @@ button{font-family:inherit;cursor:pointer}
 .card{background:var(--card);border-radius:var(--radius);padding:18px;margin-bottom:16px}
 .card-h{font-size:13px;font-weight:600;color:var(--dim);margin:0 0 12px}
 .card-h-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.range-picker{padding:4px 6px;font-size:11.5px;min-height:0;text-transform:none;letter-spacing:0}
-/* top-level hero tiles / KPI grids need the same rhythm as .card (which
- * carries its own margin-bottom) — otherwise they sit flush against neighbors */
-.screen>.stat,.screen>.grid,.hero-row>.stat{margin-bottom:14px}
-/* Two hero cards that pair up at desktop width and are invisible below it. */
-.hero-row{display:contents}
+/* top-level stat tiles need the same rhythm as .card, which carries its own margin */
+.screen>.stat,.screen>.grid{margin-bottom:14px}
 .grid{display:grid;gap:12px}
 .grid-2{grid-template-columns:repeat(2,1fr)}
 .grid-3{grid-template-columns:repeat(3,1fr)}
@@ -194,22 +190,9 @@ button{font-family:inherit;cursor:pointer}
 .stat-label{font-size:13px;color:var(--dim);font-weight:600}
 .stat-value{font-size:22px;font-weight:750;margin-top:5px;letter-spacing:-.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stat-sub{font-size:12px;color:var(--dim);margin-top:3px}
-.stat-spark{margin-top:10px;display:block;width:120px;max-width:100%;height:28px}
 .hero{background:var(--card)}
 .hero .stat-value{font-size:clamp(30px,7vw,42px);line-height:1.12;margin-top:7px}
-.delta{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:650;border-radius:999px;padding:2px 9px;white-space:nowrap;max-width:100%}
-.delta.up{background:var(--pos-tint);color:var(--pos)}
-.delta.down{background:var(--neg-tint);color:var(--neg)}
-.delta.flat{background:var(--card-3);color:var(--dim)}
 
-/* Asset vs liability split bar (hero) — 2px surface gap between fills */
-.split-bar{display:flex;gap:2px;height:8px;margin:16px 0 8px}
-.split-bar>div{border-radius:4px;min-width:6px}
-.split-a{background:var(--chart-in)}
-.split-l{background:var(--chart-out)}
-.split-r{background:var(--sep)}   /* the unfilled remainder of a progress bar */
-.split-legend{display:flex;gap:18px;font-size:12.5px;color:var(--dim);flex-wrap:wrap}
-.split-legend b{color:var(--text);font-weight:650}
 .lg-key{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:baseline}
 
 /* ── Misc text ───────────────────────────────────────────────────────────── */
@@ -222,39 +205,96 @@ button{font-family:inherit;cursor:pointer}
 .pill.warn{background:var(--warn-tint);color:var(--warn)}
 
 /* ── Charts (inline SVG) ─────────────────────────────────────────────────── */
-.chart-wrap{position:relative}
-.chart-svg{display:block;width:100%;height:auto;overflow:visible}
-.chart-svg text{font-family:var(--font);fill:var(--dim);font-size:10.5px}
-.chart-legend{display:flex;gap:16px;font-size:12px;color:var(--dim);align-items:center;flex-wrap:wrap;margin-bottom:12px}
-.chart-legend .lg{display:inline-flex;align-items:center;gap:6px}
-.chart-tip{position:absolute;pointer-events:none;background:var(--tip);color:#F5F5F7;border-radius:10px;
-  padding:7px 10px;font-size:12px;line-height:1.5;box-shadow:var(--shadow);z-index:6;white-space:nowrap;transform:translate(-50%,calc(-100% - 8px))}
-.chart-tip b{font-weight:700}
-.chart-tip[hidden]{display:none}
+/* ── Summary tile grid (DESIGN.md "Layout"): 1 column on a phone with Free in and
+ * Runway paired, 2 on iPad, 4 on PC. A tile's span is fixed per breakpoint. ── */
+.sum{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.tile{background:var(--card);border-radius:20px;padding:16px 20px;min-width:0;display:flex;flex-direction:column;gap:6px;font-variant-numeric:tabular-nums}
+.tile-h{display:flex;align-items:center;gap:8px;min-height:24px}
+.tile-l{font-size:13px;font-weight:600;color:var(--dim);margin-right:auto}
+.tile-r{font-size:13px;color:var(--dim);text-align:right}
+.tile-r b{color:var(--text)}
+.tile-foot{font-size:12px;color:var(--dim)}
+.fig-hero{font-size:38px;line-height:44px;font-weight:700;letter-spacing:-1px}
+.fig{font-size:28px;font-weight:700;letter-spacing:-.5px}
+.fig-row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.fig-sub{font-size:15px;color:var(--dim)}
+.lg-short{display:none}
+.bar6{position:relative;display:flex;gap:2px;height:6px;border-radius:3px;background:var(--track);margin:4px 0 2px}
+.bar6>i{display:block;height:100%;border-radius:3px;min-width:0}
+.bar6>b{position:absolute;top:-3px;width:2px;height:12px;border-radius:1px;background:var(--text)}
+.t-lts .bar6{height:8px;border-radius:4px}
+.t-nw{padding-bottom:0;overflow:hidden}
+.t-nw.pad-b{padding-bottom:16px}
+.nw-bridge{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--dim)}
+.nw-chip{font-weight:700;padding:2px 8px;border-radius:8px}
+.nw-chip.pos{background:var(--pos-tint);color:var(--pos)}
+.nw-chip.neg{background:var(--neg-tint);color:var(--neg)}
+.nw-spark{display:block;width:calc(100% + 40px);height:56px;margin:auto -20px 0}
+.lts-day{font-size:15px;color:var(--dim)}
+.lts-day b{color:var(--text)}
+.seg-rows{display:flex;flex-direction:column;margin-top:2px}
+.seg-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;column-gap:10px;align-items:center;min-height:44px;border-top:1px solid var(--sep)}
+.seg-dot{width:10px;height:10px;border-radius:5px}
+.seg-name{font-size:16px}
+.seg-val{font-size:15px;font-weight:600;text-align:right}
+.seg-sub{display:none}
+.t-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.t-pair .tile{padding:14px 16px}
+.t-hist .seg{display:flex;background:var(--card-2);border-radius:9px;padding:2px}
+.seg>button{border:0;border-radius:7px;padding:6px 14px;min-height:32px;background:none;color:var(--dim);font-size:13px;font-weight:600}
+.seg>button.on{background:var(--card);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.hist-plot{position:relative;touch-action:pan-y}
+.hist-lg{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:4px 0}
+.hist-lg b{color:var(--text);font-weight:600}
+.hist-lg .lg{display:inline-flex;align-items:center}
+.hist-svg{display:block;width:100%;height:auto}
+.hist-hit{position:absolute;inset:0;cursor:crosshair;outline:none;border-radius:8px}
+.hist-hit:focus-visible{box-shadow:0 0 0 2px var(--accent)}
+.hist-line{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--text);opacity:.5;pointer-events:none}
+.hist-tip{position:absolute;top:16px;z-index:6;pointer-events:none;background:var(--tip);color:#F5F5F7;border-radius:12px;padding:10px 12px;
+  box-shadow:var(--shadow);font-size:13px;white-space:nowrap}
+.hist-tip-t{font-weight:700;font-size:14px;margin-bottom:4px}
+.hist-tip-rows{display:grid;grid-template-columns:auto auto;gap:3px 16px}
+.hist-tip-rows b{text-align:right;font-weight:600}
+.hist-tip .est{opacity:.6;font-weight:400}
+[hidden].hist-line,[hidden].hist-tip{display:none}
+/* Flex, not text-align: a label wider than its 2Y column still centres (the last
+ * one ends at the right edge), where text-align gives way to a spill to the right. */
+.hist-x{display:grid;font-size:12px;color:var(--dim);margin-top:4px;white-space:nowrap}
+.hist-x span{display:flex;justify-content:center}
+.hist-x .on{color:var(--text);font-weight:600}
+.hist-x.many span:last-child{justify-content:flex-end}
+.cat-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) auto;gap:12px;align-items:center;min-height:32px;font-size:14px}
+.cat-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cat-row .bar6{height:8px;border-radius:4px;margin:0}
+.cat-val{font-weight:600;text-align:right;min-width:72px}
+.link-btn{border:0;background:none;color:var(--accent);font-size:13px;font-weight:600;min-height:32px;padding:0 4px}
+@media(max-width:767px){
+  .hide-phone{display:none}
+  .t-pair .lg-long{display:none} .t-pair .lg-short{display:inline}
+  .t-pair .fig{font-size:24px}
+  .t-pair .bar6{display:none}
+}
+@media(min-width:768px){
+  .sum{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .t-nw,.t-hist{grid-column:span 2}
+  .fig{font-size:30px}
+  .t-pair{display:flex;flex-direction:column;gap:16px}
+  .t-pair .tile{flex:1;padding:18px 20px}
+  .seg-row{grid-template-rows:auto auto;padding:6px 0}
+  .seg-sub{display:block;grid-column:3;font-size:12px;color:var(--dim);text-align:right}
+  .seg-dot{grid-row:span 2}
+  .seg-name{grid-row:span 2}
+}
+@media(min-width:1200px){
+  .sum{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .t-nw,.t-lts,.t-cats,.t-recent{grid-column:span 2}
+  .t-hist{grid-column:span 3}
+  .t-pair{order:1}
+  .t-cats,.t-recent{order:2}
+  .fig-hero{font-size:40px;line-height:46px}
+}
 
-/* Donut (expenses by category) — ring + legend; legend carries the numbers,
- * so identity is never color-alone. Stacks under the ring on a phone. */
-.donut-wrap{display:flex;gap:22px;align-items:center;flex-wrap:wrap}
-.donut-ring{position:relative;width:224px;flex:0 0 224px;margin:0 auto}
-.donut{display:block;width:100%;height:auto}
-.donut-mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none}
-.donut-mid-l{font-size:12px;color:var(--dim)}
-.donut-mid-v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
-.donut-legend{flex:1 1 240px;min-width:0}
-.dl-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto 38px;gap:10px;align-items:center;padding:5px 0;font-size:13px}
-.dl-row .lg-key{margin:0}
-.dl-name{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dl-val{font-variant-numeric:tabular-nums;color:var(--text)}
-.dl-pct{font-variant-numeric:tabular-nums;color:var(--dim);text-align:right}
-/* "Other" drill-down: a native <details>, so keyboard and screen readers work
-   without JS. Own marker (the default triangle sits outside the row grid). */
-.dl-drill>summary{list-style:none;cursor:pointer;border-radius:8px}
-.dl-drill>summary::-webkit-details-marker{display:none}
-.dl-drill>summary:hover{background:var(--card-2)}
-.dl-drill>summary .dl-name::after{content:' ▸';color:var(--dim)}
-.dl-drill[open]>summary .dl-name::after{content:' ▾'}
-.dl-sub{padding-left:19px;font-size:12.5px}
-.dl-sub .lg-key{opacity:.5}
 
 /* ── Meters (budgets / utilization): track = lighter step of the same ramp ── */
 .meter{position:relative;height:10px;border-radius:6px;background:var(--accent-tint);margin-top:9px}
@@ -264,9 +304,6 @@ button{font-family:inherit;cursor:pointer}
 .meter.warn .meter-fill{background:var(--warn)}
 .meter.over .meter-fill{background:var(--chart-out)}
 .meter.thin{height:6px;margin-top:7px}
-/* pace notch: where spending "should" be, given how much of the period elapsed */
-.meter-pace{position:absolute;top:-4px;bottom:-4px;width:2px;border-radius:1px;background:var(--dim);opacity:.9}
-.meter-pace::after{content:"";position:absolute;left:-3px;top:-4px;border:4px solid transparent;border-top-color:var(--dim)}
 
 /* legacy thin bar (credit utilization etc.) */
 .bar{height:8px;border-radius:6px;background:var(--card-3);overflow:hidden;margin-top:8px}
@@ -542,20 +579,9 @@ table.tbl td.editing{padding:0}
   /* #invCards is an empty wrapper the investments fetch fills later — dissolve
    * it, or its four cards are one unbreakable block in one column. */
   .cols>#invCards{display:contents}
-  /* One row of equal-height heroes: in the plain column flow they land in
-   * different columns, each its own height, with a ragged gap under the shorter
-   * one. grid-auto-columns keeps it honest when only one hero exists. */
-  .cols>.hero-row{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:14px;margin-bottom:14px}
-  .cols>.hero-row>.stat{margin-bottom:0}
 }
 @media(max-width:520px){
   .grid-2,.grid-3{grid-template-columns:1fr}
-  .kpis.grid-3{grid-template-columns:repeat(3,1fr);gap:8px}   /* KPI tiles stay a row */
-  .kpis .stat{padding:11px 12px}
-  .kpis .stat-value{font-size:16px}
-  .kpis .stat-label{font-size:9.5px;letter-spacing:.5px}
-  .kpis .stat-sub{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kpis .delta{font-size:10px;padding:2px 7px}
   .field-row{grid-template-columns:1fr}
   .main{padding-left:16px;padding-right:16px}
   .card{padding:15px}

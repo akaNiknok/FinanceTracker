@@ -468,6 +468,10 @@ function d1(db) {
       const by = Object.fromEntries((await api.getAccounts({}, env)).accounts.map((a) => [a.name, a]));
       const expected = Math.round((by.Maya.balancePhp + by.Wise.balancePhp - by.Card.balancePhp) * 100) / 100;
       assert.strictEqual(inv.runway.efPhp, expected);
+      // The parts are what the Summary tooltip lists, so they must add up to the pool.
+      const p = inv.runway.parts;
+      assert.strictEqual(p.creditPhp, -by.Card.balancePhp);
+      assert.strictEqual(dbm.q2(p.cashPhp + p.efSharesPhp + p.creditPhp + p.owedPhp), expected);
       // The average window is the last THREE CLOSED months and the fixture's dates are
       // absolute, so which fixture rows sit inside it moves with the real calendar. A
       // hard-coded 300/3 went red on its own on 2026-09-01, when July and August rolled

@@ -31,7 +31,7 @@ The build plan for the redesign. Each phase runs in its own Claude session. **De
   - Money you lent (a positive receivable) is left out, because you cannot reach it.
   - Average spend = signed Expense total over the **last 3 closed months** ÷ 3.
   - Target = 4 months.
-  - The current card says "− money lent". That wording is wrong: lent money is excluded, not subtracted. Phase 2 fixes the copy.
+  - Phase 2 fixed the Accounts card's "− money lent" copy (lent money is excluded, not subtracted), and `runway.parts` carries the four terms.
 - **Financially free in** (`getDashboard` → `fire`, `fireEta`):
   - Target = 25 × annual spend (the 4% rule).
   - Progress = net worth at the **last month close** − money lent.
@@ -57,7 +57,7 @@ Goal: every existing screen runs in the new frame, with no content redesign yet.
 - Tests: update any `test.js` assertion that names a removed glyph, font or file.
 Done when: every screen works at the 3 widths × 2 themes with the new chrome, the theme survives a reload with no flash, and offline shows its state.
 
-### Phase 2 — Summary (dashboard)  ☐
+### Phase 2 — Summary (dashboard)  ☑
 - Rebuild `renderDashboard` as the tile grid: net worth hero (sparkline, "since <month>" chip, bridge line), Left to spend (bar, per-day line, the three segment rows), Financially free in, Emergency runway, Last 6 months (the net-worth stack and cash-flow bars on a **shared month axis** with the 6M / 1Y / 2Y control), spending by category, recent.
 - Spans: 4 columns on PC, 2 on iPad, stacked on iPhone (Free in and Runway pair up).
 - Runway on Summary: read `cachedCall('investments')` beside the dashboard call. No new route, because the payload already exists. Keep the card on Accounts until Phase 5 moves it.
