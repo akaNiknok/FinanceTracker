@@ -80,7 +80,7 @@ button{font-family:inherit;cursor:pointer}
  * --edge is the calibration knob: raise it if the blur reaches content at rest on a
  * new iOS. It is 0 outside the installed iOS app, where no blur is drawn. */
 :root{--edge:0px}
-@media (display-mode:standalone){ @supports (-webkit-touch-callout:none){ :root{--edge:20px} } }
+@media (display-mode:standalone){ @supports (-webkit-touch-callout:none){ :root{--edge:22px} } }
 #app{height:100vh;height:var(--app-h,100dvh);display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:1fr auto auto;grid-template-areas:"main" "add" "nav"}
 
 /* ── Add bar (phone: docked above the tab bar) ───────────────────────────── */

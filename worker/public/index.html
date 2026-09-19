@@ -40,6 +40,13 @@
       // Re-run once the body exists: the probe measures env() from inside <head>, where it
       // is the only element in the tree — cheap insurance against that reading 0.
       addEventListener('DOMContentLoaded',fitShell);
+      // iPad at a cold launch: the standalone window reports its size late, and no resize
+      // event follows, so the first reading can stay one inset short (a bare strip at the
+      // bottom until a rotation fixes it). Re-measure once the page has loaded and twice
+      // more after that. ponytail: fixed delays; switch to a settle loop if a device needs longer.
+      addEventListener('load',function(){ fitShell(); setTimeout(fitShell,300); setTimeout(fitShell,1000); });
+      addEventListener('pageshow',fitShell);
+      if(window.visualViewport) visualViewport.addEventListener('resize',fitShell);
       addEventListener('resize',fitShell);
       addEventListener('orientationchange',fitShell);
     })();
