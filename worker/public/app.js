@@ -2946,21 +2946,6 @@ function fieldEl(label,inputNode,hint){
 }
 function inputEl(type,value,ph){var i=el('input');i.type=type||'text';if(value!=null)i.value=value;if(ph)i.placeholder=ph;return i;}
 
-/* —— reporting-period override (shared by the tx + transfer modals) ————————
- * Blank = the usual case: Month derives from Date. Setting it books the row into a
- * different month for every month-keyed report (cash flow, budgets, filters) while
- * Date keeps the real cash movement — for salary that lands a day or two early.
- */
-function periodEl(t){
-  return comboEl([{value:'',label:'(from date)'}].concat(monthOptions()), (t&&t.Period)||'');
-}
-function periodRowEl(fDate,fPeriod){
-  var row=el('div','field-row');
-  row.appendChild(fieldEl('Date', fDate));
-  row.appendChild(fieldEl('Reports in', fPeriod, "blank = the date's own month"));
-  return row;
-}
-
 /* —— fuzzy combobox (searchable replacement for <select>) ——————————————————
  * comboEl(options, value, opts) returns a wrapper element that exposes a `.value`
  * (selected option value) and `.onchange` handler — drop-in for selectEl's API.
@@ -3048,7 +3033,6 @@ function comboEl(options,value,opts){
  * (and autofocusing) means a new entry is usually just category + amount. */
 function prefGet(k){ try{ return localStorage.getItem('ft.'+k)||''; }catch(e){ return ''; } }
 function prefSet(k,v){ try{ if(v) localStorage.setItem('ft.'+k,String(v)); }catch(e){} }
-function focusCombo(c){ var i=c&&c.querySelector('.combo-input'); if(i){ i.focus(); i.select(); } }
 // Amount for a form field: absolute value, blank when there's nothing usable
 // (a carried-over draft may hold '' or a half-typed number).
 /* The field shows the amount AS STORED, sign and all. It used to show the magnitude,
@@ -3089,7 +3073,7 @@ function commitTx(o){
   if(o.isEdit){
     var patch=Object.assign({ID:o.t.ID},o.payload);
     S.tx.pendingEdits[o.t.ID]=patch;
-    closeModal(); toast('Updated','ok'); repaintTxList();
+    closeEditor(); toast('Updated','ok'); repaintTxList();
     gs('api_updateTransaction', patch)
       .then(function(){ delete S.tx.pendingEdits[o.t.ID]; afterMutation(); })
       .catch(function(e){ delete S.tx.pendingEdits[o.t.ID]; repaintTxList();
@@ -3097,7 +3081,7 @@ function commitTx(o){
         o.reopen(Object.assign({},o.t,o.payload)); });
     return;
   }
-  closeModal(); toast(o.addedMsg,'ok');
+  closeEditor(); toast(o.addedMsg,'ok');
   var tmp=pushPendingAdd(o.payload);
   gs(o.create, o.payload)
     .then(function(r){ if(r && r.status==='queued') return;
@@ -3109,12 +3093,157 @@ function commitTx(o){
       toast(o.failMsg+' — reopening: '+(e.message||e),'err'); o.reopen(o.payload); });
 }
 
-/* Modal footer: Save on the right, Delete pushed to the far left when editing. */
-function modalFoot(save, isEdit, t){
-  if(!isEdit) return [save];
-  var del=el('button','btn danger','Delete'); del.style.marginRight='auto';
-  del.onclick=function(){ confirmDelete(t); };
-  return [del, save];
+/* ════ The transaction editor: a full-screen page on a phone, a form sheet from 768px ════
+ * One page stack in #edRoot: the form, plus a picker page pushed over it for Category,
+ * Account and Reports in. The old modal resized itself to the visual viewport while iOS
+ * scrolled to the focused field, and the two fought (the modal jumped). Here nothing moves
+ * for the keyboard: --kb (its height) only pads the bottom, and the text fields sit at the
+ * top of the form, above where the keyboard lands. */
+var ED={root:null, pages:[], t:0};
+function edRoot(){
+  if(ED.root) return ED.root;
+  var r=el('div','ed-root'); r.hidden=true;
+  r.innerHTML='<div class="ed-backdrop"></div><div class="ed-card"></div>';
+  r.firstChild.onclick=closeEditor;
+  document.body.appendChild(r);
+  if(window.visualViewport){
+    var fit=function(){ var vv=visualViewport; r.style.setProperty('--kb',Math.max(0,Math.round(innerHeight-vv.height-vv.offsetTop))+'px'); };
+    visualViewport.addEventListener('resize',fit); fit();
+  }
+  return ED.root=r;
+}
+function edOpen(){ return !!(ED.root&&!ED.root.hidden&&ED.pages.length); }
+// Show a form page. Already open (the Transaction ⇄ Transfer switch): swap in place.
+function openEditor(page){
+  var r=edRoot(), card=r.lastChild, fresh=!edOpen();
+  clearTimeout(ED.t);
+  card.innerHTML=''; card.appendChild(page); ED.pages=[page];
+  if(fresh){ r.classList.remove('in','out'); r.hidden=false; void card.offsetWidth; r.classList.add('in'); }
+}
+function closeEditor(){
+  var r=ED.root; if(!edOpen()) return;
+  if(document.activeElement&&r.contains(document.activeElement)) document.activeElement.blur();
+  ED.pages=[]; r.classList.add('out');
+  ED.t=setTimeout(function(){ r.hidden=true; r.classList.remove('in','out'); r.lastChild.innerHTML=''; },300);
+}
+function pushPage(p){ p.classList.add('push'); ED.root.lastChild.appendChild(p); ED.pages.push(p); }
+function popPage(){
+  if(ED.pages.length<2) return closeEditor();
+  var p=ED.pages.pop(); p.classList.add('pop');
+  setTimeout(function(){ p.remove(); },300);
+}
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Escape'||!edOpen()||!$('#modalRoot').hidden) return;
+  e.preventDefault(); popPage();
+});
+
+// A page: [left] title [right] in a bar, then the scroller (page.body).
+function edPage(title,left,right){
+  var p=el('div','ed-page'), bar=el('div','ed-bar'), sc=el('div','ed-scroll');
+  bar.appendChild(left||el('span')); bar.appendChild(el('div','ed-title',esc(title))); bar.appendChild(right||el('span'));
+  p.appendChild(bar); p.appendChild(sc); p.body=sc; return p;
+}
+function barBtn(label,cls,fn){ var b=el('button','ed-bb'+(cls?' '+cls:''),label); b.type='button'; b.onclick=fn; return b; }
+function edGroup(parent,foot){
+  var g=el('div','ed-group'); parent.appendChild(g);
+  if(foot) parent.appendChild(el('div','ed-foot',esc(foot)));
+  return g;
+}
+// A <label> row, so a tap anywhere on it focuses the field.
+function edRow(g,label,ctrl){
+  var r=el('label','ed-row'); r.appendChild(el('span','ed-lab',esc(label))); r.appendChild(ctrl); g.appendChild(r); return r;
+}
+function edInput(g,label,value,o){
+  o=o||{};
+  var i=el('input','ed-in'+(o.cls?' '+o.cls:'')); i.type='text'; i.value=value==null?'':value;
+  i.placeholder=o.ph||''; i.autocomplete='off'; i.enterKeyHint='done';
+  if(o.num){ i.inputMode='decimal'; i.setAttribute('autocorrect','off'); i.spellcheck=false; }
+  edRow(g,label,i); return i;
+}
+function edNum(i){ var v=String(i.value).replace(/[,\s₱]/g,''); return v===''?NaN:Number(v); }
+function edDot(c){ return c?'<span class="acct-dot" style="background:'+esc(c)+'"></span>':''; }
+function edItems(options){
+  return options.map(function(o){ return typeof o==='object'?{value:String(o.value),label:String(o.label),color:o.color}:{value:String(o),label:String(o)}; });
+}
+// A row that shows its value and pushes a picker page. Exposes .value and .onpick.
+function edPickRow(g,label,options,value,ph){
+  var items=edItems(options), cur='';
+  var b=el('button','ed-row ed-link'); b.type='button';
+  b.appendChild(el('span','ed-lab',esc(label)));
+  var v=el('span','ed-val'); b.appendChild(v); b.insertAdjacentHTML('beforeend',icon('chevron'));
+  function set(x){
+    var it=items.filter(function(i){ return i.value===String(x==null?'':x); })[0];
+    cur=it?it.value:'';
+    v.innerHTML=it?edDot(it.color)+'<span class="ed-txt">'+esc(it.label)+'</span>':'<span class="ed-ph">'+esc(ph||'Choose')+'</span>';
+  }
+  b.onclick=function(){ openPicker(label,items,cur,function(x){ set(x); if(b.onpick) b.onpick(); }); };
+  Object.defineProperty(b,'value',{get:function(){ return cur; },set:set,configurable:true});
+  set(value); g.appendChild(b); return b;
+}
+// The picker page: a search field (long lists only), then every option, the current one ticked.
+function openPicker(title,items,cur,done){
+  var page=edPage(title,barBtn(icon('chevron')+'Back','back',popPage));
+  var q=el('input','ed-search'); q.type='search'; q.placeholder='Search'; q.autocomplete='off'; q.enterKeyHint='done';
+  var list=el('div','ed-group ed-list');
+  var anyC=items.some(function(i){ return i.color; });   // then every row keeps the dot's space, so the names line up
+  function pick(v){ done(v); popPage(); }
+  function draw(){
+    var s=q.value.trim(), f=!s?items:items.map(function(it){ return {it:it,sc:fuzzyScore(s,it.label)}; })
+      .filter(function(x){ return x.sc>=0; }).sort(function(a,b){ return b.sc-a.sc; }).map(function(x){ return x.it; });
+    list.innerHTML='';
+    if(!f.length) list.appendChild(el('div','ed-row ed-empty','No match'));
+    f.forEach(function(it){
+      var on=it.value===cur, r=el('button','ed-row ed-opt'+(on?' on':''),(anyC?edDot(it.color||'transparent'):'')+'<span class="ed-txt">'+esc(it.label)+'</span>'+(on?icon('check'):''));
+      r.type='button'; r.onclick=function(){ pick(it.value); }; list.appendChild(r);
+    });
+    return f;
+  }
+  q.oninput=draw;
+  q.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); var f=draw(); if(f[0]) pick(f[0].value); } };
+  if(items.length>8) page.body.appendChild(q);
+  page.body.appendChild(list); draw(); pushPage(page);
+  var on=list.querySelector('.on'), sc=page.body;
+  if(on) sc.scrollTop=on.getBoundingClientRect().top-sc.getBoundingClientRect().top-sc.clientHeight/2;
+  if(items.length>8&&matchMedia('(pointer:fine)').matches) q.focus();   // a phone keeps the keyboard down
+}
+// The amount row: a ± key (a refund is a negative expense; the decimal pad has no minus)
+// and the account's currency after the figure.
+function edAmount(g,label,value,sign){
+  var r=el('label','ed-row ed-amt'); r.appendChild(el('span','ed-lab',esc(label)));
+  var i=el('input','ed-in'); i.type='text'; i.inputMode='decimal'; i.autocomplete='off'; i.enterKeyHint='done';
+  i.placeholder='0.00'; i.value=value==null?'':value; i.spellcheck=false; i.setAttribute('autocorrect','off');
+  if(sign){
+    var pm=el('button','ed-pm','±'); pm.type='button'; pm.setAttribute('aria-label','Flip the sign (a refund is negative)');
+    pm.onclick=function(e){ e.preventDefault(); var v=String(i.value).trim(); i.value=v.charAt(0)==='-'?v.slice(1):'-'+v; };
+    r.appendChild(pm);
+  }
+  r.appendChild(i); var c=el('span','ed-cur'); r.appendChild(c); g.appendChild(r);
+  i.cur=function(code){ c.textContent=code||''; };
+  return i;
+}
+// The rows that are rarely touched sit behind "More" unless one of them holds a value.
+function edMore(parent,open,build){
+  var g=edGroup(parent);
+  if(open){ build(g); return; }
+  var b=el('button','ed-row ed-link ed-morebtn','<span class="ed-lab">More options</span>'+icon('chevron')); b.type='button';
+  b.onclick=function(){ b.remove(); build(g); };
+  g.appendChild(b);
+}
+// Enter saves on a keyboard; on a touch screen it only puts the keyboard away.
+function edEnter(page,save){
+  page.addEventListener('keydown',function(e){
+    if(e.key!=='Enter'||!e.target.classList.contains('ed-in')) return;
+    e.preventDefault();
+    if(matchMedia('(pointer:fine)').matches) save(); else e.target.blur();
+  });
+}
+function edDelete(page,t){
+  var g=edGroup(page.body), d=el('button','ed-row ed-del','Delete transaction'); d.type='button';
+  d.onclick=function(){ confirmDelete(t); }; g.appendChild(d);
+}
+function periodItems(){ return [{value:'',label:"The date's month"}].concat(monthOptions()); }
+function catItems(cats){
+  return cats.map(function(c){ var s=((S.boot.categories||{})[c]||{}).Segment; return {value:c,label:c,color:SEG_COLOR[s]}; });
 }
 
 /* —— add / edit a normal transaction —— */
@@ -3134,50 +3263,50 @@ function openTxModal(t){
   var wantAcc=(S.screen==='transactions'&&S.tx.filters.account)||prefGet('lastAcct');
   var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===wantAcc;})?wantAcc:'');
 
-  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate());
-  var fPeriod=periodEl(t);
-  var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
-  var fAcc=comboEl(accs, (t&&t.Account)||defAcc, {placeholder:'Select account'});
-  var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
-  var fDesc=inputEl('text', t?t.Description:'', 'Description');
-  var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
+  var save=barBtn(isEdit?'Save':'Add','primary',function(){ doSave(); });
+  var page=edPage(isEdit?'Edit transaction':'Add transaction',barBtn('Cancel','',closeEditor),save), b=page.body;
+  var draft={};   // what the Transaction ⇄ Transfer switch carries over
+  // Category is dropped on purpose: transfer categories are a disjoint set.
+  if(!isEdit) b.appendChild(typeToggleEl('tx',function(){ openTransferModal(draft()); }));
+  var g1=edGroup(b);
+  var fAmt=edAmount(g1,'Amount',t?amtField(t.Amount):'',true);
+  var fDesc=edInput(g1,'Description',t?t.Description:'',{ph:'Optional'});
+  var g2=edGroup(b);
+  var fCat=edPickRow(g2,'Category',catItems(cats),t?t.Category:'','Choose');
+  var fAcc=edPickRow(g2,'Account',accs,(t&&t.Account)||defAcc,'Choose');
+  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate()); fDate.className='ed-in ed-date';
+  edRow(g2,'Date',fDate);
+  var fPeriod, fFx;
+  edMore(b,!!(t&&(t.Period||t.ExchangeRate)),function(g){
+    fPeriod=edPickRow(g,'Reports in',periodItems(),(t&&t.Period)||'');
+    fFx=edInput(g,'Exchange rate',t&&t.ExchangeRate?t.ExchangeRate:'',{num:true,ph:'Auto'});
+    b.insertBefore(el('div','ed-foot','Reports in books the row into another month. Exchange rate is PHP per 1 unit; blank = auto.'),g.nextSibling);
+  });
+  if(isEdit) edDelete(page,t);
   // A stamped rate belongs to the old account's currency — reassigning to a different
   // currency makes it meaningless, so clear the field back to "auto" (issue #7).
   var origCur=t?(t.Currency||'PHP'):'PHP';
-  fAcc.onchange=function(){ if(acctCurrency(fAcc.value)!==origCur) fFx.value=''; };
+  fAcc.onpick=function(){ fAmt.cur(acctCurrency(fAcc.value)); if(fFx&&acctCurrency(fAcc.value)!==origCur) fFx.value=''; };
+  fAmt.cur(fAcc.value?acctCurrency(fAcc.value):'');
+  draft=function(){ return {Date:fDate.value,Period:fPeriod?fPeriod.value:(t&&t.Period)||'',Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''}; };
 
-  var body=el('div');
-  // Category is dropped on purpose: transfer categories are a disjoint set.
-  if(!isEdit) body.appendChild(typeToggleEl('tx',function(){
-    openTransferModal({Date:fDate.value,Period:fPeriod.value,Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
-  }));
-  body.appendChild(periodRowEl(fDate, fPeriod));
-  body.appendChild(fieldEl('Category', fCat));
-  body.appendChild(fieldEl('Account', fAcc));
-  var rowAmt=el('div','field-row');
-  rowAmt.appendChild(fieldEl('Amount', fAmt));
-  rowAmt.appendChild(fieldEl('Exchange rate', fFx, 'PHP per 1 unit; blank = auto'));
-  body.appendChild(rowAmt);
-  body.appendChild(fieldEl('Description', fDesc));
-
-  var save=el('button','btn primary', isEdit?'Save':'Add');
-  save.onclick=function(){
+  function doSave(){
     var payload={
       Date:fDate.value, Category:fCat.value, Account:fAcc.value,
-      Amount:parseFloat(fAmt.value), Description:fDesc.value
+      Amount:edNum(fAmt), Description:fDesc.value
     };
-    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
-    if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
-    else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
+    var period=fPeriod?fPeriod.value:(t&&t.Period)||'';
+    if(period||isEdit) payload.Period=period; // on edit, '' clears the override
+    if(fFx&&fFx.value) payload.ExchangeRate=edNum(fFx);
+    else if(isEdit) payload.ExchangeRate=''; // cleared (or never set) on edit → re-resolve/clear the stamp (issue #7)
     if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
     prefSet('lastAcct',payload.Account);   // the next add defaults to this account
     commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransaction',
               addedMsg:'Added', failMsg:'Add failed', reopen:openTxModal});
-  };
-  openModal(modalShell(isEdit?'Edit transaction':'Add transaction', body, modalFoot(save, isEdit, t)));
-  // Jump straight into Category so you can type/filter without a click — but only when
-  // it's empty, which also skips the reopen-after-failure path (that one keeps its value).
-  if(!isEdit&&!fCat.value) focusCombo(fCat);
+  }
+  edEnter(page,doSave);
+  openEditor(page);
+  if(!isEdit&&!fAmt.value&&matchMedia('(pointer:fine)').matches) fAmt.focus();
 }
 
 /* —— transfer —— */
@@ -3188,53 +3317,53 @@ function openTransferModal(t){
     return String((S.boot.categories[c]||{}).Type)==='Transfer';
   }).sort();
   var accs=acctOptions();
-
-  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate());
-  var fPeriod=periodEl(t);
   var defCat=xferCats.indexOf('Transfer: Internal')>=0?'Transfer: Internal':'';
-  var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], (t&&t.Category)||defCat, {placeholder:'Select category'});
-  var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
-  var fTo=comboEl(accs, t?t.ToAccount:'', {placeholder:'To account'});
-  var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
+
+  var save=barBtn(isEdit?'Save':'Add','primary',function(){ doSave(); });
+  var page=edPage(isEdit?'Edit transfer':'Add transfer',barBtn('Cancel','',closeEditor),save), b=page.body;
+  var draft;
+  if(!isEdit) b.appendChild(typeToggleEl('xfer',function(){ openTxModal(draft()); }));
+  var g1=edGroup(b);
+  var fAmt=edAmount(g1,'Amount',t?amtField(t.Amount):'',false);
+  var fDesc=edInput(g1,'Description',t?t.Description:'',{ph:'Optional'});
+  var g2=edGroup(b);
+  var fFrom=edPickRow(g2,'From',accs,t?t.Account:'','Choose');
+  var fTo=edPickRow(g2,'To',accs,t?t.ToAccount:'','Choose');
+  var fCat=edPickRow(g2,'Category',catItems(xferCats),(t&&t.Category)||defCat,'Choose');
+  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate()); fDate.className='ed-in ed-date';
+  edRow(g2,'Date',fDate);
   // Prefilled only when it's a real cross-currency override — mirroring Amount back into
   // the field would re-send a stale ToAmount on an amount edit (server mirrors when blank).
-  var fToAmt=inputEl('number', (t&&Number(t.ToAmount)!==Number(t.Amount))?amtField(t.ToAmount):'', 'same as amount'); fToAmt.step='0.01';
-  var fDesc=inputEl('text', t?t.Description:'', 'Description');
+  var toAmt=(t&&t.ToAmount!=null&&t.ToAmount!==''&&Number(t.ToAmount)!==Number(t.Amount))?amtField(t.ToAmount):'';
+  var fPeriod, fToAmt;
+  edMore(b,!!((t&&t.Period)||toAmt!==''),function(g){
+    fPeriod=edPickRow(g,'Reports in',periodItems(),(t&&t.Period)||'');
+    fToAmt=edInput(g,'To amount',toAmt,{num:true,ph:'Same as amount'});
+    b.insertBefore(el('div','ed-foot','Reports in books the row into another month. To amount is for a cross-currency transfer only.'),g.nextSibling);
+  });
+  if(isEdit) edDelete(page,t);
+  fFrom.onpick=function(){ fAmt.cur(acctCurrency(fFrom.value)); };
+  fAmt.cur(fFrom.value?acctCurrency(fFrom.value):'');
+  draft=function(){ return {Date:fDate.value,Period:fPeriod?fPeriod.value:(t&&t.Period)||'',Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''}; };
 
-  var body=el('div');
-  if(!isEdit) body.appendChild(typeToggleEl('xfer',function(){
-    openTxModal({Date:fDate.value,Period:fPeriod.value,Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
-  }));
-  body.appendChild(periodRowEl(fDate, fPeriod));
-  body.appendChild(fieldEl('Category', fCat));
-  var rowAcc=el('div','field-row');
-  rowAcc.appendChild(fieldEl('From', fFrom));
-  rowAcc.appendChild(fieldEl('To', fTo));
-  body.appendChild(rowAcc);
-  var rowAmt=el('div','field-row');
-  rowAmt.appendChild(fieldEl('Amount', fAmt));
-  rowAmt.appendChild(fieldEl('To amount', fToAmt, 'cross-currency only'));
-  body.appendChild(rowAmt);
-  body.appendChild(fieldEl('Description', fDesc));
-
-  var save=el('button','btn primary', isEdit?'Save':'Add transfer');
-  save.onclick=function(){
+  function doSave(){
     if(fFrom.value===fTo.value){toast('From and To must differ','err');return;}
-    var amount=parseFloat(fAmt.value);
+    var amount=edNum(fAmt);
     if(isNaN(amount)){toast('Enter an amount','err');return;}
     var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
-    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
-    if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
+    var period=fPeriod?fPeriod.value:(t&&t.Period)||'';
+    if(period||isEdit) payload.Period=period; // on edit, '' clears the override
+    if(fToAmt&&fToAmt.value) payload.ToAmount=edNum(fToAmt);
     // No prefSet here: 'lastAcct' defaults the tx modal's Account, and a transfer's
     // From is not that — it would make the next expense default to wherever you last
     // moved money out of.
     commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransfer',
               addedMsg:'Transfer added', failMsg:'Transfer failed', reopen:openTransferModal});
-  };
-  openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, modalFoot(save, isEdit, t)));
-  // Category is prefilled (default or carried over) → start at From; only focus Category if it's empty.
-  if(!isEdit) focusCombo(fCat.value?fFrom:fCat);
+  }
+  edEnter(page,doSave);
+  openEditor(page);
+  if(!isEdit&&!fAmt.value&&matchMedia('(pointer:fine)').matches) fAmt.focus();
 }
 
 function confirmDelete(t){
@@ -3244,7 +3373,7 @@ function confirmDelete(t){
     // Optimistic: close instantly and show the row as "loading". It's removed from
     // the list only once the backend confirms; on failure it reverts to a normal row.
     S.tx.pendingDeletes[t.ID]=true;
-    closeModal();
+    closeModal(); closeEditor();
     repaintTxList();
     gs('api_deleteTransaction',{ID:t.ID}).then(function(){
       delete S.tx.pendingDeletes[t.ID]; toast('Deleted','ok'); afterMutation();
@@ -3253,7 +3382,7 @@ function confirmDelete(t){
       if(S.screen==='transactions') repaintTxList(); else render();
     });
   };
-  var no=el('button','btn','Cancel'); no.onclick=function(){ openTxModal(t); };
+  var no=el('button','btn','Cancel'); no.onclick=closeModal;   // the editor, if open, is still underneath
   openModal(modalShell('Confirm delete', body, [no,yes]));
 }
 
