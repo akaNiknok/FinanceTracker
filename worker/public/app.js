@@ -1041,7 +1041,7 @@ function historyTile(cf,ser,isLive){
   var plot=el('div','hist-plot');
   plot.appendChild(el('div','hist-lg','<b>Net worth</b>'+key('var(--accent)','Liquid')+key('var(--gro)','Invested')));
   var h1=el('div'); plot.appendChild(h1);
-  plot.appendChild(el('div','hist-lg','<b>Cash flow</b>'+key('var(--chart-in)','In (left)')+key('var(--chart-out)','Out (right)')));
+  plot.appendChild(el('div','hist-lg','<b>Cash flow</b>'+key('var(--chart-in)','In')+key('var(--chart-out)','Out')));
   var h2=el('div'); plot.appendChild(h2);
   var line=el('div','hist-line'), tipBox=el('div','hist-tip'), hit=el('div','hist-hit');
   line.hidden=tipBox.hidden=true;
