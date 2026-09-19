@@ -1,5 +1,5 @@
 // Render the app icon -> worker/public/icon-180.png (apple-touch + favicon) and
-// icon-512.png (manifest). `npm run icons`; only needed if ICON below changes.
+// icon-512.png (manifest), each with a -dark twin. `npm run icons`; only needed if the SVG below changes.
 // Uses the Chrome/Edge already on the machine as the renderer, so there is no image
 // dependency to install. The art is the SVG in this file — there is no binary master.
 // Deliberately square with a full-bleed fill: iOS rounds the apple-touch-icon itself and
@@ -22,17 +22,23 @@ const GLYPH = 58;
 // ascent/descent, which for a caps-only glyph sits ~6.55% of the font size too low. Hence
 // the lift below, measured by pixel-scanning the rendered ink box and verified to hold at
 // font sizes 48/58/66/72 (residual <0.1 unit), so changing GLYPH alone stays centred.
-const ICON = `<svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+// Two variants, same geometry: light = white ink on the accent gradient; dark (iOS 18 style)
+// = the accent gradient as the ink on a near-black tile (#1C1C1E -> #000, the dark --card/--bg).
+// index.html swaps the favicon and apple-touch-icon to the -dark files in the dark theme.
+const icon = (bg0, bg1, ink0, ink1) => `<svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
   <defs><linearGradient id="g" x1=".33" y1="0" x2=".67" y2="1">
-    <stop offset="0" stop-color="#4A86FF"/><stop offset="1" stop-color="#1D4ED8"/>
+    <stop offset="0" stop-color="${bg0}"/><stop offset="1" stop-color="${bg1}"/>
+  </linearGradient><linearGradient id="i" x1=".33" y1="0" x2=".67" y2="1">
+    <stop offset="0" stop-color="${ink0}"/><stop offset="1" stop-color="${ink1}"/>
   </linearGradient></defs>
   <rect width="96" height="96" fill="url(#g)"/>
-  <path d="M10 74 L30 60 L44 66 L86 30" fill="none" stroke="#fff" stroke-opacity=".18"
+  <path d="M10 74 L30 60 L44 66 L86 30" fill="none" stroke="url(#i)" stroke-opacity=".18"
     stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="48" y="${48 - 0.0655 * GLYPH}" font-size="${GLYPH}" font-weight="700" fill="#fff"
+  <text x="48" y="${48 - 0.0655 * GLYPH}" font-size="${GLYPH}" font-weight="700" fill="url(#i)"
     text-anchor="middle" dominant-baseline="central"
     font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">&#8369;</text>
 </svg>`;
+const ICONS = { '': icon('#4A86FF', '#1D4ED8', '#fff', '#fff'), '-dark': icon('#1C1C1E', '#000', '#6FA0FF', '#2463EB') };
 const BROWSERS = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -44,10 +50,10 @@ const BROWSERS = [
 const chrome = BROWSERS.find((p) => fs.existsSync(p));
 if (!chrome) throw new Error('No Chrome/Edge found; add its path to BROWSERS in icons.js');
 
-for (const size of SIZES) {
-  const wrap = path.join(os.tmpdir(), `ft-icon-${size}.html`);
+for (const [suffix, ICON] of Object.entries(ICONS)) for (const size of SIZES) {
+  const wrap = path.join(os.tmpdir(), `ft-icon-${size}${suffix}.html`);
   fs.writeFileSync(wrap, `<style>*{margin:0;padding:0}svg{display:block;width:${size}px;height:${size}px}</style>${ICON}`);
-  const out = path.join(OUT_DIR, `icon-${size}.png`);
+  const out = path.join(OUT_DIR, `icon-${size}${suffix}.png`);
   execFileSync(chrome, ['--headless', '--disable-gpu', '--hide-scrollbars',
     `--screenshot=${out}`, `--window-size=${size},${size}`, wrap], { stdio: 'ignore' });
   fs.unlinkSync(wrap);

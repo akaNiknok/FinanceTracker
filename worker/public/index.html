@@ -55,6 +55,8 @@
     </script>
     <meta name="apple-mobile-web-app-title" content="Finance">
     <meta name="theme-color" content="#F2F2F7">
+    <link rel="icon" href="/icon-180.png" sizes="180x180" type="image/png">
+    <link rel="apple-touch-icon" href="/icon-180.png">
     <!-- Theme before first paint, so the page never flashes the wrong one. ft.theme is
          'light' | 'dark' | absent (= Auto, follow the system). applyTheme in app.js
          does the same after a switch; keep the two in step. -->
@@ -64,10 +66,11 @@
       if(t==='light'||t==='dark') document.documentElement.dataset.theme=t;
       var dark=t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);
       document.querySelector('meta[name=theme-color]').content=dark?'#000000':'#F2F2F7';
+      // The icon follows the theme too. iOS reads apple-touch-icon at Add to Home Screen, so
+      // the installed icon is the theme at install time; the manifest has no dark variant.
+      document.querySelectorAll('link[rel=icon],link[rel=apple-touch-icon]').forEach(function(l){ l.href=dark?'/icon-180-dark.png':'/icon-180.png'; });
     })();
     </script>
-    <link rel="icon" href="/icon-180.png" sizes="180x180" type="image/png">
-    <link rel="apple-touch-icon" href="/icon-180.png">
     <link rel="manifest" href="/manifest.json">
     <!-- System fonts only (DESIGN.md): nothing to download, works offline. -->
     <link rel="stylesheet" href="/app.css">
@@ -107,7 +110,7 @@
           <span class="brand-tile">&#8369;</span>
           <span class="brand-name">Finance</span>
           <!-- stamp-version.js writes this; test.js fails the build if it drifts. -->
-          <span class="brand-ver">v2.16.0</span>
+          <span class="brand-ver">v3.0.0</span>
         </div>
         <div class="nav-group">Overview</div>
         <button class="nav-item active" data-screen="dashboard" title="Summary"><svg class="ico" aria-hidden="true"><use href="#i-summary"/></svg><span class="nav-label">Summary</span></button>

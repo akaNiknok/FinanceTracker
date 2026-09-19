@@ -532,6 +532,7 @@ function applyTheme(pref, fade){
   if(pref==='auto') delete root.dataset.theme; else root.dataset.theme=pref;
   var m=$('meta[name=theme-color]'); if(m) m.content=THEME_BG[themeNow()];
   var now=themeNow();
+  document.querySelectorAll('link[rel=icon],link[rel=apple-touch-icon]').forEach(function(l){ l.href=now==='dark'?'/icon-180-dark.png':'/icon-180.png'; });
   document.querySelectorAll('.theme-btn').forEach(function(b){
     // The icon shows where a tap goes: a sun in dark, a moon in light.
     b.innerHTML=icon(now==='dark'?'sun':'moon');
@@ -591,7 +592,7 @@ window.addEventListener('offline',function(){ netSeen(false); });
 // Back online is not "synced": clear the flag, and let the next answer stamp the time.
 window.addEventListener('online',function(){ net.offline=false; syncUI(); });
 
-/* ════ The add field: type to add, search or jump (V3_PLAN Phase 4) ════
+/* ════ The add field: type to add, search or jump ════
  * parseAdd is the instant, local pass: the amount, the account (a name typed in full or
  * as a 3+ letter prefix), and the category the same description had last time
  * (getBootstrap.descCategory). Two accounts make a transfer only with "to" between
@@ -1083,7 +1084,7 @@ function labelStep(n,pw){ return Math.ceil(n/Math.max(1,Math.floor(pw/34))); }
 /* ════════════════════════════════════════════════════════════════════════
  *  SUMMARY (screen key `dashboard`) — the v3 tile grid (DESIGN.md "Layout").
  *  4 columns on PC, 2 on iPad, 1 on iPhone; the spans live in app.css (.sum).
- *  Every derived figure carries a tip() with its real formula (V3_PLAN "Numbers").
+ *  Every derived figure carries a tip() with its real formula (DESIGN.md tooltips).
  * ════════════════════════════════════════════════════════════════════════ */
 
 /* The FI countdown, short: "10y 1m". Rounded to WHOLE MONTHS first and split after,
