@@ -45,7 +45,7 @@ The build plan for the redesign. Each phase runs in its own Claude session. **De
 - **Not in the data, so leave out** (the mockups showed them): due dates on recurring rows (the `recurring` table has only `months_left` and `grp`), a card's payment due date, and a "Needs review" state (there is no reviewed flag; see Phase 3).
 
 ## Phases
-### Phase 1 — Foundation and shell  ☐
+### Phase 1 — Foundation and shell  ☑
 Goal: every existing screen runs in the new frame, with no content redesign yet.
 - `app.css`: replace the token block with DESIGN.md's light/dark tokens (`:root`, `[data-theme=dark]`, and `prefers-color-scheme` under `:root:not([data-theme=light])`). Map the old token names onto the new ones first, so the old screens restyle without edits. Then delete the old names that nothing uses.
 - Theme: Auto / Light / Dark in `localStorage` (`ft.theme`). Apply it in the `index.html` head script before first paint, so the page never flashes the wrong theme. `<meta name="theme-color">` follows the theme. Add the ⌘⇧L / Ctrl Shift L shortcut.

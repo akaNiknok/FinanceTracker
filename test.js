@@ -681,6 +681,16 @@ describe('Gmail courier watermark (vm)', () => {
       vm.createContext(app);
       vm.runInContext(fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8'), app, { filename: 'app.js' });
       assert.ok(app.SCREEN_FNS.admin, 'the Admin screen is not registered');
+      // The shell's sync words: a queue always shows, offline wins over "Synced".
+      assert.strictEqual(app.syncText(false, 0, 0, 0), 'Synced');
+      assert.strictEqual(app.syncText(false, 0, 1000, 1000 + 30e3), 'Synced just now');
+      assert.strictEqual(app.syncText(false, 0, 0 + 1, 5 * 60e3 + 1), 'Synced 5 min ago');
+      assert.strictEqual(app.syncText(true, 0, 1, 2), 'Offline');
+      assert.strictEqual(app.syncText(true, 2, 1, 2), 'Offline · 2 waiting to sync');
+      // The tooltip body escapes its inputs and bolds only the result rows.
+      const tipH = app.tipHTML({ title: 'A<b>', rows: [['In', '1'], ['Out', '2', true]], note: 'n' });
+      assert.ok(tipH.includes('A&lt;b&gt;') && !tipH.includes('A<b>'), 'tipHTML must escape');
+      assert.strictEqual((tipH.match(/class="b"/g) || []).length, 2, 'only the bold row carries class b');
       // A new transaction defaults to the date the list is filtered to, not today.
       app.S.screen = 'transactions'; app.S.tx.filters = { date: '2026-02-14' };
       assert.strictEqual(app.newTxDate(), '2026-02-14');

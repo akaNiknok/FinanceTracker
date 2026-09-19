@@ -17,6 +17,7 @@ Tokens live on `:root` in `app.css`. Light is the default. `[data-theme=dark]` a
 | `--bg` | `#F2F2F7` | `#000000` | Page ground |
 | `--card` | `#FFFFFF` | `#1C1C1E` | Tiles, lists, sheets |
 | `--card-2` | `#E4E4EA` | `#2C2C2E` | Fields, segmented tracks, secondary fills |
+| `--card-3` | `#D8D8DE` | `#3A3A3C` | Hover and pressed state of a `--card-2` fill, scrollbar thumb |
 | `--text` | `#1C1C1E` | `#F5F5F7` | Primary text and amounts |
 | `--dim` | `#6C6C70` | `#A1A1A6` | Secondary text. It passes 4.5:1 on `--card`. There is no lighter text grey. |
 | `--sep` | `#E5E5EA` | `#38383A` | Hairlines between rows |
@@ -29,8 +30,10 @@ Tokens live on `:root` in `app.css`. Light is the default. `[data-theme=dark]` a
 | `--rew` | `#D97706` | `#FF9F0A` | Rewards segment |
 | `--gro` | `#7C5CFA` | `#BF5AF2` | Growth segment and the invested series |
 | `--chart-in` / `--chart-out` | `#1F9D6B` / `#D95757` | `#30D158` / `#FF453A` | Cash-flow bars |
-| `--tip` | `#1C1C1E` | `#3A3A3C` | Tooltip and bulk-bar background (text on it is always `#F5F5F7`) |
-Each semantic token also has a `-tint` variant: a 12–18% wash for chip and icon-tile backgrounds.
+| `--tip` | `#1C1C1E` | `#3A3A3C` | Tooltip, toast, chart tooltip and bulk-bar background (text on it is always `#F5F5F7`) |
+| `--side` / `--side-sel` | `#ECECF0` / `#DCDCE3` | `#111113` / `#2C2C2E` | Sidebar and rail ground / selected nav item |
+| `--bar` | `rgba(249,249,251,.94)` | `rgba(18,18,20,.94)` | Tab bar (blurred) |
+Each semantic token also has a `-tint` variant: a 12–18% wash for chip and icon-tile backgrounds. `app.css` derives it with `color-mix()`, so a tint follows its theme with no second value.
 Rules:
 - **Amounts.** An expense is plain `--text` with a "−". Income is `--pos` with a "+". A transfer is plain text with no sign. Red is never the colour of ordinary spending.
 - **Colour is never the only channel.** In/out bars keep a fixed position (in left, out right) and a legend. A status also has a word ("Limit reached", "Funded ✓").

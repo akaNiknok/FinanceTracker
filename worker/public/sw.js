@@ -9,10 +9,9 @@
  * gs() sees a real failure and can queue the write.
  */
 const CACHE = 'ft-shell';
-// The two Inter subsets are shell files now, not a Google Fonts round trip: that is
-// what makes the app render in its own typeface offline instead of the fallback stack.
-const SHELL = ['/', '/app.css', '/app.js', '/manifest.json',
-               '/fonts/inter-latin.woff2', '/fonts/inter-latin-ext.woff2'];
+// No font files: the app uses the system font stack (DESIGN.md), so text renders
+// offline with nothing cached for it.
+const SHELL = ['/', '/app.css', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE)
@@ -29,8 +28,7 @@ self.addEventListener('activate', function (e) {
 
 self.addEventListener('fetch', function (e) {
   const url = new URL(e.request.url);
-  // Cross-origin (the Inter webfont) falls through to the browser, which already
-  // has the system-font fallback in --font when it can't be fetched.
+  // Cross-origin requests fall through to the browser untouched.
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   if (url.pathname === '/api' || url.pathname === '/login') return;
 
