@@ -351,6 +351,7 @@ export async function getRecurring(args, env) {
   })) };
 }
 
+const TX_SOURCES = ['tg', 'gm', 'ui', 'interest'];   // id prefixes; see telegram.js logItems and app.js gs()
 export async function listTransactions(args, env) {
   const r = await refs(env);
   const where = ['1 = 1'], bind = [];
@@ -365,6 +366,20 @@ export async function listTransactions(args, env) {
   // The v1 haystack was Description + " " + Category, matched as one string — keep it
   // concatenated so a term spanning the two still matches. LIKE is ASCII-case-insensitive.
   if (args.search) add("(COALESCE(t.description,'') || ' ' || c.name) LIKE ?", '%' + String(args.search) + '%');
+  // Amount bounds are peso magnitudes. On a share-priced source amount_php_u is a share
+  // QUANTITY (NOT_SHARES_SRC), so a bounded search leaves those rows out rather than
+  // matching 2 shares as 2 pesos.
+  const minU = parseFloat(args.minAmount), maxU = parseFloat(args.maxAmount);
+  if (!isNaN(minU) || !isNaN(maxU)) add(NOT_SHARES_SRC);
+  if (!isNaN(minU)) add('ABS(t.amount_php_u) >= ?', toU(minU));
+  if (!isNaN(maxU)) add('ABS(t.amount_php_u) <= ?', toU(maxU));
+  // Where a row came from is its id prefix; anything else is legacy (sheet-era ids).
+  if (args.source) {
+    const src = String(args.source);
+    if (TX_SOURCES.includes(src)) add('t.id LIKE ?', src + '-%');
+    else if (src === 'legacy') add(TX_SOURCES.map(() => 't.id NOT LIKE ?').join(' AND '), ...TX_SOURCES.map((x) => x + '-%'));
+    else throw new Error('Unknown source: ' + src);
+  }
 
   const from = ' FROM transactions t JOIN categories c ON c.id = t.category_id ' +
                'JOIN accounts a ON a.id = t.account_id LEFT JOIN accounts ta ON ta.id = t.to_account_id ' +
@@ -374,13 +389,16 @@ export async function listTransactions(args, env) {
   // rowid desc as the tie-break = insertion order, matching v1's __row tie-break, so
   // two same-day rows still show latest-entered first.
   const [cnt, page] = await env.DB.batch([
-    env.DB.prepare('SELECT COUNT(*) AS n' + from).bind(...bind),
+    // net = income − expense over the WHOLE filtered set, not the page: the Activity
+    // header's "N results · ₱X". Transfers move money, they do not add or spend it.
+    env.DB.prepare("SELECT COUNT(*) AS n, SUM(CASE c.type WHEN 'Income' THEN t.amount_php_u " +
+                   "WHEN 'Expense' THEN -t.amount_php_u ELSE 0 END) AS net" + from).bind(...bind),
     env.DB.prepare('SELECT t.*' + from + ' ORDER BY t.date DESC, t.rowid DESC LIMIT ? OFFSET ?')
       .bind(...bind, limit, offset)
   ]);
   return {
     status: 'success',
-    total: cnt.results[0].n, offset, limit,
+    total: cnt.results[0].n, net: fromU(cnt.results[0].net || 0), offset, limit,
     transactions: page.results.map((row) => shapeTx(row, r))
   };
 }
@@ -941,6 +959,7 @@ export async function getBootstrap(args, env) {
     recurring: recurring.rows,
     fxUsdPhp: fx.USD || null,
     widgetAccounts: widgetNames(meta[WIDGET_META]),   // the Accounts screen's widget picker
+    smartLists: smartLists(meta[SMART_META]),         // Activity's saved filters
     // Oldest ledger month, so the month pickers reach all history.
     minMonth: minRow && minRow.d ? monthOf(minRow.d) : null
   };
@@ -1003,6 +1022,34 @@ export async function setWidgetAccounts(args, env) {
   });
   await metaSet(env, WIDGET_META, JSON.stringify(canon));
   return { status: 'success', widgetAccounts: canon };
+}
+
+// ── Activity smart lists ─────────────────────────────────────────────────────
+/** meta key holding the saved filter sets: JSON [{name, filters}], at most 20. */
+const SMART_META = 'smart_lists';
+const SMART_KEYS = ['month', 'date', 'type', 'category', 'segment', 'account', 'source',
+                    'minAmount', 'maxAmount', 'search'];
+export function smartLists(v) {
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.slice(0, 20) : []; }
+  catch (e) { return []; }
+}
+
+/** POST {lists:[{name, filters}]} — replaces the whole set; the SPA sends it back edited. */
+export async function setSmartLists(args, env) {
+  const lists = Array.isArray(args.lists) ? args.lists : [];
+  if (lists.length > 20) throw new Error('Keep at most 20 smart lists.');
+  const canon = lists.map((l) => {
+    const name = String((l && l.name) || '').trim().slice(0, 40);
+    if (!name) throw new Error('A smart list needs a name.');
+    const filters = {};
+    SMART_KEYS.forEach((k) => {
+      const v = l.filters && l.filters[k];
+      if (v != null && v !== '') filters[k] = String(v);
+    });
+    return { name, filters };
+  });
+  await metaSet(env, SMART_META, JSON.stringify(canon));
+  return { status: 'success', smartLists: canon };
 }
 
 // ── ledger (Tax screen) ──────────────────────────────────────────────────────

@@ -66,7 +66,7 @@ Done when: every screen works at the 3 widths × 2 themes with the new chrome, t
 - Keep the month picker, `wide` spans, and the rAF chart mount rule (the skill explains why).
 Done when: seed-data figures match the old dashboard exactly, every tooltip's inputs add up, and inspect works with the mouse and with touch.
 
-### Phase 3 — Activity and filters  ☐
+### Phase 3 — Activity and filters  ☑
 - Frontend: `renderTransactions` becomes Activity.
   - A token search field: typing suggests Category / Account / Month / Type / Amount / Source / Text tokens. The token grammar is a pure helper (`parseTokens`), with tests.
   - The Spent / Earned / Moved segmented control.

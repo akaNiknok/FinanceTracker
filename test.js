@@ -744,6 +744,34 @@ describe('Gmail courier watermark (vm)', () => {
       assert.strictEqual(app.groupByDay([refund])[0].net, 95, 'a refund ADDS to the day net');
       assert.strictEqual(app.groupByDay([{ Date: '2026-08-25', Type: 'Expense', Amount: 95,
                                            'Amount (PHP)': 95 }])[0].net, -95);
+      // Activity's token grammar: quotes, comparisons and ISO dates are exact; a word
+      // offers every reading, best first, and Text always comes last.
+      const ctx = { categories: ['Food: Groceries', 'Transport: Fuel'], accounts: ['GCash', 'Wise'],
+                    segments: ['Essentials', 'Growth'], now: new Date(2026, 8, 19) };
+      const P = (q) => JSON.parse(JSON.stringify(app.parseTokens(q, ctx)));   // vm-realm arrays
+      assert.deepStrictEqual(P('"grab car"'), [{ k: 'search', v: 'grab car' }]);
+      assert.deepStrictEqual(P('>500'), [{ k: 'minAmount', v: '500' }]);
+      assert.deepStrictEqual(P('≤ 1.5k'), [{ k: 'maxAmount', v: '1500' }]);
+      assert.deepStrictEqual(P('2026-09-18'), [{ k: 'date', v: '2026-09-18' }]);
+      assert.deepStrictEqual(P('aug')[0], { k: 'month', v: '2026-Aug' });
+      assert.deepStrictEqual(P('oct')[0], { k: 'month', v: '2025-Oct' }, 'a bare month is never in the future');
+      assert.deepStrictEqual(P('march 2024')[0], { k: 'month', v: '2024-Mar' });
+      assert.deepStrictEqual(P('this month')[0], { k: 'month', v: '2026-Sep' });
+      assert.ok(P('transfer').some((t) => t.k === 'type' && t.v === 'Transfer'));
+      assert.ok(P('gmail').some((t) => t.k === 'source' && t.v === 'gm'));
+      assert.ok(P('gro').some((t) => t.k === 'category' && t.v === 'Food: Groceries'));
+      assert.ok(P('gro').some((t) => t.k === 'segment' && t.v === 'Growth'));
+      assert.ok(P('300').some((t) => t.k === 'minAmount' && t.v === '300'), 'a bare number is "at least"');
+      assert.deepStrictEqual(P('gcash').pop(), { k: 'search', v: 'gcash' });
+      assert.deepStrictEqual(P('  '), []);
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(app.activeTokens({ month: '', type: 'Expense', minAmount: '300' }))),
+                             [{ k: 'type', v: 'Expense' }, { k: 'minAmount', v: '300' }], 'month "" means all months: no token');
+      assert.strictEqual(app.tokenText('month', '2026-Sep'), 'September 2026');
+      assert.strictEqual(app.tokenText('type', 'Transfer'), 'Moved');
+      // A smart list without a month is every month, never the Summary's month.
+      assert.strictEqual(app.filterSig(app.listFilters({ filters: { source: 'gm' } })), app.filterSig({ month: '', source: 'gm' }));
+      assert.strictEqual(app.fmtNet(-3758.4), '−₱3,758');
+
       app.S.tx = { pendingEdits: { r1: { ID: 'r1', Amount: -50 } } };
       assert.strictEqual(app.withPendingEdit(refund).Amount, -50, 'an in-flight edit keeps the sign');
       assert.strictEqual(app.withPendingEdit(refund)['Amount (PHP)'], -50);
