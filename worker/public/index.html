@@ -21,15 +21,19 @@
     (function(){
       var probe=document.createElement('div');
       probe.style.cssText='position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top)';
-      // ponytail: screen.height is the only value that knows the real height. The equality
+      // ponytail: screen size is the only value that knows the real height. The equality
       // is the guard, not a device sniff — it holds *only* in the short-window mismatch, so
-      // a fixed iOS, a Safari tab, iPad, landscape and every other platform fall through to
-      // innerHeight untouched. Delete the whole thing if Apple ever aligns the two.
+      // a fixed iOS, a Safari tab and every other platform fall through to innerHeight
+      // untouched. iOS never swaps screen.width/height on rotation, so the side along the
+      // current height is picked first — without that, iPad landscape fell through and
+      // the shell ended one top inset short of the screen bottom (a bare strip under the
+      // content). Delete the whole thing if Apple ever aligns the two.
       function fitShell(){
         document.documentElement.appendChild(probe);
         var top=parseFloat(getComputedStyle(probe).paddingTop)||0;
         probe.remove();
-        var h=(screen.height===window.innerHeight+top)?screen.height:window.innerHeight;
+        var sh=innerWidth>innerHeight?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height);
+        var h=(sh===window.innerHeight+top)?sh:window.innerHeight;
         document.documentElement.style.setProperty('--app-h',h+'px');
       }
       fitShell();
