@@ -879,18 +879,25 @@ export async function getInvestments(args, env) {
   // (isInvestedNetWorth: IB01-as-EF counts, growth tickers don't) minus receivables
   // (money lent is not reachable in an emergency) minus credit balances.
   // ponytail: targetMonths is the doc's fixed 4-month rule; make it a meta key if it ever moves.
-  const efPhp = accounts.reduce((s, a) => {
-    if (a.isLiability) return s - (a.balancePhp || 0);
-    if (isInvestedNetWorth(a)) return s;
+  // The pool in its four parts, so the Summary tooltip can show the sum it is (v3).
+  // `parts` are signed as they add: credit and owed are negative.
+  const parts = { cashPhp: 0, efSharesPhp: 0, creditPhp: 0, owedPhp: 0 };
+  accounts.forEach((a) => {
+    const b = a.balancePhp || 0;
+    if (a.isLiability) parts.creditPhp -= b;
+    else if (isInvestedNetWorth(a)) return;
     // A receivable is asymmetric on purpose: money LENT is not reachable in an
     // emergency, so a positive balance adds nothing — but a NEGATIVE one is money the
     // owner owes, and a debt does shorten the runway. Excluding both hid ₱13.6k of it.
-    if (isReceivable(a)) return s + Math.min(0, a.balancePhp || 0);
-    return s + (a.balancePhp || 0);
-  }, 0);
+    else if (isReceivable(a)) parts.owedPhp += Math.min(0, b);
+    else if (a.isShares) parts.efSharesPhp += b;
+    else parts.cashPhp += b;
+  });
+  const efPhp = parts.cashPhp + parts.efSharesPhp + parts.creditPhp + parts.owedPhp;
+  Object.keys(parts).forEach((k) => { parts[k] = q2(parts[k]); });
   const avg = spendQ.results[0] && spendQ.results[0].s ? fromU(spendQ.results[0].s) / monthKeys.length : 0;
   const runway = {
-    efPhp: q2(efPhp),
+    efPhp: q2(efPhp), parts,
     avgMonthlyExpensePhp: q2(avg),
     months: avg ? Math.round(efPhp / avg * 10) / 10 : null,
     targetMonths: 4,

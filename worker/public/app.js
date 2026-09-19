@@ -250,7 +250,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 10;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 11;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -393,18 +393,6 @@ function monthPickerEl(){
     Promise.resolve(render()).then(function(){ var n=$('.month-picker'); if(n) n.focus(); });
   };
   return mp;
-}
-// Chart window picker. A native <select> on purpose — same control, same styling
-// and same keyboard behaviour as the month picker beside it.
-function rangePickerEl(){
-  var sel=el('select','month-picker range-picker'); sel.title='Chart range';
-  [6,12,24].forEach(function(n){ var o=el('option'); o.value=n; o.textContent=n+'m'; sel.appendChild(o); });
-  sel.value=S.cfMonths;
-  sel.onchange=function(){
-    S.cfMonths=+sel.value; prefSet('cfMonths',sel.value);
-    Promise.resolve(render()).then(function(){ var n=$('.range-picker'); if(n) n.focus(); });
-  };
-  return sel;
 }
 function buildMonthList(){
   var out=[], now=new Date();
@@ -806,35 +794,6 @@ function barPath(x,y,w,h,r){
   return 'M'+x+' '+(y+h)+' V'+(y+r)+' Q'+x+' '+y+' '+(x+r)+' '+y+' H'+(x+w-r)+
          ' Q'+(x+w)+' '+y+' '+(x+w)+' '+(y+r)+' V'+(y+h)+' Z';
 }
-// 6-point sparkline: de-emphasis stroke, current period as an accent dot.
-function sparklineSVG(values,h){
-  if(!values || values.length<2) return null;
-  var w=110; h=h||26; var pad=4;
-  var max=Math.max.apply(null,values), min=Math.min.apply(null,values);
-  if(max===min) max=min+1;
-  var pts=values.map(function(v,i){
-    return [pad+i*(w-2*pad)/(values.length-1), h-pad-(v-min)/(max-min)*(h-2*pad)];
-  });
-  var svg=svgEl('svg',{class:'chart-svg stat-spark',viewBox:'0 0 '+w+' '+h,'aria-hidden':'true'});
-  svg.appendChild(svgEl('polyline',{points:pts.map(function(p){return p.join(',');}).join(' '),
-    fill:'none',stroke:'var(--dim)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
-  var lp=pts[pts.length-1];
-  svg.appendChild(svgEl('circle',{cx:lp[0],cy:lp[1],r:3.5,fill:'var(--accent)',stroke:'var(--card)','stroke-width':2}));
-  return svg;
-}
-// Delta pill: arrow follows direction, color follows whether the move is GOOD
-// (spending up = red, income up = green — semantic color, not raw direction).
-function deltaEl(cur,prev,upIsGood,vsLabel){
-  if(cur==null||prev==null||!isFinite(prev)||prev<=0) return null;
-  var ch=(cur-prev)/prev*100;
-  var dir=ch>0.5?'up':(ch<-0.5?'down':'flat');
-  var cls=dir==='flat'?'flat':(((dir==='up')===!!upIsGood)?'up':'down');
-  var arrow=dir==='up'?'▲':(dir==='down'?'▼':'·');
-  var s=el('span','delta '+cls,arrow+' '+Math.abs(Math.round(ch))+'%'+
-    (vsLabel?' <span style="opacity:.72;font-weight:500">'+esc(vsLabel)+'</span>':''));
-  s.style.marginTop='8px';
-  return s;
-}
 // A per-month net-worth series. Prefers the REAL monthly snapshot (`snaps[month]`,
 // from nw_snapshots — captures FX/market moves); where a month has none yet it
 // estimates and flags `real:false`. Live month always uses `current`.
@@ -853,526 +812,343 @@ function netWorthSeries(cf,current,snaps,roll){
   }
   return out;
 }
-// Cash-flow columns (income vs spending) + an optional net-worth line overlaid
-// on a SECOND axis (right). Two axes because net worth dwarfs the monthly flows
-// by ~10× — one shared scale would flatten whichever series it isn't zeroed for.
-// `ns` (netWorthSeries output) omitted → plain cash-flow chart, no right axis.
-// `width` = the host's real pixel width, so SVG text renders at 1:1 scale
-// (a fixed viewBox scaled down would shrink labels below legibility).
 // Months to skip between x-axis labels so a 24-month window does not smear them
 // into each other. ~34px is a 3-letter month plus air.
 function labelStep(n,pw){ return Math.ceil(n/Math.max(1,Math.floor(pw/34))); }
-function cashflowChart(cf,width,ns){
-  var wrap=el('div','chart-wrap');
-  var legend=el('div','chart-legend');
-  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-in)"></span>Income</span>'+
-    '<span class="lg"><span class="lg-key" style="background:var(--chart-out)"></span>Spending</span>'+
-    (ns?'<span class="lg"><span class="lg-key" style="background:var(--accent);border-radius:1px;height:3px"></span>Liquid net worth</span>':'');
-  wrap.appendChild(legend);
-  var W=Math.max(300,width||640),H=200,L=48,R=ns?52:6,T=10,B=26,pw=W-L-R,ph=H-T-B;
-  var max=0; cf.forEach(function(m){max=Math.max(max,m.income,m.expense);});
-  max=niceCeil(max);
-  // Right axis spans the net-worth data range (not 0) so the trend is visible.
-  var lo=0,hi=1;
-  if(ns){ var v=ns.map(function(p){return p.nw;}); hi=Math.max.apply(null,v); lo=Math.min.apply(null,v);
-    if(hi===lo) hi=lo+1; var pad=(hi-lo)*0.12; hi+=pad; lo-=pad;
-    // A floating right axis puts its own zero somewhere mid-chart, so a NEGATIVE
-    // net worth still draws above the left axis's baseline ₱0 and reads positive.
-    // Keep zero inside the range and mark it (below), so the sign is visible.
-    if(lo<0) hi=Math.max(hi,0); }
-  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':(ns?'Cash flow and liquid net worth':'Cash flow — income vs spending')+', last '+cf.length+' months'});
-  [0,.5,1].forEach(function(f){
-    var y=T+ph-f*ph;
-    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--sep)','stroke-width':1}));
-    var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
-    if(ns){ var rt=svgEl('text',{x:W-R+8,y:y+3.5,'text-anchor':'start',fill:'var(--dim)'});
-      rt.textContent=compactPhp(lo+(hi-lo)*f); svg.appendChild(rt); }
-  });
-  // The right axis's own zero: dashed, so a net-worth line below it reads as negative.
-  if(ns && lo<0 && hi>0){
-    var zy=T+ph-(0-lo)/(hi-lo)*ph;
-    svg.appendChild(svgEl('line',{x1:L,y1:zy,x2:W-R,y2:zy,stroke:'var(--accent)','stroke-width':1,
-      'stroke-dasharray':'3 3','stroke-opacity':0.45}));
-    // Label only when it will not sit on top of a tick label.
-    if([0,.5,1].every(function(f){ return Math.abs(zy-(T+ph-f*ph))>10; })){
-      var zt=svgEl('text',{x:W-R+8,y:zy+3.5,'text-anchor':'start',fill:'var(--dim)'});
-      zt.textContent=compactPhp(0); svg.appendChild(zt);
-    }
-  }
-  var band=pw/cf.length, bw=Math.min(20,band*0.26), lblStep=labelStep(cf.length,pw);
-  var cx=cf.map(function(m,i){ return L+band*i+band/2; });
-  var tip=el('div','chart-tip'); tip.hidden=true;
-  cf.forEach(function(m,i){
-    var hI=m.income/max*ph, hS=m.expense/max*ph;
-    if(hI>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]-bw-1,T+ph-hI,bw,hI),fill:'var(--chart-in)'}));
-    if(hS>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]+1,T+ph-hS,bw,hS),fill:'var(--chart-out)'}));
-    // Long windows: label every Nth month, counting back from the newest, so the
-    // current month always keeps its (bold) label.
-    if((cf.length-1-i)%lblStep===0){
-      var lbl=svgEl('text',{x:cx[i],y:H-8,'text-anchor':'middle'});
-      if(i===cf.length-1){ lbl.setAttribute('fill','var(--dim)'); lbl.setAttribute('font-weight','700'); }
-      lbl.textContent=String(m.month).split('-')[1]||m.month;
-      svg.appendChild(lbl);
-    }
-  });
-  // Net-worth line + dots on top of the bars.
-  var ly=ns?ns.map(function(p){ return T+ph-(p.nw-lo)/(hi-lo)*ph; }):null;
-  if(ns){
-    svg.appendChild(svgEl('polyline',{points:cx.map(function(x,i){return x+','+ly[i];}).join(' '),
-      fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
-    ns.forEach(function(p,i){
-      // Real snapshot / live point → filled dot; estimated (rolled-back) → hollow ring.
-      svg.appendChild(svgEl('circle',{cx:cx[i],cy:ly[i],r:i===ns.length-1?4:2.5,
-        fill:p.real?'var(--accent)':'var(--card)',stroke:p.real?'var(--card)':'var(--accent)','stroke-width':2}));
-    });
-  }
-  cf.forEach(function(m,i){
-    var topY=T+ph-Math.max(m.income,m.expense)/max*ph;
-    if(ns) topY=Math.min(topY,ly[i]);
-    var hit=svgEl('rect',{x:L+band*i,y:T,width:band,height:ph,fill:'transparent'});
-    function show(){
-      tip.innerHTML='<b>'+esc(monthLabel(m.month))+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-in)"></span>Income <b>'+money(m.income,true)+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-out)"></span>Spending <b>'+money(m.expense,true)+'</b>'+
-        (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Liquid net worth <b>'+money(ns[i].nw,true)+'</b>'+(ns[i].real?'':' <span style="opacity:.6">est.</span>'):'');
-      var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
-      var x=sr.left-wr.left+cx[i]/W*sr.width;
-      x=Math.max(78,Math.min(x,wr.width-78));
-      tip.style.left=x+'px';
-      tip.style.top=(sr.top-wr.top+topY/H*sr.height)+'px';
-      tip.hidden=false;
-    }
-    hit.addEventListener('mouseenter',show);
-    hit.addEventListener('click',show);                 // touch
-    hit.addEventListener('mouseleave',function(){ tip.hidden=true; });
-    svg.appendChild(hit);
-  });
-  svg.appendChild(svgEl('line',{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:'var(--sep)','stroke-width':1}));
-  wrap.appendChild(svg); wrap.appendChild(tip);
-  return wrap;
-}
-// Net worth as an area chart: INVESTED (always ≥0) is the base band 0→shares,
-// LIQUID is a signed ribbon shares→total on top, so the TOP edge is always the
-// true net worth (liquid + invested). Invested-at-the-bottom is what keeps this
-// honest when liquid is negative — carrying more debt than non-invested cash —
-// because then the ribbon dips BELOW the shares line down to the real net worth,
-// instead of a stacked bottom band that can't go under the axis. Y anchors at 0.
-// `liq`/`stk` are netWorthSeries outputs; `real` marks a snapshot vs estimate.
-// ponytail: axis floor is 0 — a month with NEGATIVE net worth would clip below
-// the baseline. Never happens in the data (net worth stays positive); revisit
-// the domain to min(0, …) if that changes.
-function netWorthAreaChart(liq,stk,width){
-  var wrap=el('div','chart-wrap');
-  var legend=el('div','chart-legend');
-  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--gro)"></span>Invested</span>'+
-    '<span class="lg"><span class="lg-key" style="background:var(--accent)"></span>Liquid</span>';
-  wrap.appendChild(legend);
-  var W=Math.max(300,width||640),H=200,L=48,R=14,T=10,B=26,pw=W-L-R,ph=H-T-B,n=liq.length;
-  var shr=stk.map(function(p){return Math.max(0,p.nw);});
-  var tot=liq.map(function(p,i){return p.nw+shr[i];});
-  // Axis must clear both the total line and the shares top (shares > total when liquid<0).
-  var max=niceCeil(Math.max.apply(null,tot.concat(shr).concat([1])));
-  var xf=function(i){ return n<2?L+pw/2:L+pw*i/(n-1); };
-  var yf=function(v){ return T+ph-v/max*ph; };
-  var x=liq.map(function(p,i){return xf(i);});
-  var yShr=shr.map(function(v){return yf(v);});
-  var yTot=tot.map(function(v){return yf(v);});
-  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img',
-    'aria-label':'Net worth by month — invested and liquid, last '+n+' months'});
-  // Vertical fades: a flat translucent slab over a dark card reads as mud, and
-  // two flat slabs read as one. ponytail: fixed gradient ids — one instance of
-  // this chart exists per page, and a duplicate would resolve to an identical def.
-  var defs=svgEl('defs',{});
-  [['nwInvGrad','var(--gro)',0.55,0.14],['nwLiqGrad','var(--accent)',0.45,0.10]].forEach(function(g){
-    var lg=svgEl('linearGradient',{id:g[0],x1:0,y1:0,x2:0,y2:1});
-    lg.appendChild(svgEl('stop',{offset:'0%','stop-color':g[1],'stop-opacity':g[2]}));
-    lg.appendChild(svgEl('stop',{offset:'100%','stop-color':g[1],'stop-opacity':g[3]}));
-    defs.appendChild(lg);
-  });
-  svg.appendChild(defs);
-  [0,.5,1].forEach(function(f){
-    var y=T+ph-f*ph;
-    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--sep)','stroke-width':1}));
-    var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
-  });
-  var base=T+ph;
-  // Invested base band (baseline → shares), then the signed liquid ribbon (shares → total).
-  svg.appendChild(svgEl('polygon',{points:L+','+base+' '+x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+(x[n-1])+','+base,
-    fill:'url(#nwInvGrad)'}));
-  svg.appendChild(svgEl('polygon',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+
-    x.slice().reverse().map(function(xi,i){var j=n-1-i;return xi+','+yTot[j];}).join(' '),
-    fill:'url(#nwLiqGrad)'}));
-  // Invested top edge: without a line of its own the two bands share a soft
-  // colour change and read as one smear.
-  svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' '),
-    fill:'none',stroke:'var(--gro)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
-  // Total (top-edge) line + real/estimate dots.
-  svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yTot[i];}).join(' '),
-    fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
-  liq.forEach(function(p,i){
-    svg.appendChild(svgEl('circle',{cx:x[i],cy:yTot[i],r:i===n-1?4:2.5,
-      fill:p.real?'var(--accent)':'var(--card)',stroke:p.real?'var(--card)':'var(--accent)','stroke-width':2}));
-  });
-  var tip=el('div','chart-tip'); tip.hidden=true;
-  var band=pw/Math.max(1,n-1), lblStep=labelStep(n,pw);
-  liq.forEach(function(p,i){
-    // First/last labels sit ON the axis ends — centred they collide with the
-    // y-axis labels and overflow the right edge.
-    if((n-1-i)%lblStep===0){
-      var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':i===0?'start':(i===n-1?'end':'middle')});
-      if(i===n-1){ lbl.setAttribute('fill','var(--dim)'); lbl.setAttribute('font-weight','700'); }
-      lbl.textContent=String(p.month).split('-')[1]||p.month;
-      svg.appendChild(lbl);
-    }
-    var hit=svgEl('rect',{x:i===0?L:x[i]-band/2,y:T,width:i===0||i===n-1?band/2:band,height:ph,fill:'transparent'});
-    function show(){
-      tip.innerHTML='<b>'+esc(monthLabel(p.month))+'</b><br>'+
-        '<span class="lg-key" style="background:var(--gro)"></span>Invested <b>'+money(shr[i],true)+'</b><br>'+
-        '<span class="lg-key" style="background:var(--accent)"></span>Liquid <b>'+money(p.nw,true)+'</b><br>'+
-        'Net worth <b>'+money(tot[i],true)+'</b>'+(p.real?'':' <span style="opacity:.6">est.</span>');
-      var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
-      var px=sr.left-wr.left+x[i]/W*sr.width; px=Math.max(78,Math.min(px,wr.width-78));
-      tip.style.left=px+'px'; tip.style.top=(sr.top-wr.top+yTot[i]/H*sr.height)+'px';
-      tip.hidden=false;
-    }
-    hit.addEventListener('mouseenter',show);
-    hit.addEventListener('click',show);
-    hit.addEventListener('mouseleave',function(){ tip.hidden=true; });
-    svg.appendChild(hit);
-  });
-  svg.appendChild(svgEl('line',{x1:L,y1:base,x2:W-R,y2:base,stroke:'var(--sep)','stroke-width':1}));
-  wrap.appendChild(svg); wrap.appendChild(tip);
-  return wrap;
-}
-// Categorical hues in FIXED slot order (validated on --card: adjacent CVD
-// ΔE 8.4, normal-vision 19.3, all ≥3:1). Slot 7 is the "Other" bucket — the
-// palette is never cycled, so the slice count is capped instead.
-var PIE_HUES=['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300'];
-var PIE_OTHER='var(--dim)';
-function pieHue(i){ return i<PIE_HUES.length?PIE_HUES[i]:PIE_OTHER; }
-// Donut of expenses by category: slices ordered biggest-first (so adjacent
-// slices are adjacent palette slots), tail folded into "Other". The legend
-// carries the amount and share, so slice identity is never color-alone.
-// ponytail: no hover tooltip — the legend already shows every number one would
-// carry; native <title> covers the "which slice is that" case.
-// "Other" drills down through a native <details> (keyboard + screen reader for
-// free); its tail stays a list rather than more slices because the palette is
-// capped at 6 and is never cycled.
-function donutChart(entries){
-  var top=entries.slice(0,PIE_HUES.length), rest=entries.slice(PIE_HUES.length);
-  if(rest.length){
-    var o=0; rest.forEach(function(p){o+=p[1];});
-    top.push(['Other ('+rest.length+')',o]);
-  }
-  var total=0; top.forEach(function(p){total+=p[1];});
-  if(!(total>0)) return null;
 
-  var wrap=el('div','donut-wrap');
-  var R=52,SW=22,C=2*Math.PI*R;                       // circumference in user units
-  var svg=svgEl('svg',{class:'donut',viewBox:'0 0 128 128',role:'img',
-    'aria-label':'Expenses by category, '+monthLabel(S.month)});
-  var off=0, otherSlice=null;
-  top.forEach(function(pair,i){
-    var frac=pair[1]/total, len=frac*C, gap=Math.min(2,len*0.5); // 2px surface gap between slices
-    var c=svgEl('circle',{cx:64,cy:64,r:R,fill:'none',stroke:pieHue(i),'stroke-width':SW,
-      'stroke-dasharray':(len-gap)+' '+(C-len+gap),'stroke-dashoffset':-off,
-      transform:'rotate(-90 64 64)'});
-    var t=svgEl('title'); t.textContent=pair[0]+' — '+money(pair[1],true)+' ('+Math.round(frac*100)+'%)';
-    c.appendChild(t); svg.appendChild(c);
-    if(rest.length&&i===top.length-1) otherSlice=c;
-    off+=len;
-  });
-  var mid=el('div','donut-mid','<div class="donut-mid-l">Total</div><div class="donut-mid-v">'+money(total,true)+'</div>');
-  var ring=el('div','donut-ring'); ring.appendChild(svg); ring.appendChild(mid);
-  wrap.appendChild(ring);
+/* ════════════════════════════════════════════════════════════════════════
+ *  SUMMARY (screen key `dashboard`) — the v3 tile grid (DESIGN.md "Layout").
+ *  4 columns on PC, 2 on iPad, 1 on iPhone; the spans live in app.css (.sum).
+ *  Every derived figure carries a tip() with its real formula (V3_PLAN "Numbers").
+ * ════════════════════════════════════════════════════════════════════════ */
 
-  function dlRow(pair,color,cls){
-    var r=el('div','dl-row'+(cls?' '+cls:''));
-    r.innerHTML='<span class="lg-key" style="background:'+color+'"></span>'+
-      '<span class="dl-name">'+esc(pair[0])+'</span>'+
-      '<span class="dl-val">'+money(pair[1],true)+'</span>'+
-      '<span class="dl-pct">'+Math.round(pair[1]/total*100)+'%</span>';
-    return r;
-  }
-  var lg=el('div','donut-legend'), det=null;
-  top.forEach(function(pair,i){
-    if(!(rest.length&&i===top.length-1)){ lg.appendChild(dlRow(pair,pieHue(i))); return; }
-    det=el('details','dl-drill');
-    var sm=el('summary'); sm.appendChild(dlRow(pair,PIE_OTHER)); det.appendChild(sm);
-    rest.forEach(function(p){ det.appendChild(dlRow(p,PIE_OTHER,'dl-sub')); });
-    lg.appendChild(det);
-  });
-  if(det&&otherSlice){
-    otherSlice.style.cursor='pointer';
-    otherSlice.onclick=function(){ det.open=!det.open; };
-  }
-  wrap.appendChild(lg);
-  return wrap;
-}
-// Budget meter: track is a lighter step of the fill's own ramp; the pace notch
-// marks how much of the period has elapsed (spend "should" sit near it).
-function meterRow(b,paceFrac){
-  // The server measures a budget in the currency it is planned in (Growth is a
-  // $200/month parking target) and names that currency, so the meter never converts
-  // and never drifts with FX. Pesos keep the whole-number format.
-  var cur=b.currency||'PHP';
-  var fmt=cur==='PHP'?function(n){return money(n,true);}
-                     :function(n){return n==null?'—':moneyCur(n,cur);};
-  var r=el('div'); r.style.marginBottom='18px';
-  var p=b.pctUsed==null?0:b.pctUsed;
-  var state=b.isOver?'over':(p>=85?'warn':'');
-  var head=el('div','row-between');
-  head.innerHTML='<div><strong>'+esc(b.segment)+'</strong> <span class="pill">'+esc(b.period)+'</span></div>'+
-    '<div class="mono" style="font-size:13px">'+fmt(b.actualNative)+' <span class="faint">/ '+fmt(b.targetNative)+'</span></div>';
-  r.appendChild(head);
-  var m=el('div','meter '+state);
-  m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,p)+'%"></div>';
-  if(paceFrac!=null&&paceFrac>0.02&&paceFrac<0.98){
-    var pm=el('div','meter-pace'); pm.style.left='calc('+(paceFrac*100)+'% - 1px)';
-    pm.title=Math.round(paceFrac*100)+'% of the period has elapsed';
-    m.appendChild(pm);
-  }
-  r.appendChild(m);
-  var over=b.isOver&&b.remainingNative!=null;
-  var sub=el('div','row-between'); sub.style.cssText='margin-top:6px;font-size:12px';
-  sub.innerHTML='<span class="dim">'+pct(b.pctUsed)+' used</span>'+
-    '<span class="'+(b.isOver?'neg':'dim')+'">'+(b.remainingNative==null?'':
-      (over?fmt(Math.abs(b.remainingNative))+' over':fmt(b.remainingNative)+' left'))+'</span>';
-  r.appendChild(sub);
-  return r;
-}
-// Fraction of the current budget period already elapsed (null off-period).
-function periodPace(period,monthStr){
-  var now=new Date();
-  if(monthStr!==monthKey(now)) return null;
-  var day=now.getDate(), days=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
-  if(/^quarter/i.test(String(period))) return (now.getMonth()%3+day/days)/3;
-  return day/days;
-}
-
-/* Days remaining as "X years, X months" — the FI countdown's only format. Rounded to
- * WHOLE MONTHS first and split after, so 11.6 months reads "1 year, 0 months" and not
- * "0 years, 12 months". 365.2425 is the same Gregorian mean the Worker projects with.
- * The payload keeps the exact day count; only the display is this coarse. */
+/* The FI countdown, short: "10y 1m". Rounded to WHOLE MONTHS first and split after,
+ * so 11.6 months reads "1y 0m" and not "0y 12m". 365.2425 is the same Gregorian
+ * mean the Worker projects with. The payload keeps the exact day count. */
 function yearsMonths(days){
   var mo=Math.round(days/(365.2425/12));
   if(mo<1) return 'Under a month';
   var y=Math.floor(mo/12); mo-=y*12;
-  return y+' year'+(y===1?'':'s')+', '+mo+' month'+(mo===1?'':'s');
+  return (y?y+'y ':'')+mo+'m';
+}
+function monthLong(m){ var d=monthKey2date(m); return d?d.toLocaleString('en-US',{month:'long'}):String(m); }
+function isoMonthLabel(iso){ return MONTHS[+iso.slice(5,7)-1]+' '+iso.slice(0,4); }   // "2036-10-04" → "Oct 2036"
+var SEG_COLOR={Essentials:'var(--ess)',Rewards:'var(--rew)',Growth:'var(--gro)'};
+
+// A tile with its label row: label, optional right-hand text, optional ⓘ.
+function sumTile(cls,label,right,tipSpec){
+  var t=el('section','tile '+cls), h=el('div','tile-h');
+  h.appendChild(typeof label==='string'?el('span','tile-l',esc(label)):label);
+  if(right) h.appendChild(el('span','tile-r',right));
+  if(tipSpec) h.appendChild(tip(tipSpec));
+  t.appendChild(h); return t;
+}
+// A 6px meter on --track: fills = [[fraction, colour]], tick = a target fraction.
+function bar6(fills,tick){
+  var b=el('div','bar6');
+  fills.forEach(function(f){ var i=el('i'); i.style.width=Math.max(0,Math.min(100,f[0]*100))+'%'; i.style.background=f[1]; b.appendChild(i); });
+  if(tick!=null){ var k=el('b'); k.style.left='calc('+(tick*100)+'% - 1px)'; b.appendChild(k); }
+  return b;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
- *  DASHBOARD — hierarchy: hero number → KPI row → cash flow → budgets →
- *  expenses by category → recent. One glance answers "am I okay?".
- * ════════════════════════════════════════════════════════════════════════ */
+/* The two history series (liquid, invested) that the net-worth sparkline and the
+ * history tile both draw. netWorthSeries rolls the flows BACKWARD from the newest
+ * month, so that month needs a real anchor: the live figures on the live month,
+ * and the month's own snapshot on a past one (netWorthHistory carries every month
+ * but the live one). */
+function nwSeries(d,cf,isLive){
+  if(cf.length<2) return null;
+  var nwh=d.netWorthHistory||{}, sh=d.sharesHistory||{}, liqHist={}, lastM=cf[cf.length-1].month;
+  Object.keys(nwh).forEach(function(m){ liqHist[m]=nwh[m]-(sh[m]||0); });
+  var anchorNw=isLive?(d.netWorth||0):nwh[lastM], anchorSh=isLive?(d.sharesValue||0):sh[lastM];
+  if(anchorNw==null) return null;
+  return {liq:netWorthSeries(cf, anchorNw-(anchorSh||0), liqHist, true),
+          stk:netWorthSeries(cf, anchorSh||0, sh, false)};
+}
+
+function nwTile(d,ser){
+  var br=d.bridge, liabAbs=Math.abs(d.liabilities||0);
+  var tipSpec=br?{
+    title:'What moved your net worth',
+    text:'The change since the '+monthLabel(br.from)+' close, split into what the ledger explains and what it does not.',
+    rows:[['Net worth at the '+monthLabel(br.from)+' close',money(br.startNetWorth,true)],
+          ['+ Saved (income − spending)',signedMoney(br.savings)],
+          ['+ Market, FX and timing',signedMoney(br.residual)],
+          ['= Net worth '+(br.live?'now':'at the '+monthLabel(br.month)+' close'),money(br.endNetWorth,true),true],
+          ['Change',signedMoney(br.deltaNetWorth),true]],
+    note:'Market, FX and timing is the rest: price and rate moves, and a flow logged in another month. If it stays negative, some spending may not be logged.'}:null;
+  var t=sumTile('t-nw','Net worth','<span class="hide-phone">Assets '+money(d.assets,true)+' · Liabilities −'+money(liabAbs,true)+'</span>',tipSpec);
+  t.appendChild(el('div','fig-hero',money(d.netWorth,true)));
+  if(br){
+    var up=br.deltaNetWorth>=0, row=el('div','nw-bridge');
+    row.innerHTML='<span class="nw-chip '+(up?'pos':'neg')+'">'+(up?'▲ ':'▼ ')+money(Math.abs(br.deltaNetWorth),true)+
+      (br.live?' since '+esc(monthLong(br.from)):' in '+esc(monthLong(br.month)))+'</span><span class="hide-phone">Saved '+signedMoney(br.savings)+
+      ' · Market, FX and timing '+signedMoney(br.residual)+'</span>';
+    t.appendChild(row);
+  }
+  // Sparkline: total net worth per month. preserveAspectRatio=none with a
+  // non-scaling stroke, so it fills any width with no measuring and no redraw.
+  if(ser){
+    var v=ser.liq.map(function(p,i){ return p.nw+Math.max(0,ser.stk[i].nw); });
+    var hi=Math.max.apply(null,v), lo=Math.min.apply(null,v); if(hi===lo){ hi+=1; lo-=1; }
+    var n=v.length, pts=v.map(function(x,i){ return (i*350/(n-1)).toFixed(1)+','+(6+(hi-x)/(hi-lo)*44).toFixed(1); });
+    var svg=svgEl('svg',{class:'nw-spark',viewBox:'0 0 350 56',preserveAspectRatio:'none','aria-hidden':'true'});
+    svg.appendChild(svgEl('path',{d:'M'+pts.join(' L')+' L350,56 L0,56 Z',fill:'var(--accent)','fill-opacity':.16}));
+    svg.appendChild(svgEl('path',{d:'M'+pts.join(' L'),fill:'none',stroke:'var(--accent)','stroke-width':2.2,'vector-effect':'non-scaling-stroke'}));
+    t.appendChild(svg);
+  } else t.classList.add('pad-b');
+  return t;
+}
+
+/* Left to spend: the Essentials + Rewards budget minus their signed spend. The
+ * other segments (Growth) are money kept, not spent, so they sit below as rows. */
+function leftTile(d,isLive){
+  var er=d.essentialsRewards; if(!er||er.targetPhp==null) return null;
+  var now=new Date(), daysLeft=isLive?(new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()):null;
+  var left=er.remainingPhp, perDay=daysLeft>0&&left>0?left/daysLeft:null;
+  var inWhat=isLive?'this month':'in '+monthLabel(S.month);
+  var rows=[['Essentials + Rewards budget',money(er.targetPhp,true)],['− Spent '+inWhat,money(er.actualPhp,true)],
+            ['= Left to spend',money(left,true),true]];
+  if(perDay!=null) rows.push(['÷ Days left',String(daysLeft)],['= A day',money(perDay,true),true]);
+  var t=sumTile('t-lts','Left to spend',daysLeft!=null?daysLeft+' day'+(daysLeft===1?'':'s')+' left':esc(monthLabel(S.month)),
+    {title:'What you can still spend '+inWhat,text:'Your Essentials and Rewards budgets, less what they spent.',rows:rows,
+     note:'Spend is signed, so a refund nets its category down. Growth is money you keep, so it is not in this figure.'});
+  var fig=el('div','fig-row');
+  fig.innerHTML='<span class="fig'+(left<0?' neg':'')+'">'+(left<0?money(-left,true)+' over':money(left,true))+'</span>'+
+    '<span class="fig-sub">of '+money(er.targetPhp,true)+'</span>';
+  t.appendChild(fig);
+  var byName={}; (d.budgets||[]).forEach(function(b){ byName[b.segment]=b; });
+  t.appendChild(bar6(er.segments.map(function(s){
+    return [er.targetPhp?((byName[s]||{}).actualPhp||0)/er.targetPhp:0, SEG_COLOR[s]||'var(--dim)'];
+  })));
+  if(perDay!=null) t.appendChild(el('div','lts-day','About <b>'+money(perDay,true)+' a day</b> keeps you on budget.'));
+  var list=el('div','seg-rows');
+  (d.budgets||[]).forEach(function(b){
+    var cur=b.currency||'PHP', fmt=function(n){ return cur==='PHP'?money(n,true):moneyCur(n,cur); };
+    var spend=er.segments.indexOf(b.segment)>=0, rem=b.remainingNative, val, cls='';
+    if(rem==null) val='—';
+    else if(spend){ val=rem>=0?fmt(rem)+' left':fmt(-rem)+' over'; if(rem<0) cls='neg'; }
+    else { val=rem<=0?'Funded ✓':fmt(rem)+' to go'; if(rem<=0) cls='pos'; }
+    var r=el('div','seg-row');
+    r.innerHTML='<span class="seg-dot" style="background:'+(SEG_COLOR[b.segment]||'var(--dim)')+'"></span>'+
+      '<span class="seg-name">'+esc(b.segment)+(/^month/i.test(b.period)?'':' <span class="dim">· '+esc(String(b.period).toLowerCase())+'</span>')+'</span>'+
+      '<span class="seg-val '+cls+'">'+val+'</span>'+
+      '<span class="seg-sub">'+fmt(b.actualNative)+' of '+(b.targetNative==null?'—':fmt(b.targetNative))+'</span>';
+    list.appendChild(r);
+  });
+  t.appendChild(list);
+  return t;
+}
+
+function twoLabels(long,short){ return el('span','tile-l','<span class="lg-long">'+long+'</span><span class="lg-short">'+short+'</span>'); }
+
+function fireTile(f){
+  var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsMonths(f.days));
+  var when=f.date?isoMonthLabel(f.date):null;
+  var t=sumTile('t-fire',twoLabels('Financially free in','Free in'),null,{
+    title:'When your savings can pay for your life',
+    text:'Net worth grows by your savings and a real return, until it reaches 25 times a year of spending (the '+f.withdrawalRatePct+'% rule).',
+    rows:[['Average monthly spend',money(f.monthlyExpensePhp,true)],['× 12 × 25 = Target',money(f.targetPhp,true),true],
+          ['Net worth at the last close, less money lent',money(f.netWorthPhp,true)],['= Progress',f.progressPct+'%',true],
+          ['Average monthly savings',money(f.monthlySavingsPhp,true)],['Real return',f.realReturnPct+'% a year'],
+          ['= Free in',lead+(when?' ('+when+')':''),true]],
+    note:'Averages use the last 3 closed months. The date moves only at a month close, so the countdown falls by one day each day.'});
+  t.appendChild(el('div','fig',esc(lead)));
+  t.appendChild(bar6([[(f.progressPct||0)/100,'var(--pos)']]));
+  t.appendChild(el('div','tile-foot',f.days==null
+    ?'Saving '+money(f.monthlySavingsPhp,true)+' a month does not reach '+money(f.targetPhp,true)
+    :'<span class="hide-phone">'+money(f.netWorthPhp,true)+' of '+compactPhp(f.targetPhp)+(when?' · ':'')+'</span>'+(when?'On track for '+when:'')));
+  return t;
+}
+
+/* Emergency runway, from getInvestments (the Accounts card's payload, shared cache).
+ * The meter runs to 1.5 × the target, so the target tick sits at two thirds. */
+function fillRunway(t,rw){
+  t.innerHTML='';
+  var p=rw&&rw.parts, rows=[];
+  if(p){
+    rows.push(['Cash accounts',money(p.cashPhp,true)]);
+    if(p.efSharesPhp) rows.push(['+ Emergency fund shares',money(p.efSharesPhp,true)]);
+    rows.push(['− Credit you owe',money(-p.creditPhp,true)]);
+    if(p.owedPhp) rows.push(['− Money you owe (receivable)',money(-p.owedPhp,true)]);
+  }
+  if(rw){
+    rows.push(['= Reachable cash',money(rw.efPhp,true),true],['÷ Average monthly spend',money(rw.avgMonthlyExpensePhp,true)],
+              ['= Runway',rw.months==null?'—':rw.months+' months',true]);
+  }
+  var h=sumTile('',twoLabels('Emergency runway','Runway'),null,rw?{title:'How long your cash lasts',
+    text:'Money you can reach in a few days, divided by what you usually spend in a month.',rows:rows,
+    note:'Money you lent is left out, because you cannot reach it. Money you owe through a receivable comes off. Average spend uses the last 3 closed months.'}:null).firstChild;
+  t.appendChild(h);
+  if(!rw||rw.months==null){ t.appendChild(el('div','fig','—')); t.appendChild(el('div','tile-foot',rw?'No spending in the last 3 closed months':'Loading…')); return; }
+  var tm=rw.targetMonths, sev=rw.months>=tm?'pos':(rw.months>=tm/2?'warn':'neg');
+  t.appendChild(el('div','fig',rw.months+' months'));
+  t.appendChild(bar6([[rw.months/(tm*1.5),'var(--'+sev+')']],2/3));
+  t.appendChild(el('div','tile-foot','<span class="hide-phone">'+money(rw.efPhp,true)+' · </span>Target '+tm+' months'));
+}
+
+/* The history tile's two charts on ONE month axis: the same band per month, so a
+ * month is one column through both (DESIGN.md "Charts"). Pure of the page: it
+ * returns the two SVGs and the geometry, so test.js can read it. */
+function historyCharts(cf,liq,stk,isLive,W){
+  var n=cf.length, band=W/n, cx=cf.map(function(m,i){ return band*i+band/2; });
+  var shr=stk.map(function(p){ return Math.max(0,p.nw); }), tot=liq.map(function(p,i){ return p.nw+shr[i]; });
+  // Net worth: invested is the base band 0→shares, liquid a signed ribbon on top,
+  // so the top edge is the real total. The domain keeps zero in range: a month with
+  // a NEGATIVE net worth must draw below a marked zero, never read as positive.
+  var H1=140, T=8, B=4, hi=Math.max.apply(null,tot.concat(shr).concat([1]))*1.08, lo=Math.min(0,Math.min.apply(null,tot));
+  var y=function(v){ return T+(hi-v)/(hi-lo)*(H1-T-B); };
+  var s1=svgEl('svg',{class:'hist-svg',viewBox:'0 0 '+W+' '+H1,'aria-hidden':'true'});
+  cx.forEach(function(x){ s1.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:H1,stroke:'var(--track)','stroke-width':1})); });
+  var y0=y(0), fwd=function(a){ return cx.map(function(x,i){ return x+','+y(a[i]); }).join(' '); };
+  s1.appendChild(svgEl('polygon',{points:cx[0]+','+y0+' '+fwd(shr)+' '+cx[n-1]+','+y0,fill:'var(--gro)','fill-opacity':.45}));
+  s1.appendChild(svgEl('polygon',{points:fwd(shr)+' '+cx.slice().reverse().map(function(x,j){ return x+','+y(tot[n-1-j]); }).join(' '),
+    fill:'var(--accent)','fill-opacity':.3}));
+  if(lo<0) s1.appendChild(svgEl('line',{x1:0,y1:y0,x2:W,y2:y0,stroke:'var(--dim)','stroke-width':1,'stroke-dasharray':'3 3'}));
+  s1.appendChild(svgEl('polyline',{points:fwd(shr),fill:'none',stroke:'var(--gro)','stroke-width':1.5,'stroke-linejoin':'round'}));
+  s1.appendChild(svgEl('polyline',{points:fwd(tot),fill:'none',stroke:'var(--accent)','stroke-width':2.2,'stroke-linejoin':'round','stroke-linecap':'round'}));
+  // An estimated month (no snapshot, rolled back through cash flow) is a hollow ring.
+  liq.forEach(function(p,i){ if(!p.real) s1.appendChild(svgEl('circle',{cx:cx[i],cy:y(tot[i]),r:3,fill:'var(--card)',stroke:'var(--accent)','stroke-width':1.5})); });
+  // Cash flow: in left, out right (position is the second channel after colour).
+  var H2=110, T2=6, max=1; cf.forEach(function(m){ max=Math.max(max,m.income,m.expense); });
+  var bw=Math.min(18,band*0.22);
+  var s2=svgEl('svg',{class:'hist-svg',viewBox:'0 0 '+W+' '+H2,'aria-hidden':'true'});
+  cx.forEach(function(x){ s2.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:H2,stroke:'var(--track)','stroke-width':1})); });
+  cf.forEach(function(m,i){
+    var op=isLive&&i===n-1?.5:1, hI=m.income/max*(H2-T2), hO=m.expense/max*(H2-T2);
+    if(hI>=1) s2.appendChild(svgEl('path',{d:barPath(cx[i]-bw-2,H2-hI,bw,hI,3),fill:'var(--chart-in)','fill-opacity':op}));
+    if(hO>=1) s2.appendChild(svgEl('path',{d:barPath(cx[i]+2,H2-hO,bw,hO,3),fill:'var(--chart-out)','fill-opacity':op}));
+  });
+  return {nw:s1, cf:s2, cx:cx, y0:y0, yTot:tot.map(y), tot:tot, shr:shr};
+}
+
+var histHide=null;   // the open inspect line: one history tile exists, so one document listener
+document.addEventListener('pointerdown',function(e){ if(histHide&&!(e.target.closest&&e.target.closest('.hist-plot'))) histHide(); });
+
+function historyTile(cf,ser,isLive){
+  var n=cf.length, lbl=n===6?'Last 6 months':(n===12?'Last year':'Last '+n+' months');
+  var t=sumTile('t-hist',lbl);
+  var seg=el('div','seg');
+  [[6,'6M'],[12,'1Y'],[24,'2Y']].forEach(function(o){
+    var b=el('button',o[0]===S.cfMonths?'on':'',o[1]); b.type='button'; b.setAttribute('aria-pressed',o[0]===S.cfMonths);
+    b.onclick=function(){ if(S.cfMonths===o[0]) return; S.cfMonths=o[0]; prefSet('cfMonths',o[0]); render(); };
+    seg.appendChild(b);
+  });
+  t.firstChild.appendChild(seg);
+  var key=function(c,l){ return '<span class="lg"><span class="lg-key" style="background:'+c+'"></span>'+l+'</span>'; };
+  var plot=el('div','hist-plot');
+  plot.appendChild(el('div','hist-lg','<b>Net worth</b>'+key('var(--accent)','Liquid')+key('var(--gro)','Invested')));
+  var h1=el('div'); plot.appendChild(h1);
+  plot.appendChild(el('div','hist-lg','<b>Cash flow</b>'+key('var(--chart-in)','In (left)')+key('var(--chart-out)','Out (right)')));
+  var h2=el('div'); plot.appendChild(h2);
+  var line=el('div','hist-line'), tipBox=el('div','hist-tip'), hit=el('div','hist-hit');
+  line.hidden=tipBox.hidden=true;
+  hit.tabIndex=0; hit.setAttribute('role','img');
+  hit.setAttribute('aria-label','Net worth and cash flow by month. Use the arrow keys to read a month.');
+  plot.appendChild(line); plot.appendChild(tipBox); plot.appendChild(hit);
+  t.appendChild(plot);
+  var labels=el('div','hist-x'+(n>6?' many':'')); labels.style.gridTemplateColumns='repeat('+n+',minmax(0,1fr))';
+  t.appendChild(labels);
+  var cur=-1, g=null;
+  function show(i){
+    if(!g) return;
+    cur=i=Math.max(0,Math.min(n-1,i));
+    var m=cf[i], L=ser.liq[i], W=plot.clientWidth, px=g.cx[i]/g.W*W;
+    line.style.left=px+'px'; line.hidden=false;
+    var r=function(c,k,v){ return '<span>'+(c?'<span class="lg-key" style="background:'+c+'"></span>':'')+k+'</span><b>'+v+'</b>'; };
+    tipBox.innerHTML='<div class="hist-tip-t">'+esc(monthLabel(m.month))+(isLive&&i===n-1?' so far':'')+'</div><div class="hist-tip-rows">'+
+      r('var(--accent)','Liquid',money(L.nw,true))+r('var(--gro)','Invested',money(g.shr[i],true))+
+      r('','Net worth',money(g.tot[i],true)+(L.real?'':' <span class="est">est.</span>'))+
+      r('var(--chart-in)','In',money(m.income,true))+r('var(--chart-out)','Out',money(m.expense,true))+
+      r('','Saved',signedMoney(m.income-m.expense))+'</div>';
+    tipBox.hidden=false;
+    var tw=tipBox.offsetWidth;
+    tipBox.style.left=(px-tw-12>=0?px-tw-12:Math.min(px+12,W-tw))+'px';
+    histHide=hide;
+  }
+  function hide(){ line.hidden=tipBox.hidden=true; cur=-1; histHide=null; }
+  function at(e){ var b=hit.getBoundingClientRect(); return Math.floor((e.clientX-b.left)/b.width*n); }
+  hit.addEventListener('pointermove',function(e){ if(e.pointerType==='mouse') show(at(e)); });
+  hit.addEventListener('pointerleave',function(e){ if(e.pointerType==='mouse') hide(); });
+  hit.addEventListener('click',function(e){ show(at(e)); });   // touch and pen: a tap
+  hit.addEventListener('keydown',function(e){
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight'){ e.preventDefault(); show(cur<0?n-1:cur+(e.key==='ArrowLeft'?-1:1)); }
+    else if(e.key==='Escape') hide();
+  });
+  hit.addEventListener('blur',hide);
+  // Drawn at the host's real width, after mount (the skill's rAF chart rule).
+  requestAnimationFrame(function(){
+    if(!plot.isConnected) return;
+    var W=Math.max(240,h1.clientWidth);
+    g=historyCharts(cf,ser.liq,ser.stk,isLive,W); g.W=W;
+    h1.appendChild(g.nw); h2.appendChild(g.cf);
+    var step=labelStep(n,W);
+    cf.forEach(function(m,i){
+      // A narrow column: the wide "so far" label would cover the label before it.
+      var last=i===n-1, show=(n-1-i)%step===0&&!(isLive&&W/n<60&&i===n-1-step);
+      labels.appendChild(el('span',last?'on':'',show?esc(String(m.month).split('-')[1])+(last&&isLive?' so far':''):''));
+    });
+  });
+  return t;
+}
+
+function catTile(d){
+  var sc=d.spendByCategory||{}, total=0;
+  var cats=Object.keys(sc).map(function(k){ total+=sc[k]; return [k,sc[k]]; })
+    .filter(function(p){ return p[1]>0; }).sort(function(a,b){ return b[1]-a[1]; });
+  if(!cats.length) return null;
+  // Top 5, the tail folded into "Other". A category that nets to zero or below
+  // (refunds) has no bar, but still counts in the total.
+  var top=cats.slice(0,5), rest=cats.slice(5);
+  if(rest.length) top.push(['Other ('+rest.length+')',rest.reduce(function(s,p){ return s+p[1]; },0),true]);
+  var max=Math.max.apply(null,top.map(function(p){ return p[1]; }));
+  var t=sumTile('t-cats','Spending by category','<b>'+money(total,true)+'</b>');
+  var bc=(S.boot&&S.boot.categories)||{};
+  top.forEach(function(p){
+    var segName=!p[2]&&bc[p[0]]&&bc[p[0]].Segment, r=el('div','cat-row');
+    r.appendChild(el('span','cat-name',esc(p[0])));
+    r.appendChild(bar6([[p[1]/max,SEG_COLOR[segName]||'var(--dim)']]));
+    r.appendChild(el('span','cat-val',money(p[1],true)));
+    t.appendChild(r);
+  });
+  return t;
+}
+
+function recentTile(d){
+  var more=el('button','link-btn','See all'); more.type='button'; more.onclick=function(){ go('transactions'); };
+  var t=sumTile('t-recent','Recent'); t.firstChild.appendChild(more);
+  var rl=el('div','list'), rows=(d.recentTransactions||[]).slice(0,5);
+  rows.forEach(function(x){ rl.appendChild(txRow(x,{clickable:true})); });
+  if(!rows.length) rl.appendChild(el('div','empty','No transactions yet.'));
+  t.appendChild(rl);
+  return t;
+}
+
 function renderDashboard(){
   var key='dashboard|'+S.month+'|'+S.cfMonths;
   if(!S.cache[key]) loading('dashboard');
   return cachedCall(key, function(et){return gs('api_getDashboard',{month:S.month,months:S.cfMonths},et);}, function(d){
-    var w=el('div','screen cols');
+    var w=el('div','screen');
     var head=el('div','screen-head');
-    head.appendChild(el('div','screen-title','Dashboard'));
+    head.appendChild(el('div','screen-title','Summary'));
     head.appendChild(monthPickerEl());
     w.appendChild(head);
-
-    var cf=d.cashflow||[];
-    var cur=cf.length?cf[cf.length-1]:null, prev=cf.length>1?cf[cf.length-2]:null;
-    var prevLbl=prev?('vs '+String(prev.month).split('-')[1]):null;
-
-    // The two hero cards are ONE row at desktop width (see .hero-row in app.css):
-    // side by side in a multicol they land in different columns, keep their own
-    // heights and leave a ragged gap under the shorter one. The wrapper is
-    // display:contents until 1200px, so the phone stack is unchanged.
-    var heroes=el('div','hero-row wide'); w.appendChild(heroes);
-
-    // ── FI countdown: the top line, above net worth ──
-    // Every input is a closed month (api.js fireEta), so the target DATE holds still
-    // for the whole month and this number falls by exactly one day a day. It is here
-    // to be read first, before the balance it is made of.
-    var f=d.fire;
-    if(f){
-      var fc=el('div','stat hero');
-      var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsMonths(f.days));
-      var sub=f.days==null
-        ?'Saving '+money(f.monthlySavingsPhp,true)+'/mo is not enough to reach '+money(f.targetPhp,true)
-        :money(f.netWorthPhp,true)+' of '+money(f.targetPhp,true)+' · '+f.progressPct+'%'+
-         (f.date?' · on track for '+MONTHS[+f.date.slice(5,7)-1]+' '+f.date.slice(0,4):'');
-      // Same split bar the net-worth hero uses, so the two cards read as one system.
-      // The flex floors stop a 0% or 100% side collapsing the bar to nothing.
-      var pct=Math.max(0,Math.min(100,f.progressPct||0));
-      fc.innerHTML='<div class="stat-label">Financial independence in</div>'+
-        '<div class="stat-value">'+esc(lead)+'</div>'+
-        '<div class="split-bar"><div class="split-a" style="flex:'+Math.max(pct,0.0001)+'"></div>'+
-        '<div class="split-r" style="flex:'+Math.max(100-pct,0.0001)+'"></div></div>'+
-        '<div class="stat-sub">'+sub+'</div>'+
-        '<div class="stat-sub">'+f.withdrawalRatePct+'% rule · '+money(f.monthlyExpensePhp,true)+
-        '/mo spend · saving '+money(f.monthlySavingsPhp,true)+'/mo at '+f.realReturnPct+'% real</div>';
-      heroes.appendChild(fc);
-    }
-
-    // ── hero: net worth + asset/liability split bar ──
-    var hero=el('div','stat hero');
-    var assets=d.assets||0, liabAbs=Math.abs(d.liabilities||0);
-    hero.innerHTML='<div class="stat-label">Net worth</div><div class="stat-value">'+money(d.netWorth,true)+'</div>';
-    if(assets>0||liabAbs>0){
-      var sb=el('div','split-bar');
-      sb.innerHTML='<div class="split-a" style="flex:'+(assets||0.0001)+'"></div>'+
-        (liabAbs>0?'<div class="split-l" style="flex:'+liabAbs+'"></div>':'');
-      hero.appendChild(sb);
-      var lg=el('div','split-legend');
-      lg.innerHTML='<span><span class="lg-key" style="background:var(--chart-in)"></span>Assets <b>'+money(assets,true)+'</b></span>'+
-        '<span><span class="lg-key" style="background:var(--chart-out)"></span>Liabilities <b>'+money(liabAbs,true)+'</b></span>';
-      hero.appendChild(lg);
-    }
-    heroes.appendChild(hero);
-
-    // ── KPI row ──
-    // A live (incomplete) month vs a finished month is a misleading delta, so
-    // deltas only show for completed months; the live month says "month to date".
-    var isLive=S.month===monthKey(new Date());
-    var monthSpend=0; Object.keys(d.spendBySegment||{}).forEach(function(k){monthSpend+=d.spendBySegment[k];});
-    var stats=el('div','grid grid-3 kpis wide');
-    var tIn=el('div','stat','<div class="stat-label">Income</div><div class="stat-value">'+money(cur?cur.income:null,true)+'</div>');
-    var dIn=!isLive&&cur&&prev?deltaEl(cur.income,prev.income,true,prevLbl):null;
-    if(dIn)tIn.appendChild(dIn); else if(isLive)tIn.appendChild(el('div','stat-sub','month to date'));
-    var sparkIn=sparklineSVG(cf.map(function(m){return m.income;}));
-    if(sparkIn)tIn.appendChild(sparkIn);
-    stats.appendChild(tIn);
-    var tSp=el('div','stat','<div class="stat-label">Spending</div><div class="stat-value">'+money(cur?cur.expense:monthSpend,true)+'</div>');
-    var dSp=!isLive&&cur&&prev?deltaEl(cur.expense,prev.expense,false,prevLbl):null;
-    if(dSp)tSp.appendChild(dSp); else if(isLive)tSp.appendChild(el('div','stat-sub','month to date'));
-    var spark=sparklineSVG(cf.map(function(m){return m.expense;}));
-    if(spark)tSp.appendChild(spark);
-    stats.appendChild(tSp);
-    var tInv=el('div','stat','<div class="stat-label">Invested</div><div class="stat-value">'+money(d.sharesValue,true)+'</div>');
-    tInv.appendChild(el('div','stat-sub','shares & funds'));
-    stats.appendChild(tInv);
-    w.appendChild(stats);
-
-    // ── cash flow + net worth — drawn after paint at the host's real width.
-    // Split net worth into liquid (cash, driven by the flow bars) and invested
-    // (shares, market-driven). The cash-flow line rides the LIQUID series so bars
-    // and line move together; the invested part gets its own stacked-area chart.
-    // netWorthSeries rolls the flows BACKWARD from the newest month, so that month
-    // needs a real anchor: the live figures on the live month, and the month's own
-    // snapshot on a past one (netWorthHistory carries every month but the live one).
-    // Without the second case a past month drew no line at all.
-    var liq=null, stk=null;
-    if(cf.length>=2){
-      var nwh=d.netWorthHistory||{}, sh=d.sharesHistory||{}, liqHist={}, lastM=cf[cf.length-1].month;
-      Object.keys(nwh).forEach(function(m){ liqHist[m]=nwh[m]-(sh[m]||0); });
-      var anchorNw=isLive?(d.netWorth||0):nwh[lastM], anchorSh=isLive?(d.sharesValue||0):sh[lastM];
-      if(anchorNw!=null){
-        liq=netWorthSeries(cf, anchorNw-(anchorSh||0), liqHist, true);
-        stk=netWorthSeries(cf, anchorSh||0, sh, false);
-      }
-    }
-    if(cf.length>=2){
-      var cc=el('div','card wide'), ch=el('div','card-h card-h-row');
-      ch.appendChild(el('span','',(liq?'Cash flow & liquid net worth':'Cash flow')+' · last '+cf.length+' months'));
-      ch.appendChild(rangePickerEl());
-      cc.appendChild(ch);
-      var cfHost=el('div'); cc.appendChild(cfHost);
-      w.appendChild(cc);
-      requestAnimationFrame(function(){
-        if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, liq));
-      });
-    }
-    var brc=null;   // built below, appended AFTER the net-worth chart so the two
-                    // full-width charts sit together in the desktop 2-col grid
-    // ── net-worth bridge: what moved net worth, and how much of it the ledger
-    // explains. Savings is income − expense for the month; the residual is market,
-    // FX and timing — and a residual that keeps running negative is spending nobody
-    // logged. Absent for a month whose predecessor has no snapshot yet. ──
-    if(d.bridge){
-      var br=d.bridge; brc=el('div','card');
-      brc.appendChild(el('div','card-h','Net worth bridge · '+esc(br.from)+' → '+
-        esc(br.month)+(br.live?' (live)':'')));
-      var rows=[['Net worth change',br.deltaNetWorth,'from '+money(br.startNetWorth,true)+' to '+money(br.endNetWorth,true)],
-                ['Saved',br.savings,'income − expense this month'],
-                ['Market, FX & timing',br.residual,'everything the ledger does not explain']];
-      var bl=el('div','list');
-      rows.forEach(function(x){
-        var r=el('div','litem');
-        r.innerHTML='<div class="grow"><div class="t1">'+esc(x[0])+'</div>'+
-          '<div class="t2">'+esc(x[2])+'</div></div>'+
-          '<div class="amt '+(x[1]>=0?'pos':'neg')+'">'+signedMoney(x[1])+'</div>';
-        bl.appendChild(r);
-      });
-      brc.appendChild(bl);
-    }
-
-    if(liq){
-      var nc=el('div','card wide');
-      nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last '+cf.length+' months'));
-      var nwHost=el('div'); nc.appendChild(nwHost);
-      w.appendChild(nc);
-      requestAnimationFrame(function(){
-        if(nwHost.isConnected) nwHost.appendChild(netWorthAreaChart(liq, stk, nwHost.clientWidth));
-      });
-    }
-    if(brc) w.appendChild(brc);
-
-    // ── budgets — the whole Budgets screen, merged here in v2.14.0 ──
-    // It was a nav item showing a subset of what the Dashboard already drew (the
-    // same meterRow list, off the same budgetsPayload). Recurring & installments
-    // went to Accounts, beside the liabilities it is really about.
-    var pace=periodPace('Monthly',S.month);
-    var er=d.essentialsRewards;
-    if(er){
-      var ec=el('div','card hero');
-      var now=new Date(), daysLeft=isLive   // isLive: the KPI row already asked
-        ? (new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()) : null;
-      ec.innerHTML='<div class="card-h card-h-row"><span>Essentials + Rewards</span>'+
-        (daysLeft!=null?('<span class="dim" style="text-transform:none;letter-spacing:0">'+
-          daysLeft+' day'+(daysLeft===1?'':'s')+' left</span>'):'')+'</div>'+
-        '<div class="row-between"><div class="stat-value" style="font-size:26px">'+money(er.actualPhp,true)+'</div>'+
-        '<div class="dim">of '+money(er.targetPhp,true)+'</div></div>';
-      var em=el('div','meter '+(er.isOver?'over':((er.pctUsed||0)>=85?'warn':'')));
-      em.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,er.pctUsed||0)+'%"></div>';
-      if(pace!=null&&pace>0.02&&pace<0.98){
-        var pm=el('div','meter-pace'); pm.style.left='calc('+(pace*100)+'% - 1px)';
-        pm.title=Math.round(pace*100)+'% of the month has elapsed';
-        em.appendChild(pm);
-      }
-      ec.appendChild(em);
-      w.appendChild(ec);
-    }
-    if (d.budgets && d.budgets.length){
-      var bc=el('div','card');
-      bc.appendChild(el('div','card-h card-h-row','<span>Segment targets</span>'+
-        (d.incomePhp?('<span class="dim" style="text-transform:none;letter-spacing:0">planning income '+
-          money(d.incomePhp,true)+'/mo</span>'):'')));
-      d.budgets.forEach(function(b){ bc.appendChild(meterRow(b, periodPace(b.period,S.month))); });
-      w.appendChild(bc);
-    }
-
-    // ── expenses by category (donut) ──
-    // Spend is signed now (a refund is a negative expense row), and a category that
-    // nets zero or below has no slice to draw — an arc cannot have negative length.
-    // It still counts in the month total and in its budget meter.
-    var cats=Object.keys(d.spendByCategory||{}).map(function(k){return [k,d.spendByCategory[k]];})
-      .filter(function(p){return p[1]>0;})
-      .sort(function(a,b){return b[1]-a[1];});
-    var pie=cats.length?donutChart(cats):null;
-    if(pie){
-      var pc=el('div','card');
-      pc.appendChild(el('div','card-h','Expenses by category'));
-      pc.appendChild(pie);
-      w.appendChild(pc);
-    }
-
-    // ── recent transactions ──
-    var rc=el('div','card');
-    var rh=el('div','row-between'); rh.innerHTML='<div class="card-h" style="margin:0">Recent</div>';
-    var more=el('button','btn sm ghost','View all →'); more.onclick=function(){go('transactions');};
-    rh.appendChild(more); rc.appendChild(rh);
-    var rl=el('div','list'); rl.style.marginTop='8px';
-    (d.recentTransactions||[]).forEach(function(t){ rl.appendChild(txRow(t,{clickable:true})); });
-    if(!(d.recentTransactions||[]).length) rl.appendChild(el('div','empty','<span class="empty-ico">◌</span>No transactions yet.'));
-    rc.appendChild(rl); w.appendChild(rc);
-
+    var g=el('div','sum'); w.appendChild(g);
+    var cf=d.cashflow||[], isLive=S.month===monthKey(new Date()), ser=nwSeries(d,cf,isLive);
+    g.appendChild(nwTile(d,ser));
+    var lt=leftTile(d,isLive); if(lt) g.appendChild(lt);
+    var pair=el('div','t-pair'), rw=el('section','tile t-rw');
+    if(d.fire) pair.appendChild(fireTile(d.fire));
+    pair.appendChild(rw); fillRunway(rw,null);
+    g.appendChild(pair);
+    if(ser) g.appendChild(historyTile(cf,ser,isLive));
+    var ct=catTile(d); if(ct) g.appendChild(ct);
+    g.appendChild(recentTile(d));
     paint(w);
+    // Runway rides the Accounts screen's payload (no new route) and fills in when it lands.
+    cachedCall('investments', function(et){return gs('api_getInvestments',null,et);}, function(inv){
+      if(rw.isConnected) fillRunway(rw,inv.runway);
+    }).catch(function(){ var f=rw.querySelector('.tile-foot'); if(f) f.textContent='Not available offline'; });
   }).catch(showErr);
 }
 
@@ -2088,7 +1864,7 @@ function loadInvestments(){
         m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,Math.round(100*rw.efPhp/rw.targetPhp))+'%"></div>';
         rc.appendChild(m);
       }
-      var sub=el('div','dim','Liquid accounts + IB01 − credit − money lent'+
+      var sub=el('div','dim','Cash + IB01 − credit − money you owe; money lent is left out'+
         (rw.avgMonthlyExpensePhp?' · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo':''));
       sub.style.cssText='font-size:12px;margin-top:8px';
       rc.appendChild(sub);
