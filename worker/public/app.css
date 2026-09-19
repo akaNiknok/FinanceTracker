@@ -258,12 +258,9 @@ button{font-family:inherit;cursor:pointer}
 .hist-tip-rows b{text-align:right;font-weight:600}
 .hist-tip .est{opacity:.6;font-weight:400}
 [hidden].hist-line,[hidden].hist-tip{display:none}
-/* Flex, not text-align: a label wider than its 2Y column still centres (the last
- * one ends at the right edge), where text-align gives way to a spill to the right. */
-.hist-x{display:grid;font-size:12px;color:var(--dim);margin-top:4px;white-space:nowrap}
-.hist-x span{display:flex;justify-content:center}
+.hist-x{position:relative;height:18px;font-size:12px;color:var(--dim);margin-top:4px;white-space:nowrap}
+.hist-x span{position:absolute;top:0}
 .hist-x .on{color:var(--text);font-weight:600}
-.hist-x.many span:last-child{justify-content:flex-end}
 .cat-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) auto;gap:12px;align-items:center;min-height:32px;font-size:14px}
 .cat-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cat-row .bar6{height:8px;border-radius:4px;margin:0}
