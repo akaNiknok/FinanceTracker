@@ -36,7 +36,13 @@
         var land=innerWidth>innerHeight;
         var side=land?Math.min(screen.width,screen.height):Math.max(screen.width,screen.height);
         var full=window.innerHeight+top;
-        var h=(outerHeight===full||side===full)?full:window.innerHeight;
+        // The installed iOS app knows its status-bar height only ~150 ms after launch, so
+        // until then `full` is short and the shell would paint short and jump (a flash of
+        // a bottom strip). outerHeight is the real window height from the first run
+        // (iPad: 820 at 41 ms, when inner was 788 and top still 0), so it wins there.
+        // navigator.standalone exists only on iOS, which makes it an exact guard.
+        var h=(navigator.standalone&&outerHeight>innerHeight)?outerHeight
+             :(outerHeight===full||side===full)?full:window.innerHeight;
         document.documentElement.style.setProperty('--app-h',h+'px');
       }
       fitShell();
