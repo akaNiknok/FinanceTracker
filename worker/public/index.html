@@ -35,18 +35,24 @@
         var sh=innerWidth>innerHeight?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height);
         var h=(sh===window.innerHeight+top)?sh:window.innerHeight;
         document.documentElement.style.setProperty('--app-h',h+'px');
+        // TEMPORARY (iPad strip hunt): every height iOS reports, per run. Tap the app tile
+        // in the rail or sidebar to see it. Delete with shellReadout in app.js.
+        var f=document.createElement('div');
+        f.style.cssText='position:fixed;visibility:hidden;inset:0;padding-bottom:env(safe-area-inset-bottom)';
+        document.documentElement.appendChild(f);
+        var fixedH=f.getBoundingClientRect().height, bot=parseFloat(getComputedStyle(f).paddingBottom)||0;
+        f.style.cssText='position:absolute;visibility:hidden;top:0;height:100lvh';
+        var lvh=f.getBoundingClientRect().height; f.remove();
+        (window.__shellLog=window.__shellLog||[]).push({t:Math.round(performance.now()),app:h,inner:innerWidth+'x'+innerHeight,
+          outer:outerWidth+'x'+outerHeight,screen:screen.width+'x'+screen.height,avail:screen.availWidth+'x'+screen.availHeight,
+          vv:window.visualViewport?Math.round(visualViewport.width)+'x'+Math.round(visualViewport.height):'-',
+          client:document.documentElement.clientHeight,fixed:Math.round(fixedH),lvh:Math.round(lvh),top:top,bottom:bot});
+        if(__shellLog.length>8) __shellLog.splice(1,1);   // keep the launch reading
       }
       fitShell();
       // Re-run once the body exists: the probe measures env() from inside <head>, where it
       // is the only element in the tree — cheap insurance against that reading 0.
       addEventListener('DOMContentLoaded',fitShell);
-      // iPad at a cold launch: the standalone window reports its size late, and no resize
-      // event follows, so the first reading can stay one inset short (a bare strip at the
-      // bottom until a rotation fixes it). Re-measure once the page has loaded and twice
-      // more after that. ponytail: fixed delays; switch to a settle loop if a device needs longer.
-      addEventListener('load',function(){ fitShell(); setTimeout(fitShell,300); setTimeout(fitShell,1000); });
-      addEventListener('pageshow',fitShell);
-      if(window.visualViewport) visualViewport.addEventListener('resize',fitShell);
       addEventListener('resize',fitShell);
       addEventListener('orientationchange',fitShell);
     })();

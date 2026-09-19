@@ -613,7 +613,15 @@ function addSubmit(){
   inp.value=''; inp.blur();
   withBoot(function(){ openTxModal(text?{Date:newTxDate(),Description:text,Category:''}:null); });
 }
+/* TEMPORARY (iPad strip hunt): the heights index.html logged, first run first. */
+function shellReadout(){
+  var pre=el('pre',null,esc((window.__shellLog||[]).map(function(r){ return JSON.stringify(r); }).join('\n\n')));
+  pre.style.cssText='white-space:pre-wrap;font-size:12px;margin:0;user-select:text;-webkit-user-select:text';
+  var ok=el('button','btn primary','Close'); ok.onclick=closeModal;
+  openModal(modalShell('Shell heights', pre, [ok]));
+}
 function wireShell(){
+  $('.brand-tile').addEventListener('click', shellReadout);
   document.querySelectorAll('.theme-btn').forEach(wireThemeBtn);
   applyTheme(themePref());
   document.querySelectorAll('.sync').forEach(function(b){ b.addEventListener('click',function(){ closeSheet(); refresh(); }); });
