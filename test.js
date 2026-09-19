@@ -688,6 +688,23 @@ describe('Gmail courier watermark (vm)', () => {
       assert.strictEqual(app.syncText(true, 0, 1, 2), 'Offline');
       assert.strictEqual(app.syncText(true, 2, 1, 2), 'Offline · 2 waiting to sync');
       // The tooltip body escapes its inputs and bolds only the result rows.
+      // Swap: floor = (usd − your fee) × mid, ceiling = usd × mid + their fee; the split shares the pot.
+      const sw = app.swapCalc(1000, 60, 4, 150, 50);
+      assert.strictEqual(sw.floor, 59760); assert.strictEqual(sw.ceil, 60150);
+      assert.strictEqual(sw.pot, 390); assert.strictEqual(sw.deal, 59955);
+      assert.strictEqual(sw.youSave + sw.theySave, sw.pot);
+      assert.strictEqual(app.swapCalc(1000, 60, 4, 150, 0).deal, 59760, 'a 0% share is the Wise floor');
+      // Tax quarters: filed only when every salary in it is; Q4 is due on the annual return.
+      const tq = app.taxQuarters([
+        { 'Date Received': '2026-02-01', 'Filed?': '2026-Q1', 'Total Income': 100, '8% Tax': 8 },
+        { 'Date Received': '2026-08-01', 'Filed?': '', 'Total Income': 200, '8% Tax': 16 },
+        { 'Date Received': '2026-07-01', 'Filed?': '2026-Q3', 'Total Income': 50, '8% Tax': 4 },
+        { 'Date Received': '⚠ transaction deleted', 'Filed?': '', 'Total Income': 999, '8% Tax': 80 },
+        { 'Date Received': '2025-12-01', 'Filed?': '', 'Total Income': 999, '8% Tax': 80 }
+      ], '2026', '2026-09-19');
+      assert.strictEqual(tq.map((q) => q.state).join(), 'filed,empty,due,future');
+      assert.strictEqual(tq[2].php, 250); assert.strictEqual(tq[2].tax, 20); assert.ok(tq[2].current);
+      assert.strictEqual(tq[2].due, '2026-11-15'); assert.strictEqual(tq[3].due, '2027-04-15');
       const tipH = app.tipHTML({ title: 'A<b>', rows: [['In', '1'], ['Out', '2', true]], note: 'n' });
       assert.ok(tipH.includes('A&lt;b&gt;') && !tipH.includes('A<b>'), 'tipHTML must escape');
       // Accounts rows: interest_rate is a fraction, and a 0% rate says nothing.

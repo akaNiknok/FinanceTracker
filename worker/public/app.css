@@ -449,6 +449,74 @@ button.h-row:active{background:var(--card-2)}
 @media(min-width:768px){ .t-pulse,.t-hold{grid-column:span 2} }
 @media(min-width:1200px){ .t-hold{grid-column:span 4} }
 
+/* ── Swap (v3 Phase 6): inputs as a grouped list, then the result tiles. Side by
+ * side from 1200px. ── */
+.sw{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
+.sw-in{padding:0;gap:0;overflow:hidden}
+.sw-f{display:flex;align-items:center;gap:12px;min-height:56px;padding:0 20px;border-top:1px solid var(--sep)}
+.sw-f:first-child{border-top:0}
+.sw-f>span{flex:1;display:flex;flex-direction:column;min-width:0}
+.sw-k{font-size:15px} .sw-s{font-size:12px;color:var(--dim)}
+.sw-f input{width:130px;text-align:right;border:0;outline:none;background:none;color:var(--text);font:inherit;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.sw-f:focus-within{box-shadow:inset 3px 0 0 var(--accent)}
+.sw-split{padding:14px 20px 16px;border-top:1px solid var(--sep)}
+.sw-sh{display:flex;justify-content:space-between;font-size:15px;margin-bottom:6px}
+.sw-split input{width:100%;height:28px;margin:0;-webkit-appearance:none;appearance:none;background:none}
+.sw-split input::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent) var(--v,50%),var(--track) var(--v,50%))}
+.sw-split input::-moz-range-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent) var(--v,50%),var(--track) var(--v,50%))}
+.sw-split input::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;margin-top:-12px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sw-split input::-moz-range-thumb{width:28px;height:28px;border:0;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sw-out{display:flex;flex-direction:column;gap:12px;min-width:0}
+.sw-rate{font-size:17px;font-weight:600}
+.sw-range{position:relative;height:66px;margin-top:10px;font-size:12px;color:var(--dim)}
+.sw-lo,.sw-hi{position:absolute;top:0} .sw-lo{left:0} .sw-hi{right:0}
+.sw-bar{position:absolute;left:0;right:0;top:24px;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--pos),var(--accent))}
+.sw-bar b{position:absolute;top:-8px;width:3px;height:28px;margin-left:-1.5px;border-radius:2px;background:var(--text)}
+.sw-mid{position:absolute;top:0;width:2px;height:12px;margin-left:-1px;background:#fff;opacity:.85}
+.sw-fair{position:absolute;top:46px;transform:translateX(-50%);font-weight:600;color:var(--text);white-space:nowrap}
+.sw-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.sw-pair .fig{font-size:24px}
+.btn.sw-rec{align-self:flex-start;min-height:44px;border-radius:22px;padding:0 18px;font-size:15px}
+@media(min-width:768px){ .sw,.sw-out,.sw-pair{gap:16px} .sw-pair .fig{font-size:26px} }
+@media(min-width:1200px){ .sw{grid-template-columns:420px minmax(0,1fr)} }
+
+/* ── Tax (v3 Phase 6): quarter tiles, the unlinked-salary banner, the table. ── */
+.tax-q{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.tax-q .fig{font-size:24px}
+.tax-q .tile-l,.tax-q .pill{white-space:nowrap}
+.tax-q .tile-h{gap:6px}
+.tile.ring{box-shadow:0 0 0 2px var(--warn)}
+.tax-warn{display:flex;align-items:center;gap:12px;background:var(--warn-tint);border-radius:16px;padding:12px 16px;margin-bottom:12px;font-size:14px}
+.tax-warn>.ico{width:20px;height:20px;color:var(--warn);flex:none}
+.tax-warn .grow{flex:1;min-width:0}
+.tax-warn .btn{background:var(--warn);border-color:var(--warn);color:#fff;border-radius:999px;flex:none}
+.tax-tbl{padding:4px 8px}
+.tax-tbl .tbl-wrap{max-height:none}
+table.tbl th.num,table.tbl td.num{text-align:right}
+table.tbl th .tip-btn{vertical-align:middle;margin-left:2px}
+.typed{display:inline-block;min-width:70px;padding:4px 8px;border-radius:8px;background:var(--card-2)}
+.typed.empty{color:var(--dim)}
+table.tbl td.ed-cell:hover .typed{box-shadow:inset 0 0 0 1px var(--accent)}
+.q-select.q-pill{border:0;border-radius:999px;height:28px;padding:0 10px;font-size:13px;font-weight:600;color:var(--dim)}
+.q-select.q-pill.on{background:var(--pos-tint);color:var(--pos)}
+@media(min-width:768px){ .tax-q{gap:16px;margin-bottom:16px} .tax-warn{margin-bottom:16px} .tax-q .fig{font-size:26px} }
+@media(min-width:1200px){ .tax-q{grid-template-columns:repeat(4,minmax(0,1fr))} }
+table.tbl .icon-btn{background:none;color:var(--dim);width:32px;height:32px}
+table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
+
+/* ── Admin (v3 Phase 6): the table picker is a segmented control that scrolls
+ * sideways when it does not fit. ── */
+.adm-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.adm-seg{overflow-x:auto;scrollbar-width:none;max-width:100%;flex:0 1 auto}
+.adm-seg::-webkit-scrollbar{display:none}
+.adm-seg>button{white-space:nowrap;flex:none}
+.adm-tbl{padding:4px 8px 0}
+.adm-tbl .tbl-wrap{max-height:none}
+.adm-tbl th .ico{display:inline-block;width:12px;height:12px;margin-left:4px;vertical-align:-1px}
+.adm-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 8px 12px;font-size:13px;color:var(--dim)}
+.adm-pg{display:flex;align-items:center;gap:14px}
+.adm-pg .link-btn:disabled{opacity:.4;cursor:default}
+
 /* ── Meters (budgets / utilization): track = lighter step of the same ramp ── */
 .meter{position:relative;height:10px;border-radius:6px;background:var(--accent-tint);margin-top:9px}
 .meter.warn{background:var(--warn-tint)}

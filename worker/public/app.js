@@ -2468,65 +2468,99 @@ function renderTax(){
     });
 
     var w=el('div','screen');
-    var head=el('div','screen-head');
-    head.appendChild(el('div','screen-title','Tax · BIR Ledger'));
+    var head=el('div','screen-head','<div class="screen-title">Tax</div>');
     var acts=el('div','btn-row');
-    // BIR files per year and the payload is now one year wide, so the year is a control,
-    // not a scroll. Native <select> for the same reason quarterSelect is one: a dozen
-    // fixed options. `years` comes from the server; the current year is always offered
-    // even before it has its first payslip.
+    // BIR files per year and the payload is one year wide, so the year is a control.
     acts.appendChild(ledgerYearSelect(res.year, res.years));
-    var addBtn=el('button','btn sm primary','+ Add row');
+    var addBtn=el('button','btn sm primary','Add row'); addBtn.type='button';
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
     acts.appendChild(addBtn);
     head.appendChild(acts);
     w.appendChild(head);
-    w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only) · '+
-      // The BSP reference rate is hand-typed per payslip, so link its source here.
-      // target=_blank keeps the SPA's state when you go check the rate.
-      '<a class="tx-link" target="_blank" rel="noopener" href="https://www.bsp.gov.ph/statistics/external/day99_data.aspx">BSP daily PHP/USD rate ›</a>'));
+    w.appendChild(el('div','screen-sub','Foreign salary for BIR, 8% of gross income · '+esc(res.year)));
 
-    if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); }
+    var qg=el('div','tax-q');
+    taxQuarters(rows,String(res.year),isoDate(new Date())).forEach(function(q){ qg.appendChild(taxTile(q)); });
+    w.appendChild(qg);
+    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedBanner(res.unlinked,res.txIdCol));
+
+    if(!rows.length){ w.appendChild(el('div','tile','<div class="tile-foot">No salaries in the ledger for '+esc(res.year)+'.</div>')); }
     else {
-      var card=el('div','card'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
-      var thead=el('thead'), htr=el('tr');
-      cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(derived[c]?' <span class="faint">ƒ</span>':''))); });
-      htr.appendChild(el('th')); // delete column
-      thead.appendChild(htr); t.appendChild(thead);
-
+      var card=el('section','tile tax-tbl'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
+      var htr=el('tr');
+      cols.forEach(function(c){
+        var th=el('th',LEDGER_NUM[c]?'num':null,esc(LEDGER_LABEL[c]||c));
+        if(/rate/i.test(c)) th.appendChild(tip(BSP_TIP));
+        htr.appendChild(th);
+      });
+      htr.appendChild(el('th'));
+      var thead=el('thead'); thead.appendChild(htr); t.appendChild(thead);
       var tb=el('tbody'), ctx={cols:cols, derived:derived, txIdCol:res.txIdCol};
       rows.forEach(function(r){ tb.appendChild(ledgerRowTr(r, ctx)); });
       t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
     }
-    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedSalaryCard(res.unlinked,res.txIdCol));
     paint(w);
   }).catch(showErr);
 }
 
-/* Salary transactions no ledger row references yet. Adding one writes ONLY the link
- * column — every figure on the row is a sheet formula off that ID, so there is
- * nothing else to type but the BSP rate. */
-function unlinkedSalaryCard(list, txIdCol){
-  var card=el('div','card');
-  card.appendChild(el('div','card-h','Salary not in the ledger ('+list.length+')'));
-  var l=el('div','list');
-  list.forEach(function(t){
-    var r=el('div','litem');
-    r.innerHTML='<div class="grow"><div class="t1">'+esc(t.Description||'Salary')+'</div>'+
-                '<div class="t2">'+esc(fmtDate(t.Date))+' · '+esc(t.Account||'')+'</div></div>'+
-                '<div class="amt">'+esc(moneyCur(t.Amount,t.Currency))+'</div>';
-    var add=el('button','btn sm primary','+ Add');
-    add.onclick=function(){
-      add.disabled=true; add.textContent='Adding…';
-      var obj={}; obj[txIdCol]=t.ID;
-      gs('api_appendLedgerRow',obj).then(function(){
-        toast('Added to ledger','ok'); dropCache(); renderTax();
-      }).catch(function(e){ add.disabled=false; add.textContent='+ Add'; toast(e.message||e,'err'); });
-    };
-    r.appendChild(add); l.appendChild(r);
+var BSP_TIP={title:'Why you type this rate',
+  text:"BIR wants the central bank's reference rate on the day the money arrived. The app's live rate is a different number, so it cannot fill this in for you.",
+  rows:[['PHP','USD × BSP rate'],['8% tax','PHP × 8%',true]],
+  note:'Find the rate on the BSP website: Statistics, then Exchange rates, then the daily PHP per USD table.'};
+
+/* The four BIR quarters of one year, from the ledger rows (pure, tested). A quarter
+ * is filed when every salary in it has a Filed quarter. Q1–Q3 are due on the 15th
+ * of the second month after; Q4 goes on the annual return, due 15 April. */
+function taxQuarters(rows, year, today){
+  var qs=[1,2,3,4].map(function(i){ return {q:i,n:0,filed:0,php:0,tax:0}; });
+  rows.forEach(function(r){
+    var d=String(r['Date Received']||'');
+    if(d.slice(0,4)!==year||!/^\d{4}-\d\d/.test(d)) return;
+    var o=qs[Math.floor((+d.slice(5,7)-1)/3)];
+    o.n++; if(r['Filed?']) o.filed++;
+    o.php+=Number(r['Total Income'])||0; o.tax+=Number(r['8% Tax'])||0;
   });
-  card.appendChild(l);
-  return card;
+  var p2=function(n){ return (n<10?'0':'')+n; };
+  qs.forEach(function(o){
+    var start=year+'-'+p2(o.q*3-2)+'-01', end=o.q<4?year+'-'+p2(o.q*3+1)+'-01':(+year+1)+'-01-01';
+    o.due=o.q<4?year+'-'+['05','08','11'][o.q-1]+'-15':(+year+1)+'-04-15';
+    o.current=today>=start&&today<end;
+    o.opens=start;
+    o.state=today<start?'future':(o.n&&o.filed===o.n)?'filed':o.n?'due':'empty';
+  });
+  return qs;
+}
+function dayMonth(iso,short){ var m=MONTHS_FULL[+iso.slice(5,7)-1]; return (+iso.slice(8,10))+' '+(short?m.slice(0,3):m); }
+function taxTile(q){
+  var badge={filed:['pos','Filed'],due:['warn','Due '+dayMonth(q.due,true)]}[q.state];
+  var sal=q.n+' salar'+(q.n===1?'y':'ies');
+  var spec=q.n?{title:'Q'+q.q+' tax',text:'Each salary at its BSP rate, then 8% of the total.',
+    rows:[['Income, '+sal,money(q.php,true)],['= Tax at 8%',money(q.tax,true),true]],
+    note:q.q===4?'Q4 goes on the annual return.':'Filed means every salary in the quarter has a Filed quarter.'}:null;
+  var t=sumTile('tax-t'+(q.state==='due'?' ring':''),'Q'+q.q+(q.current?' so far':''),
+    badge?'<span class="pill '+badge[0]+'">'+badge[1]+'</span>':null,spec);
+  t.appendChild(el('div','fig',q.state==='future'?'—':money(q.php,true)));
+  t.appendChild(el('div','tile-foot',q.state==='future'?'Opens '+dayMonth(q.opens):q.n?'Tax '+money(q.tax,true)+' · '+sal:'No salaries'));
+  return t;
+}
+
+/* Salary transactions no ledger row points at yet. Adding one writes ONLY the link;
+ * every figure on the row derives from it, so the BSP rate is all that is left to type. */
+function unlinkedBanner(list, txIdCol){
+  var n=list.length, b=el('section','tax-warn');
+  var one=function(t){ return esc(moneyCur(t.Amount,t.Currency))+' on '+esc(dayMonth(String(t.Date).slice(0,10))); };
+  b.innerHTML=icon('info')+'<span class="grow"><b>'+n+' salar'+(n===1?'y is':'ies are')+' not in the tax ledger.</b> '+
+    (n===1?esc(list[0].Description||'Salary')+', '+one(list[0])+'.':list.map(one).join(' · '))+'</span>';
+  var add=el('button','btn sm','Add to ledger'); add.type='button';
+  add.onclick=function(){
+    add.disabled=true; add.textContent='Adding…';
+    list.reduce(function(p,t){ return p.then(function(){ var o={}; o[txIdCol]=t.ID; return gs('api_appendLedgerRow',o); }); },Promise.resolve())
+      .then(function(){ toast(n===1?'Added to the ledger':n+' added to the ledger','ok'); })
+      .catch(function(e){ toast(e.message||e,'err'); })
+      .then(function(){ dropCache(); renderTax(); });
+  };
+  b.appendChild(add);
+  return b;
 }
 
 /* Reading order for the Tax table — the sheet's own column order is the owner's
@@ -2573,12 +2607,17 @@ function quarterSelect(val, onPick){
  * hands dates back as yyyy-MM-dd, the same value <input type="date"> produces, and
  * Sheets parses that ISO string straight into a real date on setValue. */
 function isDateCol(c){ return /date/i.test(c); }
-/* Ledger amounts read as money (2dp); the BSP reference rate keeps its precision.
- * Display only — the inline editor still gets the raw cell value. */
+/* Display only — the inline editor still gets the raw cell value. The rate keeps
+ * its precision; Wise Amount is the payslip in dollars. */
+var LEDGER_LABEL={'Date Received':'Received','Reporting Period':'Month','Filed?':'Filed in','Wise Amount':'USD',
+  'BSP Reference Rate':'BSP rate','Total Income':'PHP','8% Tax':'8% tax','Transaction ID':'Transaction'};
+var LEDGER_NUM={'Wise Amount':1,'BSP Reference Rate':1,'Total Income':1,'8% Tax':1};
 function ledgerText(col,val){
-  if(typeof val==='number' && !/rate/i.test(col))
-    return val.toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
-  return val==null?'':String(val);
+  if(val==null||val==='') return '';
+  if(typeof val==='number') return col==='Wise Amount'?moneyCur(val,'USD'):/rate/i.test(col)?String(val):money(val);
+  if(col==='Date Received'&&/^\d{4}-\d\d-\d\d$/.test(val)) return dayMonth(val,true);
+  if(col==='Reporting Period') return monthLabel(val);
+  return String(val);
 }
 /* A Transaction ID that opens that transaction's edit modal. */
 function txLinkEl(id){
@@ -2597,17 +2636,21 @@ function ledgerRowTr(r, ctx){
     // The link column opens the transaction instead of editing the ID; an empty
     // one stays editable so a legacy row can still be linked by hand.
     if(c===ctx.txIdCol && val!=null && val!==''){ td.appendChild(txLinkEl(String(val))); }
-    else if(ctx.derived[c]){ td.className='dim'; td.textContent=ledgerText(c,val); }
+    else if(ctx.derived[c]){ td.textContent=ledgerText(c,val); if(LEDGER_NUM[c]) td.className='num'; if(/^⚠/.test(String(val))){ td.className='warn'; td.textContent='Transaction deleted'; } }
     else if(isFiledCol(c)){
-      td.appendChild(quarterSelect(val, function(v){ ledgerSaveCell(tr, r, ctx, c, v); }));
+      var q=quarterSelect(val, function(v){ ledgerSaveCell(tr, r, ctx, c, v); });
+      q.classList.add('q-pill'); if(val) q.classList.add('on');
+      td.appendChild(q);
     }
     else {
-      td.className='ed-cell'; td.title='Tap to edit'; td.textContent=ledgerText(c,val);
+      // A typed cell looks like a field, so it reads as the one thing to fill in.
+      td.className='ed-cell'+(LEDGER_NUM[c]?' num':''); td.title='Tap to edit';
+      td.innerHTML='<span class="typed'+(val===''||val==null?' empty':'')+'">'+esc(ledgerText(c,val)||'Type')+'</span>';
       td.onclick=function(){ ledgerCellEdit(td, tr, r, ctx, c); };
     }
     tr.appendChild(td);
   });
-  var dtd=el('td'), del=el('button','icon-btn','✕'); del.title='Delete row';
+  var dtd=el('td'), del=el('button','icon-btn',icon('close')); del.type='button'; del.title='Delete row'; del.setAttribute('aria-label','Delete row');
   del.onclick=function(){ ledgerDeleteRow(r.__row); };
   dtd.appendChild(del); tr.appendChild(dtd);
   return tr;
@@ -2630,6 +2673,7 @@ function ledgerSaveCell(tr, r, ctx, header, value){
 function ledgerCellEdit(td, tr, r, ctx, header){
   var curVal=r[header];
   var input=el('input','ledger-edit-input'); input.type='text';
+  if(LEDGER_NUM[header]) input.inputMode='decimal';
   if(curVal!=null) input.value=String(curVal);
   td.classList.add('editing'); td.textContent=''; td.appendChild(input); input.focus(); input.select();
   var done=false;
@@ -2682,75 +2726,84 @@ function ledgerDeleteRow(row){
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- *  EXCHANGE — fair USD↔PHP swap with the other person. Both of you would
- *  otherwise pay a Wise fee — you cashing out USD→PHP, they buying USD with
- *  PHP→USD — and the two routes carry DIFFERENT fees, so we take each as the
- *  actual amount Wise quotes (your fee in USD, theirs in PHP). Wise deducts its
- *  fee from the SOURCE, then converts the remainder at mid-market, so your floor
- *  = (usd − feeYou)×mid and their ceiling = mid + feeBro (the `bro`/`Bro` names
- *  are historical — they mean "the other person"). Trading direct avoids both fees;
- *  the slider splits that pot. At the mid-market rate each of you simply keeps
- *  your own avoided fee (only the 50/50 point when the two fees are equal).
- *  Defaults reproduce a sample Wise quote ($3.68 out, ₱154.83 in; tunable).
+ *  SWAP (screen key `exchange`, v3 Phase 6) — a fair USD↔PHP rate with a
+ *  friend. Both of you would otherwise pay Wise, and the two routes carry
+ *  DIFFERENT fees, so each is the amount Wise quotes (yours in $, theirs in ₱).
+ *  swapCalc holds the maths. At the mid-market rate each of you keeps your own
+ *  avoided fee. Defaults are a sample Wise quote ($3.68 out, ₱154.83 in).
  * ════════════════════════════════════════════════════════════════════════ */
 function renderExchange(){
   if(needBoot('table', renderExchange)) return;
   var w=el('div','screen');
-  w.appendChild(el('div','screen-title','Swap · Fair USD↔PHP'));
-  w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with the other person'));
-
-  var rate0 = (S.boot.fxUsdPhp!=null && S.boot.fxUsdPhp>0) ? Number(S.boot.fxUsdPhp).toFixed(4) : '';
-  var card=el('div','card');
-  card.innerHTML=
-    '<div class="field-row">'+
-      '<div class="field"><label>Dollars I\'m giving ($)</label><input id="exAmt" type="number" min="0" step="any" value="1000"></div>'+
-      '<div class="field"><label>Mid-market rate (₱ per $1)</label><input id="exRate" type="number" min="0" step="any" value="'+rate0+'">'+
-        '<div class="hint">Live rate, editable</div></div>'+
-    '</div>'+
-    '<div class="field-row">'+
-      '<div class="field"><label>Your Wise fee — USD→PHP ($)</label><input id="exFeeYou" type="number" min="0" step="any" value="3.68"></div>'+
-      '<div class="field"><label>Their Wise fee — PHP→USD (₱)</label><input id="exFeeBro" type="number" min="0" step="any" value="154.83"></div>'+
-    '</div>'+
-    '<div class="field"><label>Your share of the saved fee: <span id="exSplitLbl">50%</span></label>'+
-      '<input id="exSplit" type="range" min="0" max="100" step="5" value="50" style="width:100%;accent-color:var(--accent)"></div>';
-  w.appendChild(card);
-  w.appendChild(el('div','',null)).id='exOut';
-  paint(w);
-
-  ['exAmt','exRate','exFeeYou','exFeeBro','exSplit'].forEach(function(id){
-    $('#'+id).addEventListener('input', exCalc);
+  w.appendChild(el('div','screen-head','<div class="screen-title">Swap</div>'));
+  w.appendChild(el('div','screen-sub','A fair USD ↔ PHP rate with a friend'));
+  var rate0=(S.boot.fxUsdPhp>0)?Number(S.boot.fxUsdPhp).toFixed(4):'';
+  var g=el('div','sw'), inCard=el('section','tile sw-in'), out=el('div','sw-out');
+  [['exAmt','Dollars you give','USD','1000'],['exRate','Mid-market rate','Live · tap to change',rate0],
+   ['exFeeYou','Your Wise fee','USD → PHP, in $','3.68'],['exFeeBro','Their Wise fee','PHP → USD, in ₱','154.83']].forEach(function(f){
+    var l=el('label','sw-f','<span><span class="sw-k">'+f[1]+'</span><span class="sw-s">'+f[2]+'</span></span>');
+    var i=inputEl('text',f[3]); i.id=f[0]; i.inputMode='decimal'; i.autocomplete='off'; l.appendChild(i); inCard.appendChild(l);
   });
+  var sp=el('div','sw-split','<div class="sw-sh"><span>Your share of the saving</span><b id="exSplitLbl">50%</b></div>'+
+    '<input id="exSplit" type="range" min="0" max="100" step="5" value="50" aria-label="Your share of the saving">');
+  inCard.appendChild(sp);
+  g.appendChild(inCard); g.appendChild(out); w.appendChild(g);
+  paint(w);
+  ['exAmt','exRate','exFeeYou','exFeeBro','exSplit'].forEach(function(id){ $('#'+id).addEventListener('input', exCalc); });
   exCalc();
 }
 
+/* The pure part of the swap (tested in test.js). Wise takes its fee from the SOURCE
+ * and converts the rest at mid, so your floor = (usd − feeYou) × mid and their
+ * ceiling = usd × mid + feeThem. Trading direct saves both fees; `split` is your
+ * share of that pot. */
+function swapCalc(usd, mid, feeYouUsd, feeThemPhp, split){
+  var floor=(usd-feeYouUsd)*mid, ceil=usd*mid+feeThemPhp, pot=ceil-floor, deal=floor+split/100*pot;
+  return {floor:floor, ceil:ceil, pot:pot, deal:deal, rate:deal/usd, youSave:deal-floor, theySave:ceil-deal};
+}
+function exNum(id){ return parseFloat(String($('#'+id).value).replace(/[,\s$₱]/g,''))||0; }
+
 function exCalc(){
-  var usd=parseFloat($('#exAmt').value)||0, rate=parseFloat($('#exRate').value)||0;
-  var feeYouUsd=parseFloat($('#exFeeYou').value)||0, feeBroPhp=parseFloat($('#exFeeBro').value)||0;
-  var split=parseFloat($('#exSplit').value)||0;
+  var usd=exNum('exAmt'), mid=exNum('exRate'), fy=exNum('exFeeYou'), ft=exNum('exFeeBro'), split=exNum('exSplit');
   $('#exSplitLbl').textContent=split+'%';
-  var out=$('#exOut');
-  if(!(usd>0)||!(rate>0)){ out.innerHTML='<div class="empty">Enter an amount and a rate.</div>'; return; }
+  $('#exSplit').style.setProperty('--v',split+'%');
+  var out=$('.sw-out');
+  if(!(usd>0)||!(mid>0)){ out.innerHTML='<div class="tile"><div class="tile-foot">Type the dollars and a rate.</div></div>'; return; }
+  var c=swapCalc(usd,mid,fy,ft,split), span=c.ceil-c.floor;
+  var at=function(v){ return span>0?Math.max(0,Math.min(100,100*(v-c.floor)/span)):50; };
+  var r2=function(n){ return '₱'+num(Math.round(n/usd*100)/100); };
+  out.innerHTML='';
+  var h=sumTile('sw-hero','They send you',null,{title:'How the fair rate is set',
+    text:'Each of you would pay Wise a fee. Trading direct saves both fees, and the slider splits that saving.',
+    rows:[['Wise pays you',money(c.floor)],['Wise costs them',money(c.ceil)],['Saving (both fees)',money(c.pot)],
+          ['Your share',split+'%'],['= They send you',money(c.deal),true]],
+    note:'Wise takes its fee from the money it converts, then uses the mid-market rate.'});
+  h.insertAdjacentHTML('beforeend','<div class="fig-row"><span class="fig-hero">'+money(c.deal)+'</span><span class="fig-sub">for '+moneyCur(usd,'USD')+'</span></div>'+
+    '<div class="sw-rate">Fair rate '+r2(c.deal)+' per $1</div>'+
+    '<div class="sw-range"><span class="sw-lo">Wise pays you '+r2(c.floor)+'</span><span class="sw-hi">Wise costs them '+r2(c.ceil)+'</span>'+
+      '<div class="sw-bar"><i class="sw-mid" style="left:'+at(usd*mid)+'%"></i><b style="left:'+at(c.deal)+'%"></b></div>'+
+      '<span class="sw-fair" style="left:'+at(c.deal)+'%">Fair '+r2(c.deal)+'</span></div>'+
+    '<div class="tile-foot">Any rate inside the bar beats Wise for you both. The white mark is the mid-market rate, '+r2(usd*mid)+'.</div>');
+  out.appendChild(h);
+  var pair=el('div','sw-pair');
+  [['You save',c.youSave,'Your '+split+'% of '+money(c.pot)],['They save',c.theySave,'Their '+(100-split)+'% of '+money(c.pot)]].forEach(function(s){
+    var t=sumTile('','' +s[0]); t.appendChild(el('div','fig pos',money(s[1]))); t.appendChild(el('div','tile-foot',s[2])); pair.appendChild(t);
+  });
+  out.appendChild(pair);
+  var rec=el('button','btn primary sw-rec','Record this swap'); rec.type='button';
+  rec.onclick=function(){ openTransferModal(swapDraft(usd,c.deal)); };
+  out.appendChild(rec);
+}
 
-  var midPhp = usd*rate;
-  // Wise deducts its fee from the SOURCE, then converts the remainder at mid.
-  var wiseNetPhp = midPhp - feeYouUsd*rate;           // ₱ you'd receive cashing out USD→PHP (your floor)
-  var broWiseCostPhp = midPhp + feeBroPhp;            // ₱ they'd send to net the USD via PHP→USD (their ceiling)
-  var potPhp = broWiseCostPhp - wiseNetPhp;           // total saved by trading direct = both avoided fees
-  var dealPhp = wiseNetPhp + split/100*potPhp;        // fair deal: your `split` of the whole pot
-
-  function stat(label,val,sub){return '<div class="stat"><div class="stat-label">'+esc(label)+
-    '</div><div class="stat-value">'+val+'</div>'+(sub?'<div class="stat-sub">'+sub+'</div>':'')+'</div>';}
-
-  out.innerHTML=
-    '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">They send you</div>'+
-      '<div class="stat-value">'+money(dealPhp)+' <span style="font-size:14px;color:var(--dim)">for '+moneyCur(usd,'USD')+'</span></div>'+
-      '<div class="stat-sub" style="font-size:15px;font-weight:650;color:var(--text);margin-top:8px">Fair rate ₱'+num(dealPhp/usd)+' per $1</div></div>'+
-    '<div class="grid grid-2">'+
-      stat('You save vs Wise', '<span class="pos">'+money(dealPhp-wiseNetPhp)+'</span>', 'your '+split+'% of '+money(potPhp)) +
-      stat('They save vs Wise', '<span class="pos">'+money(broWiseCostPhp-dealPhp)+'</span>', 'their '+(100-split)+'% of '+money(potPhp)) +
-    '</div>'+
-    '<div class="hint" style="margin-top:10px">Any rate from '+num(wiseNetPhp/usd)+' to '+num(broWiseCostPhp/usd)+
-      ' beats Wise for you both; at mid-market ('+num(rate)+') you each keep your own avoided fee.</div>';
+/* The transfer the swap books: USD out of a dollar account, pesos into a peso one.
+ * ToAmount/Amount is then the fair rate, and the implied-rate rule stamps it. */
+function swapDraft(usd, php){
+  var accs=(S.boot.accounts||[]).filter(function(a){ return !a.isShares&&!a.isLiability&&!isRecv(a); });
+  var big=function(l){ return l.sort(function(a,b){ return (b.balancePhp||0)-(a.balancePhp||0); })[0]; };
+  var from=big(accs.filter(function(a){ return a.currency==='USD'; }));
+  var last=prefGet('lastAcct'), to=accs.filter(function(a){ return a.name===last&&(a.currency||'PHP')==='PHP'; })[0]||
+    big(accs.filter(function(a){ return (a.currency||'PHP')==='PHP'; }));
+  return {Date:newTxDate(), Amount:Math.round(usd*100)/100, ToAmount:Math.round(php*100)/100, Account:from?from.name:'', ToAccount:to?to.name:'', Description:'USD swap'};
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -2780,85 +2833,99 @@ function adminTable(){ return S.admin.table||'accounts'; }
    the ✓ CSV button below pays for the full table only when you actually ask for it. */
 var ADMIN_PAGE = 50;
 
+// Picker labels. The server owns WHICH tables exist (listTable.tables); a table
+// missing here shows its own name.
+var ADMIN_LABEL={accounts:'Accounts',categories:'Categories',account_types:'Account types',budgets:'Budgets',
+  recurring:'Recurring',ledger:'Tax ledger',prices:'Prices',nw_snapshots:'Net worth history',meta:'Settings',
+  transactions:'Transactions',email_quotes:'Email quotes'};
+function adminLabel(t){ return ADMIN_LABEL[t]||t; }
+
 function renderAdmin(){
   var t=adminTable(), off=S.admin.offset||0;
   var key='table|'+t+'|'+off;
   if(!S.cache[key]) loading('table');
   return cachedCall(key, function(et){ return gs('api_listTable',{table:t,limit:ADMIN_PAGE,offset:off},et); }, function(res){
     var w=el('div','screen');
-    var head=el('div','screen-head');
-    head.appendChild(el('div','screen-title','Admin · '+t));
+    w.appendChild(el('div','screen-head','<div class="screen-title">Admin</div>'));
+    w.appendChild(el('div','screen-sub','Edit the tables behind the app'));
+
+    var bar=el('div','adm-bar'), pick=el('div','seg adm-seg');
+    (res.tables||[]).forEach(function(name){
+      var b=el('button',name===t?'on':'',esc(adminLabel(name))); b.type='button'; b.setAttribute('aria-pressed',name===t);
+      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
+      pick.appendChild(b);
+    });
+    bar.appendChild(pick);
     var actions=el('div','btn-row');
-    if((res.addable||[]).length){
-      var add=el('button','btn sm primary','+ Add row');
-      add.onclick=function(){ adminAddRow(res); };
-      actions.appendChild(add);
-    }
-    var csv=el('button','btn sm','↓ CSV');
+    var csv=el('button','btn sm','Export CSV'); csv.type='button';
     // The visible page is 50 rows; a backup file of 50 rows would be a lie. Pull every
-    // page first (listTable caps a request at 1000), so the file is the whole table —
-    // which the old limit:500 grid never was either.
+    // page first (listTable caps a request at 1000), so the file is the whole table.
     csv.onclick=function(){
       csv.disabled=true; csv.textContent='Exporting…';
       adminFetchAll(t).then(function(all){ downloadCsv(t+'.csv', res.cols, all); })
         .catch(function(e){ toast(e.message||e,'err'); })
-        .then(function(){ csv.disabled=false; csv.textContent='↓ CSV'; });
+        .then(function(){ csv.disabled=false; csv.textContent='Export CSV'; });
     };
     actions.appendChild(csv);
-    head.appendChild(actions);
-    w.appendChild(head);
-    w.appendChild(el('div','screen-sub','The tables behind the app. '+res.total+' row'+(res.total===1?'':'s')+
-      ' · tap an editable cell to change it'+((res.editable||[]).length?'':' (this table is read-only)')));
+    if((res.addable||[]).length){
+      var add=el('button','btn sm primary','Add row'); add.type='button';
+      add.onclick=function(){ adminAddRow(res); };
+      actions.appendChild(add);
+    }
+    bar.appendChild(actions);
+    w.appendChild(bar);
+    requestAnimationFrame(function(){ var on=$('.adm-seg .on'); if(on) on.scrollIntoView({block:'nearest',inline:'nearest'}); });
 
-    var picker=el('div','btn-row'); picker.style.marginBottom='14px';
-    (res.tables||[]).forEach(function(name){
-      var b=el('button','btn sm'+(name===t?' primary':''),esc(name));
-      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
-      picker.appendChild(b);
-    });
-    w.appendChild(picker);
-
-    if(!res.rows.length){ w.appendChild(el('div','empty','No rows.')); paint(w); return; }
     var editable={}; (res.editable||[]).forEach(function(c){ editable[c]=true; });
     var money={}; (res.money||[]).forEach(function(c){ money[c]=true; });
-
-    var card=el('div','card'), wrap=el('div','tbl-wrap'), tbl=el('table','tbl');
-    var htr=el('tr');
-    res.cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(money[c]?' <span class="faint">₱</span>':''))); });
-    htr.appendChild(el('th'));
-    var thead=el('thead'); thead.appendChild(htr); tbl.appendChild(thead);
-
-    var tb=el('tbody');
-    res.rows.forEach(function(row){ tb.appendChild(adminRowTr(row,res,editable)); });
-    tbl.appendChild(tb); wrap.appendChild(tbl); card.appendChild(wrap); w.appendChild(card);
-    if(res.total>ADMIN_PAGE){
-      var pg=el('div','row-between'); pg.style.marginTop='12px';
-      var prev=el('button','btn sm','← Prev'); prev.disabled=off<=0;
-      prev.onclick=function(){ S.admin.offset=Math.max(0,off-ADMIN_PAGE); render(); };
-      var next=el('button','btn sm','Next →'); next.disabled=off+ADMIN_PAGE>=res.total;
-      next.onclick=function(){ S.admin.offset=off+ADMIN_PAGE; render(); };
-      var info=el('div','dim','Showing '+(off+1)+'–'+Math.min(off+ADMIN_PAGE,res.total)+' of '+res.total);
-      info.style.fontSize='12px';
-      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
-      w.appendChild(pg);
+    var ro=!(res.editable||[]).length;
+    var card=el('section','tile adm-tbl');
+    if(!res.rows.length){ card.appendChild(el('div','tile-foot','No rows.')); }
+    else {
+      var wrap=el('div','tbl-wrap'), tbl=el('table','tbl'), htr=el('tr');
+      // A locked column is one the grid cannot edit on a table that is otherwise
+      // editable: the key other tables point at, or a derived field.
+      res.cols.forEach(function(c){
+        var th=el('th',money[c]?'num':null,esc(c)+(money[c]?' <span class="dim">₱</span>':''));
+        if(!ro&&!editable[c]){ th.insertAdjacentHTML('beforeend',icon('lock')); th.title='Locked'; }
+        htr.appendChild(th);
+      });
+      htr.appendChild(el('th'));
+      var thead=el('thead'); thead.appendChild(htr); tbl.appendChild(thead);
+      var tb=el('tbody');
+      res.rows.forEach(function(row){ tb.appendChild(adminRowTr(row,res,editable,money)); });
+      tbl.appendChild(tb); wrap.appendChild(tbl); card.appendChild(wrap);
     }
+    var foot=el('div','adm-foot');
+    foot.appendChild(el('span',null,ro?'This table is read-only.':'Click a cell to edit it. Locked columns are keys other tables point at, or derived.'));
+    var pg=el('span','adm-pg');
+    pg.appendChild(el('span',null,res.total?(off+1)+'–'+Math.min(off+ADMIN_PAGE,res.total)+' of '+res.total:'0 rows'));
+    if(res.total>ADMIN_PAGE){
+      var prev=el('button','link-btn','‹ Prev'); prev.type='button'; prev.disabled=off<=0;
+      prev.onclick=function(){ S.admin.offset=Math.max(0,off-ADMIN_PAGE); render(); };
+      var next=el('button','link-btn','Next ›'); next.type='button'; next.disabled=off+ADMIN_PAGE>=res.total;
+      next.onclick=function(){ S.admin.offset=off+ADMIN_PAGE; render(); };
+      pg.appendChild(prev); pg.appendChild(next);
+    }
+    foot.appendChild(pg); card.appendChild(foot);
+    w.appendChild(card);
     paint(w);
   }).catch(showErr);
 }
 
-function adminRowTr(row,res,editable){
+function adminRowTr(row,res,editable,money){
   var tr=el('tr');
   res.cols.forEach(function(c){
-    var td=el('td',null,esc(row[c]==null?'':row[c]));
+    var td=el('td',money&&money[c]?'num':null,esc(row[c]==null?'':row[c]));
     if(editable[c]){
       td.classList.add('ed-cell');
-      td.onclick=function(){ adminCellEdit(td,tr,row,res,editable,c); };
-    }
+      td.onclick=function(){ adminCellEdit(td,tr,row,res,editable,c,money); };
+    } else if((res.editable||[]).length) td.classList.add('dim');
     tr.appendChild(td);
   });
   var del=el('td');
-  if(res.deletable!==false){                            // read-only tables (nodelete) show no ✕
-    var b=el('button','btn sm ghost','✕'); b.title='Delete row';
+  if(res.deletable!==false){                            // read-only tables (nodelete) show no delete
+    var b=el('button','icon-btn',icon('close')); b.type='button'; b.title='Delete row'; b.setAttribute('aria-label','Delete row');
     b.onclick=function(e){ e.stopPropagation(); adminDeleteRow(res,row[res.pk]); };
     del.appendChild(b);
   }
@@ -2868,13 +2935,13 @@ function adminRowTr(row,res,editable){
 
 /* Same swap-the-td-for-an-input editor the Tax screen uses, against the generic
  * updateTableCell handler instead of a ledger-specific one. */
-function adminCellEdit(td,tr,row,res,editable,col){
+function adminCellEdit(td,tr,row,res,editable,col,money){
   var cur=row[col];
   var inp=el('input','ledger-edit-input'); inp.type='text';
   if(cur!=null) inp.value=String(cur);
   td.classList.add('editing'); td.textContent=''; td.appendChild(inp); inp.focus(); inp.select();
   var done=false;
-  function restore(){ tr.parentNode.replaceChild(adminRowTr(row,res,editable),tr); }
+  function restore(){ tr.parentNode.replaceChild(adminRowTr(row,res,editable,money),tr); }
   function commit(){
     if(done) return; done=true;
     var v=inp.value;
@@ -2905,7 +2972,7 @@ function adminAddRow(res){
       closeModal(); toast('Row added','ok'); dropCache(); render();
     }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
   };
-  openModal(modalShell('Add row · '+res.table, body, [save]));
+  openModal(modalShell('Add a row to '+adminLabel(res.table), body, [save]));
 }
 
 function adminDeleteRow(res,pk){
@@ -2917,7 +2984,7 @@ function adminDeleteRow(res,pk){
     }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Delete '+res.table+' row '+pk+'?',
+  openModal(modalShell('Delete row '+pk+' from '+adminLabel(res.table)+'?',
     el('div','dim','This removes the row permanently. D1 Time Travel can restore the database for 7 days.'), [no,yes]));
 }
 
