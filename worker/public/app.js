@@ -674,12 +674,16 @@ function qaShow(){
   if(!$('#qa')){
     var bd=el('div','qa-bd'); bd.onclick=function(){ qaHide(); $('#addInput').blur(); }; $('#app').appendChild(bd);
     var p=el('div','qa'); p.id='qa'; $('.addbar').appendChild(p);
+    // iPhone: the panel is a full-screen page, so it needs its own way out.
+    var top=el('div','qa-top'), x=barBtn('Cancel','',function(){ qaHide(); $('#addInput').blur(); });
+    top.appendChild(x); top.appendChild(el('div','ed-title','Add')); top.appendChild(el('span'));
+    $('.addbar').appendChild(top);
     // A tap inside must not blur the field (the keyboard would drop mid-edit).
     p.addEventListener('mousedown',function(e){ if(!e.target.closest('input')) e.preventDefault(); });
   }
-  QA.open=true; document.body.classList.add('qa-on'); qaDraw();
+  QA.open=true; document.body.classList.add('qa-on'); qaDraw(); qaFit();
 }
-function qaHide(){ QA.open=false; document.body.classList.remove('qa-on'); var p=$('#qa'); if(p) p.innerHTML=''; }
+function qaHide(){ QA.open=false; document.body.classList.remove('qa-on'); var p=$('#qa'); if(p) p.innerHTML=''; qaFit(); }
 function qaReset(){
   clearTimeout(QA.t); QA.text=''; QA.ai=null; QA.aiFor=''; QA.over={}; QA.kind=''; QA.sel=0;
   $('#addInput').value=''; qaHide();
@@ -738,7 +742,10 @@ function qaDraw(){
     });
     p.appendChild(chips);
   }
-  if(!p.children.length) qaHide();
+  if(!p.children.length){
+    if(qaPhone()) p.appendChild(el('div','qa-hint qa-empty','Type what you spent, like “coffee 180 gcash”'));
+    else qaHide();
+  }
 }
 function qaRow(g,label,value,items,key){
   var b=el('button','ed-row ed-link'); b.type='button';
@@ -803,21 +810,21 @@ function qaKey(e){
     e.preventDefault(); var n=QA.rows.length; QA.sel=(QA.sel+(e.key==='ArrowDown'?1:n-1))%n; qaDraw();
   }
 }
-// iPhone: the docked add bar rides on top of the keyboard. iOS pans the page to show a
-// focused field, so the visual viewport's bottom edge is what is really visible.
+// iPhone: the add panel is a full-screen page sized to the VISIBLE viewport, so the
+// field sits right on top of the keyboard. iOS pans the page to show a focused field;
+// the visual viewport (offsetTop, height) is what is really on screen.
+function qaPhone(){ return !matchMedia('(min-width:768px)').matches; }
+function qaFit(){
+  var bar=$('.addbar'); if(!bar) return;
+  bar.style.top=bar.style.height='';
+  bar.classList.toggle('kb',!!window.visualViewport&&innerHeight-visualViewport.height>120);
+  if(!window.visualViewport||!QA.open||!qaPhone()) return;
+  bar.style.top=Math.round(visualViewport.offsetTop)+'px';
+  bar.style.height=Math.round(visualViewport.height)+'px';
+}
 function qaFollowKeyboard(){
   if(!window.visualViewport) return;
-  var bar=$('.addbar'), inp=$('#addInput');
-  function fit(){
-    bar.style.transform='';
-    if(matchMedia('(min-width:768px)').matches||document.activeElement!==inp){ bar.style.removeProperty('--qa-max'); return; }
-    var vv=visualViewport, r=bar.getBoundingClientRect(), dy=Math.min(0,Math.round(vv.offsetTop+vv.height-r.bottom));
-    if(dy) bar.style.transform='translateY('+dy+'px)';
-    bar.style.setProperty('--qa-max',Math.max(160,Math.round(r.top+dy-vv.offsetTop-56))+'px');
-  }
-  visualViewport.addEventListener('resize',fit); visualViewport.addEventListener('scroll',fit);
-  inp.addEventListener('focus',function(){ setTimeout(fit,60); });
-  inp.addEventListener('blur',function(){ setTimeout(fit,60); });
+  visualViewport.addEventListener('resize',qaFit); visualViewport.addEventListener('scroll',qaFit);
 }
 
 function wireShell(){
