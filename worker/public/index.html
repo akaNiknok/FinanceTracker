@@ -21,33 +21,23 @@
     (function(){
       var probe=document.createElement('div');
       probe.style.cssText='position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top)';
-      // ponytail: screen size is the only value that knows the real height. The equality
-      // is the guard, not a device sniff — it holds *only* in the short-window mismatch, so
-      // a fixed iOS, a Safari tab and every other platform fall through to innerHeight
-      // untouched. iOS never swaps screen.width/height on rotation, so the side along the
-      // current height is picked first — without that, iPad landscape fell through and
-      // the shell ended one top inset short of the screen bottom (a bare strip under the
-      // content). Delete the whole thing if Apple ever aligns the two.
+      // ponytail: in the mismatch only the WINDOW size knows the real height. Two readings
+      // of it: outerHeight (right on iPad at a cold launch and in a resized iPadOS window,
+      // where the screen is bigger than the window) and the screen side along the current
+      // height (iOS never swaps screen.width/height on rotation, so landscape takes the
+      // SHORT side). The equality is the guard, not a device sniff: it holds only in the
+      // short-window mismatch, so every other platform falls through to innerHeight.
+      // Measured on an iPad at launch, landscape: inner 788 + top 32 = outer 820.
+      // Delete the whole thing if Apple ever aligns the two.
       function fitShell(){
         document.documentElement.appendChild(probe);
         var top=parseFloat(getComputedStyle(probe).paddingTop)||0;
         probe.remove();
-        var sh=innerWidth>innerHeight?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height);
-        var h=(sh===window.innerHeight+top)?sh:window.innerHeight;
+        var land=innerWidth>innerHeight;
+        var side=land?Math.min(screen.width,screen.height):Math.max(screen.width,screen.height);
+        var full=window.innerHeight+top;
+        var h=(outerHeight===full||side===full)?full:window.innerHeight;
         document.documentElement.style.setProperty('--app-h',h+'px');
-        // TEMPORARY (iPad strip hunt): every height iOS reports, per run. Tap the app tile
-        // in the rail or sidebar to see it. Delete with shellReadout in app.js.
-        var f=document.createElement('div');
-        f.style.cssText='position:fixed;visibility:hidden;inset:0;padding-bottom:env(safe-area-inset-bottom)';
-        document.documentElement.appendChild(f);
-        var fixedH=f.getBoundingClientRect().height, bot=parseFloat(getComputedStyle(f).paddingBottom)||0;
-        f.style.cssText='position:absolute;visibility:hidden;top:0;height:100lvh';
-        var lvh=f.getBoundingClientRect().height; f.remove();
-        (window.__shellLog=window.__shellLog||[]).push({t:Math.round(performance.now()),app:h,inner:innerWidth+'x'+innerHeight,
-          outer:outerWidth+'x'+outerHeight,screen:screen.width+'x'+screen.height,avail:screen.availWidth+'x'+screen.availHeight,
-          vv:window.visualViewport?Math.round(visualViewport.width)+'x'+Math.round(visualViewport.height):'-',
-          client:document.documentElement.clientHeight,fixed:Math.round(fixedH),lvh:Math.round(lvh),top:top,bottom:bot});
-        if(__shellLog.length>8) __shellLog.splice(1,1);   // keep the launch reading
       }
       fitShell();
       // Re-run once the body exists: the probe measures env() from inside <head>, where it
