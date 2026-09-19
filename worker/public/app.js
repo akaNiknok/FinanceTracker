@@ -1107,19 +1107,36 @@ function catTile(d){
   var cats=Object.keys(sc).map(function(k){ total+=sc[k]; return [k,sc[k]]; })
     .filter(function(p){ return p[1]>0; }).sort(function(a,b){ return b[1]-a[1]; });
   if(!cats.length) return null;
-  // Top 5, the tail folded into "Other". A category that nets to zero or below
-  // (refunds) has no bar, but still counts in the total.
-  var top=cats.slice(0,5), rest=cats.slice(5);
+  // One part-to-whole bar (HIG: bar marks for proportions, a gap between
+  // adjacent colours), coloured by segment, then the rows as its legend. Top 5,
+  // the tail folded into "Other", which opens in place to list what it holds.
+  // A category that nets to zero or below (refunds) has no slice, but still
+  // counts in the total; shares are of the positive sum, so the slices add to 100%.
+  var top=cats.slice(0,5), rest=cats.slice(5), pos=0;
+  cats.forEach(function(p){ pos+=p[1]; });
   if(rest.length) top.push(['Other ('+rest.length+')',rest.reduce(function(s,p){ return s+p[1]; },0),true]);
-  var max=Math.max.apply(null,top.map(function(p){ return p[1]; }));
-  var t=sumTile('t-cats','Spending by category','<b>'+money(total,true)+'</b>');
   var bc=(S.boot&&S.boot.categories)||{};
+  function col(p){ return p[2]?'var(--dim)':SEG_COLOR[bc[p[0]]&&bc[p[0]].Segment]||'var(--dim)'; }
+  function pct(v){ var x=v/pos*100; return (x<1?'<1':Math.round(x))+'%'; }
+  function row(p,cls){
+    var r=el(p[2]?'button':'div','cat-row'+(cls?' '+cls:''));
+    r.innerHTML='<span class="seg-dot" style="background:'+col(p)+'"></span><span class="cat-name"><span>'+esc(p[0])+'</span>'+
+      (p[2]?' '+icon('chevron'):'')+'</span><span class="cat-pct">'+pct(p[1])+'</span><span class="cat-val">'+money(p[1],true)+'</span>';
+    return r;
+  }
+  var t=sumTile('t-cats','Spending by category','<b>'+money(total,true)+'</b>');
+  var bar=bar6(top.map(function(p){ return [p[1]/pos,col(p)]; }));
+  bar.classList.add('cat-bar'); bar.setAttribute('role','img');
+  bar.setAttribute('aria-label',top.map(function(p){ return p[0]+' '+pct(p[1]); }).join(', '));
+  t.appendChild(bar);
   top.forEach(function(p){
-    var segName=!p[2]&&bc[p[0]]&&bc[p[0]].Segment, r=el('div','cat-row');
-    r.appendChild(el('span','cat-name',esc(p[0])));
-    r.appendChild(bar6([[p[1]/max,SEG_COLOR[segName]||'var(--dim)']]));
-    r.appendChild(el('span','cat-val',money(p[1],true)));
-    t.appendChild(r);
+    var r=row(p); t.appendChild(r);
+    if(!p[2]) return;
+    var sub=el('div','cat-sub'); rest.forEach(function(q){ sub.appendChild(row(q)); });
+    r.type='button'; t.appendChild(sub);
+    function set(open){ S.catOpen=open; r.setAttribute('aria-expanded',open); sub.hidden=!open; }
+    set(!!S.catOpen);
+    r.onclick=function(){ set(!S.catOpen); };
   });
   return t;
 }

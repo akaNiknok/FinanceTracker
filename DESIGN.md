@@ -85,6 +85,7 @@ Radius: tile 20, list group 16, field and button 12, chip 999 (pill), icon tile 
 - A few charts, and each one answers one question. Draw them in SVG with the tokens above.
 - **Shared month axis**: charts stacked in one tile use the same x scale, so each month is one column through all of them. One month label row sits under the last chart. The current month is labelled "so far" and its bars are drawn at 50% opacity.
 - **Inspect**: hover (pointer) or tap (touch) a month to draw one vertical line through every chart in the tile. A tooltip then lists every value for that month.
+- **Part-to-whole** is one stacked bar (Apple HIG: bar marks for proportions), not a pie: a 2px gap separates adjacent slices, and a slice takes its segment colour (`--ess`, `--rew`; the folded "Other" is `--dim`). The rows under it are the legend: dot, name, share, amount. "Other" is a button that opens its categories in place.
 - Sparklines have no axes. Meters are 6–8px bars on `--track`. A target is a 2px tick on the meter.
 
 ## Motion
