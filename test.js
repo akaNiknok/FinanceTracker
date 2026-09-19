@@ -728,7 +728,7 @@ describe('Gmail courier watermark (vm)', () => {
       const flat = (n, out = []) => { out.push(n); (n.kids || []).forEach(k => flat(k, out)); return out; };
       assert.ok(flat(hc.nw).some(n => n.tag === 'line' && n.attrs['stroke-dasharray']), 'no dashed zero line');
       assert.ok(hc.yTot[1] > hc.y0, 'a negative net worth must plot BELOW zero');
-      assert.deepStrictEqual(hc.cx, [150, 450], 'both charts share one band per month');
+      assert.deepStrictEqual(hc.cx, [21, 579], 'the end months sit at the edges, inset by one bar pair (18 + 3)');
       // The FI countdown rounds to whole months BEFORE it splits years off.
       assert.strictEqual(app.yearsMonths(3683), '10y 1m');
       assert.strictEqual(app.yearsMonths(353), '1y 0m', '11.6 months rounds up to a year');

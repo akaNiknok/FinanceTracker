@@ -987,11 +987,14 @@ function fillRunway(t,rw){
   t.appendChild(el('div','tile-foot','<span class="hide-phone">'+money(rw.efPhp,true)+' · </span>Target '+tm+' months'));
 }
 
-/* The history tile's two charts on ONE month axis: the same band per month, so a
+/* The history tile's two charts on ONE month axis: the same x per month, so a
  * month is one column through both (DESIGN.md "Charts"). Pure of the page: it
  * returns the two SVGs and the geometry, so test.js can read it. */
 function historyCharts(cf,liq,stk,isLive,W){
-  var n=cf.length, band=W/n, cx=cf.map(function(m,i){ return band*i+band/2; });
+  // A point scale, not equal columns: the first and last months sit at the edges,
+  // inset only by the width of a bar pair, so the lines use the whole tile.
+  var n=cf.length, gap=n>1?W/n:W, bw=Math.min(18,gap*0.22), pad=bw+3;
+  var step=n>1?(W-2*pad)/(n-1):0, cx=cf.map(function(m,i){ return n>1?pad+step*i:W/2; });
   var shr=stk.map(function(p){ return Math.max(0,p.nw); }), tot=liq.map(function(p,i){ return p.nw+shr[i]; });
   // Net worth: invested is the base band 0→shares, liquid a signed ribbon on top,
   // so the top edge is the real total. The domain keeps zero in range: a month with
@@ -1011,7 +1014,6 @@ function historyCharts(cf,liq,stk,isLive,W){
   liq.forEach(function(p,i){ if(!p.real) s1.appendChild(svgEl('circle',{cx:cx[i],cy:y(tot[i]),r:3,fill:'var(--card)',stroke:'var(--accent)','stroke-width':1.5})); });
   // Cash flow: in left, out right (position is the second channel after colour).
   var H2=110, T2=6, max=1; cf.forEach(function(m){ max=Math.max(max,m.income,m.expense); });
-  var bw=Math.min(18,band*0.22);
   var s2=svgEl('svg',{class:'hist-svg',viewBox:'0 0 '+W+' '+H2,'aria-hidden':'true'});
   cx.forEach(function(x){ s2.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:H2,stroke:'var(--track)','stroke-width':1})); });
   cf.forEach(function(m,i){
@@ -1019,7 +1021,7 @@ function historyCharts(cf,liq,stk,isLive,W){
     if(hI>=1) s2.appendChild(svgEl('path',{d:barPath(cx[i]-bw-2,H2-hI,bw,hI,3),fill:'var(--chart-in)','fill-opacity':op}));
     if(hO>=1) s2.appendChild(svgEl('path',{d:barPath(cx[i]+2,H2-hO,bw,hO,3),fill:'var(--chart-out)','fill-opacity':op}));
   });
-  return {nw:s1, cf:s2, cx:cx, y0:y0, yTot:tot.map(y), tot:tot, shr:shr};
+  return {nw:s1, cf:s2, cx:cx, step:step, pad:pad, bw:bw, y0:y0, yTot:tot.map(y), tot:tot, shr:shr};
 }
 
 var histHide=null;   // the open inspect line: one history tile exists, so one document listener
@@ -1047,7 +1049,7 @@ function historyTile(cf,ser,isLive){
   hit.setAttribute('aria-label','Net worth and cash flow by month. Use the arrow keys to read a month.');
   plot.appendChild(line); plot.appendChild(tipBox); plot.appendChild(hit);
   t.appendChild(plot);
-  var labels=el('div','hist-x'+(n>6?' many':'')); labels.style.gridTemplateColumns='repeat('+n+',minmax(0,1fr))';
+  var labels=el('div','hist-x');
   t.appendChild(labels);
   var cur=-1, g=null;
   function show(i){
@@ -1067,7 +1069,8 @@ function historyTile(cf,ser,isLive){
     histHide=hide;
   }
   function hide(){ line.hidden=tipBox.hidden=true; cur=-1; histHide=null; }
-  function at(e){ var b=hit.getBoundingClientRect(); return Math.floor((e.clientX-b.left)/b.width*n); }
+  // The nearest month to the pointer, on the chart's own point scale.
+  function at(e){ if(!g) return 0; var b=hit.getBoundingClientRect(), x=(e.clientX-b.left)/b.width*g.W; return g.step?Math.round((x-g.pad)/g.step):0; }
   hit.addEventListener('pointermove',function(e){ if(e.pointerType==='mouse') show(at(e)); });
   hit.addEventListener('pointerleave',function(e){ if(e.pointerType==='mouse') hide(); });
   hit.addEventListener('click',function(e){ show(at(e)); });   // touch and pen: a tap
@@ -1082,11 +1085,18 @@ function historyTile(cf,ser,isLive){
     var W=Math.max(240,h1.clientWidth);
     g=historyCharts(cf,ser.liq,ser.stk,isLive,W); g.W=W;
     h1.appendChild(g.nw); h2.appendChild(g.cf);
-    var step=labelStep(n,W);
+    // Labels sit on the same x as the points. The end ones align to the bar pair's
+    // outer edge, so "Sep so far" never spills out of the tile.
+    var ls=labelStep(n,W);
     cf.forEach(function(m,i){
-      // A narrow column: the wide "so far" label would cover the label before it.
-      var last=i===n-1, show=(n-1-i)%step===0&&!(isLive&&W/n<60&&i===n-1-step);
-      labels.appendChild(el('span',last?'on':'',show?esc(String(m.month).split('-')[1])+(last&&isLive?' so far':''):''));
+      var last=i===n-1, first=i===0&&n>1;
+      // A narrow step: the wide "so far" label would cover the label before it.
+      if((n-1-i)%ls!==0||(isLive&&g.step<60&&i===n-1-ls)) return;
+      var s=el('span',last?'on':'',esc(String(m.month).split('-')[1])+(last&&isLive?' so far':''));
+      if(last&&n>1){ s.style.right=((W-g.cx[i]-g.bw-2)/W*100)+'%'; }
+      else if(first){ s.style.left=((g.cx[i]-g.bw-2)/W*100)+'%'; }
+      else { s.style.left=(g.cx[i]/W*100)+'%'; s.style.transform='translateX(-50%)'; }
+      labels.appendChild(s);
     });
   });
   return t;
