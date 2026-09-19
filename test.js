@@ -754,6 +754,12 @@ describe('Gmail courier watermark (vm)', () => {
       assert.deepStrictEqual(P('≤ 1.5k'), [{ k: 'maxAmount', v: '1500' }]);
       assert.deepStrictEqual(P('2026-09-18'), [{ k: 'date', v: '2026-09-18' }]);
       assert.deepStrictEqual(P('aug')[0], { k: 'month', v: '2026-Aug' });
+      assert.deepStrictEqual(P('sep 17')[0], { k: 'date', v: '2026-09-17' });
+      assert.deepStrictEqual(P('17 september')[0], { k: 'date', v: '2026-09-17' });
+      assert.deepStrictEqual(P('9/17/2025')[0], { k: 'date', v: '2025-09-17' });
+      assert.deepStrictEqual(P('oct 3')[0], { k: 'date', v: '2025-10-03' }, 'a date without a year is never in the future');
+      assert.ok(!P('feb 30').some((t) => t.k === 'date'), 'no such day');
+      assert.deepStrictEqual(P('sep 17').pop(), { k: 'search', v: 'sep 17' });
       assert.deepStrictEqual(P('oct')[0], { k: 'month', v: '2025-Oct' }, 'a bare month is never in the future');
       assert.deepStrictEqual(P('march 2024')[0], { k: 'month', v: '2024-Mar' });
       assert.deepStrictEqual(P('this month')[0], { k: 'month', v: '2026-Sep' });
