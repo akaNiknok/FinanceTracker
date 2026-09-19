@@ -966,7 +966,7 @@ export async function getBootstrap(args, env) {
     budgets: (await budgetsPayload(env, args.month, fx)).budgets,
     recurring: recurring.rows,
     fxUsdPhp: fx.USD || null,
-    widgetAccounts: widgetNames(meta[WIDGET_META]),   // the Accounts screen's widget picker
+    widgetAccounts: widgetNames(meta[WIDGET_META]),   // the Admin screen's widget picker
     smartLists: smartLists(meta[SMART_META]),         // Activity's saved filters
     quickPicks: recent.quickPicks,                    // the add sheet's "Or repeat one" chips
     descCategory: recent.descCategory,                // the add field's instant category guess
@@ -1045,16 +1045,17 @@ export async function getWidget(args, env) {
   return {
     status: 'success', month: d.month, accounts, netWorth,
     segments: d.budgets.filter((b) => WIDGET_SEGMENTS.includes(b.segment)).map((b) => ({
-      segment: b.segment, period: b.period, currency: b.currency, actual: b.actualNative,
+      segment: b.segment, period: b.period, currency: b.currency, actual: b.actualNative, actualPhp: b.actualPhp,
       target: b.targetNative, remaining: b.remainingNative, pctUsed: b.pctUsed, isOver: b.isOver })),
     essentialsRewards: d.essentialsRewards,
     recent: d.recentTransactions.slice(0, 3).map((t) => ({
       Date: t.Date, Description: t.Description, Category: t.Category, Type: t.Type,
-      Amount: t.Amount, Currency: t.Currency, 'Amount (PHP)': t['Amount (PHP)'], ToAccount: t.ToAccount }))
+      Amount: t.Amount, Currency: t.Currency, 'Amount (PHP)': t['Amount (PHP)'], ToAccount: t.ToAccount,
+      Segment: t.Segment }))
   };
 }
 
-/** POST {names:[...]} — the balance widget's accounts, set from the Accounts screen. */
+/** POST {names:[...]} — the balance widget's accounts, set from the Admin screen. */
 export async function setWidgetAccounts(args, env) {
   const names = Array.isArray(args.names) ? args.names.filter((n) => n) : [];
   if (names.length > 3) throw new Error('The widget shows at most 3 accounts.');

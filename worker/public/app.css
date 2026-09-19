@@ -200,6 +200,7 @@ button{font-family:inherit;cursor:pointer}
 .tip-rows{margin:8px 0 0;padding:8px 0 0;border-top:1px solid rgba(245,245,247,.18);display:grid;grid-template-columns:1fr auto;gap:3px 16px;font-variant-numeric:tabular-nums}
 .tip-rows .b{font-weight:700}
 .tip-note{margin-top:8px;color:rgba(245,245,247,.7);font-size:12px}
+.tip-a{display:inline-block;margin-top:8px;color:inherit;font-weight:600;font-size:13px;text-decoration:underline;text-underline-offset:2px}
 
 /* ── Small controls ──────────────────────────────────────────────────────── */
 .month-picker{background:var(--card-2);color:var(--text);border:1px solid var(--sep);border-radius:var(--radius-sm);
@@ -478,7 +479,9 @@ button.h-row:active{background:var(--card-2)}
 .tax-q{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
 .tax-q .fig{font-size:24px}
 .tax-q .tile-l,.tax-q .pill{white-space:nowrap}
-.tax-q .tile-h{gap:6px}
+.tax-q .tile-h{gap:6px;flex-wrap:wrap;align-content:flex-start;min-height:50px}
+/* The badge takes its own line: "Q3 so far · Due 15 Nov · ⓘ" is wider than a phone's half-tile. */
+.tax-q .tile-r{order:2;flex-basis:100%;text-align:left}
 .tile.ring{box-shadow:0 0 0 2px var(--warn)}
 .tax-warn{display:flex;align-items:center;gap:12px;background:var(--warn-tint);border-radius:16px;padding:12px 16px;margin-bottom:12px;font-size:14px}
 .tax-warn>.ico{width:20px;height:20px;color:var(--warn);flex:none}
@@ -505,6 +508,7 @@ table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
 .adm-seg::-webkit-scrollbar{display:none}
 .adm-seg>button{white-space:nowrap;flex:none}
 .adm-tbl{padding:4px 8px 0}
+.adm-tbl+.a-wid{margin-top:24px}
 .adm-tbl .tbl-wrap{max-height:none}
 .adm-tbl th .ico{display:inline-block;width:12px;height:12px;margin-left:4px;vertical-align:-1px}
 .adm-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 8px 12px;font-size:13px;color:var(--dim)}

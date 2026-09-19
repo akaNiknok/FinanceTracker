@@ -870,10 +870,12 @@ function tipHTML(spec){
     var c=r[2]?' class="b"':''; return '<span'+c+'>'+esc(r[0])+'</span><span'+c+'>'+esc(r[1])+'</span>';
   }).join('')+'</div>';
   if(spec.note) h+='<div class="tip-note">'+esc(spec.note)+'</div>';
+  if(spec.link) h+='<a class="tip-a" href="'+esc(spec.link[0])+'" target="_blank" rel="noopener">'+esc(spec.link[1])+'</a>';
   return h;
 }
-var tipOpen=null;   // {btn, pop}
+var tipOpen=null, tipInPop=false;   // {btn, pop}; the pointer is on the popover (its link)
 function tipClose(){
+  tipInPop=false;
   if(!tipOpen) return;
   tipOpen.btn.setAttribute('aria-expanded','false'); tipOpen.pop.remove(); tipOpen=null;
 }
@@ -882,6 +884,8 @@ function tipShow(btn, spec){
   tipClose();
   var pop=el('div','tip',tipHTML(typeof spec==='function'?spec():spec));
   pop.setAttribute('role','tooltip'); pop.id='tip-live';
+  pop.addEventListener('mouseenter',function(){ tipInPop=true; });
+  pop.addEventListener('mouseleave',function(){ tipInPop=false; if(document.activeElement!==btn) tipClose(); });
   $('#app').appendChild(pop);
   btn.setAttribute('aria-expanded','true'); btn.setAttribute('aria-describedby','tip-live');
   tipOpen={btn:btn,pop:pop};
@@ -897,10 +901,12 @@ function tip(spec){
   var hover=false;
   if(window.matchMedia&&matchMedia('(hover:hover) and (pointer:fine)').matches){
     b.addEventListener('mouseenter',function(){ hover=true; tipShow(b,spec); });
-    b.addEventListener('mouseleave',function(){ hover=false; if(document.activeElement!==b) tipClose(); });
+    // A short grace, so the pointer can cross the 8px gap to a link in the popover.
+    b.addEventListener('mouseleave',function(){ hover=false;
+      setTimeout(function(){ if(!hover&&!tipInPop&&document.activeElement!==b&&tipOpen&&tipOpen.btn===b) tipClose(); },150); });
   }
   b.addEventListener('focus',function(){ if(b.matches(':focus-visible')) tipShow(b,spec); });
-  b.addEventListener('blur',function(){ if(!hover&&tipOpen&&tipOpen.btn===b) tipClose(); });
+  b.addEventListener('blur',function(){ if(!hover&&!tipInPop&&tipOpen&&tipOpen.btn===b) tipClose(); });
   // A click while hovering keeps it open; on touch it toggles.
   b.addEventListener('click',function(e){
     e.stopPropagation();
@@ -2195,7 +2201,6 @@ function renderAccounts(){
     if(recv.length) R.appendChild(acctGroup(rt,signedPhp(sum(recv),true),recv.map(acctRow)));
     var dbt=el('div'); dbt.id='debtsCard'; R.appendChild(dbt);
     var rc=recurringGroup(); if(rc) R.appendChild(rc);
-    if(S.boot) R.appendChild(widgetPicker(accs));
     paint(w);
     loadDebts();
   }).catch(showErr);
@@ -2221,7 +2226,7 @@ function recurringGroup(){
 }
 
 /* The iOS balance widget's accounts (meta widget_accounts, read by getWidget),
- * seeded from getBootstrap. A tap saves at once: edit where you read. */
+ * seeded from getBootstrap. On the Admin screen: it is setup, not a reading. A tap saves at once. */
 function widgetPicker(accs){
   var g=acctGroup('iPhone balance widget','Pick up to 3',[],'a-wid');
   var box=el('div','a-chips'); $('.a-list',g).appendChild(box);
@@ -2489,7 +2494,8 @@ function renderTax(){
 var BSP_TIP={title:'Why you type this rate',
   text:"BIR wants the central bank's reference rate on the day the money arrived. The app's live rate is a different number, so it cannot fill this in for you.",
   rows:[['PHP','USD × BSP rate'],['8% tax','PHP × 8%',true]],
-  note:'Find the rate on the BSP website: Statistics, then Exchange rates, then the daily PHP per USD table.'};
+  note:'Use the PHP per USD rate for the day the money arrived.',
+  link:['https://www.bsp.gov.ph/statistics/external/day99_data.aspx','Open the BSP daily rates']};
 
 /* The four BIR quarters of one year, from the ledger rows (pure, tested). A quarter
  * is filed when every salary in it has a Filed quarter. Q1–Q3 are due on the 15th
@@ -2884,6 +2890,7 @@ function renderAdmin(){
     foot.appendChild(pagerEl(off,ADMIN_PAGE,res.total,function(o){ S.admin.offset=o; render(); }));
     card.appendChild(foot);
     w.appendChild(card);
+    if(S.boot) w.appendChild(widgetPicker(S.boot.accounts||[]));
     paint(w);
   }).catch(showErr);
 }

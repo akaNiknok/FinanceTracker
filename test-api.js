@@ -453,6 +453,8 @@ function d1(db) {
       assert.strictEqual(w.netWorth[5].value, (await api.getDashboard({}, env)).netWorth);
       assert.ok(w.recent.length <= 3);
       assert.ok(w.segments.every((b) => ['Essentials', 'Rewards'].includes(b.segment)));
+      assert.ok(w.segments.every((b) => typeof b.actualPhp === 'number'));   // the widget's stacked bar
+      assert.ok(w.recent.every((t) => 'Segment' in t));                     // the widget's icon tint
       assert.deepStrictEqual((await api.getBootstrap({}, env)).widgetAccounts, ['Wise']);
       await api.setWidgetAccounts({ names: [] }, env);
     });
