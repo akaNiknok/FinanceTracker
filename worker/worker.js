@@ -35,7 +35,7 @@
  */
 import {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
-  getLedger, listTransactions, getDebts, listTable, getExportAll, getWidget, setWidgetAccounts,
+  getLedger, listTransactions, getDebts, listTable, getExportAll, getWidget, setWidgetAccounts, setSmartLists,
   createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
   bulkUpdateTransactions, bulkDeleteTransactions, updateLedgerCell, appendLedgerRow,
   deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
@@ -65,6 +65,7 @@ export const ROUTES_WRITE = {
   updateLedgerCell, appendLedgerRow, deleteLedgerRow,
   updateTableCell, insertTableRow, deleteTableRow,   // admin grid
   setWidgetAccounts,                                 // the Accounts screen's widget picker
+  setSmartLists,                                     // Activity's saved filters
   ingestEmail                                        // the Gmail courier
 };
 

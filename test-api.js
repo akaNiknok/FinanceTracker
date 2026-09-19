@@ -279,6 +279,34 @@ function d1(db) {
                 'the date filter is not one exact day');
     });
 
+    test('listTransactions: amount bounds, source, and the net of the whole set', async () => {
+      const aug = await api.listTransactions({ month: '2026-Aug', type: 'Expense', limit: 1 }, env);
+      assert.strictEqual(aug.net, -(250.5 + 1200), 'net must cover every row, not the page');
+      assert.strictEqual((await api.listTransactions({ month: '2026-Aug', type: 'Expense', minAmount: 1000 }, env)).total, 1);
+      assert.strictEqual((await api.listTransactions({ month: '2026-Aug', type: 'Expense', maxAmount: '300' }, env)).total, 1);
+      const ids = ['tg-77-0', 'gm-abc-0'];
+      await api.createTransaction({ ID: ids[0], Date: '2026-08-13', Category: 'Expense: Food', Account: 'Maya', Amount: 5 }, env);
+      await api.createTransaction({ ID: ids[1], Date: '2026-08-13', Category: 'Expense: Food', Account: 'Maya', Amount: -5 }, env);
+      try {
+        assert.deepStrictEqual((await api.listTransactions({ source: 'tg' }, env)).transactions.map((t) => t.ID), [ids[0]]);
+        assert.deepStrictEqual((await api.listTransactions({ source: 'gm' }, env)).transactions.map((t) => t.ID), [ids[1]]);
+        const all = (await api.listTransactions({}, env)).total;
+        assert.strictEqual((await api.listTransactions({ source: 'legacy' }, env)).total, all - 2);
+        // A refund is a negative amount: the bound compares the magnitude.
+        assert.ok((await api.listTransactions({ minAmount: 5, maxAmount: 5 }, env)).transactions.some((t) => t.ID === ids[1]));
+        await assert.rejects(api.listTransactions({ source: 'fax' }, env), /Unknown source/);
+      } finally { for (const ID of ids) await api.deleteTransaction({ ID }, env); }
+    });
+
+    test('setSmartLists: validated, capped, echoed in getBootstrap', async () => {
+      await assert.rejects(api.setSmartLists({ lists: [{ name: ' ', filters: {} }] }, env), /needs a name/);
+      await assert.rejects(api.setSmartLists({ lists: Array(21).fill({ name: 'x' }) }, env), /at most 20/);
+      const r = await api.setSmartLists({ lists: [{ name: 'Big food', filters: { category: 'Expense: Food', minAmount: 500, bogus: 'x', search: '' } }] }, env);
+      assert.deepStrictEqual(r.smartLists, [{ name: 'Big food', filters: { category: 'Expense: Food', minAmount: '500' } }]);
+      assert.deepStrictEqual((await api.getBootstrap({}, env)).smartLists, r.smartLists);
+      await api.setSmartLists({ lists: [] }, env);
+    });
+
     test('getBudgets: percent of income, a USD cap at live FX, transfers counted', async () => {
       const b = await api.getBudgets({ month: '2026-Aug' }, env);
       const by = Object.fromEntries(b.budgets.map((x) => [x.segment, x]));

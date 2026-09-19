@@ -250,7 +250,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 11;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 12;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -276,11 +276,8 @@ function loadCache(){
 
 /* Transaction-page fetch. st = {filters,offset,limit}. */
 function fetchTxPage(st,etag){
-  var args={ limit:st.limit, offset:st.offset };
-  var fl=st.filters||{};
-  if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
-  if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
-  if(fl.type)args.type=fl.type; if(fl.date)args.date=fl.date;
+  var args={ limit:st.limit, offset:st.offset }, fl=st.filters||{};
+  TX_KEYS.forEach(function(k){ if(fl[k]) args[k]=fl[k]; });
   return gs('api_listTransactions',args,etag);
 }
 
@@ -291,9 +288,9 @@ var S = {
   screen:'dashboard',
   bootEtag:null,        // the ETag of the getBootstrap payload in S.boot
   cache:{},             // key → { data, etag, at } (stale-while-revalidate, persisted)
-  // edit: the Transactions screen's edit mode (account rail + checkboxes + inline edit);
-  // sel: ID → true for the bulk-action selection. pending*: optimistic in-flight writes.
-  tx:{ rows:[], total:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
+  // edit: Activity's Select mode (checkboxes + bulk bar + inline edit); filters: the
+  // tokens (TX_KEYS); sel: ID → true for the bulk selection. pending*: optimistic writes.
+  tx:{ rows:[], total:0, net:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
        pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },
   // admin: which whitelisted table the Admin grid is showing (sticky, like the screen)
   admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })(), offset:0 },
@@ -759,7 +756,7 @@ var SKELS={
   dashboard:function(){ return '<div class="stat hero">'+skBar(11,'30%')+skBar(34,'58%')+skBar(10,'100%')+'</div>'+
     skTiles(3)+skCard(skBar(11,'34%')+skBar(150,'100%'))+skCard(skBar(11,'26%')+skRows(4)); },
   accounts: function(){ return skTiles(2)+skCard(skBar(11,'26%')+skRows(4))+skCard(skBar(11,'26%')+skRows(3)); },
-  list:     function(){ return '<div class="filters">'+skBar(34,'170px')+skBar(34,'130px')+skBar(34,'130px')+'</div>'+skCard(skRows(7)); },
+  list:     function(){ return skBar(46,'100%')+'<div style="height:12px"></div>'+skCard(skRows(7)); },
   table:    function(){ return skCard(skBar(11,'30%')+skRows(6)); }
 };
 function loading(kind){
@@ -1185,177 +1182,368 @@ function tile(label,val,sub){
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- *  TRANSACTIONS — browse by default; the Edit toggle turns the same list into
- *  the review surface (account rail + multi-select bulk edit + inline single-
- *  field edit). One list, one state slice, one row renderer for both modes.
+ *  ACTIVITY (screen key `transactions`). One filter object, S.tx.filters, drawn as
+ *  tokens in a search field. Browse by default; Select mode adds checkboxes, the
+ *  floating bulk bar and the inline single-field editors. From 1200px: a filter
+ *  pane and a table. Below: a list grouped by day and a Filters sheet.
  * ════════════════════════════════════════════════════════════════════════ */
-function renderTransactions(){
-  if(needBoot('list', renderTransactions)) return;
-  var w=el('div','screen');
+var TX_KEYS=['month','date','type','category','segment','account','source','minAmount','maxAmount','search'];
+var TOKEN_LABEL={month:'Month',date:'Date',type:'Type',category:'Category',segment:'Segment',account:'Account',
+  source:'Source',minAmount:'Amount',maxAmount:'Amount',search:'Text'};
+var TYPE_WORD={Expense:'Spent',Income:'Earned',Transfer:'Moved'};
+var SOURCES={tg:'Telegram',gm:'Gmail',ui:'App',interest:'Interest',legacy:'Legacy'};
+var SOURCE_WORDS={tg:['telegram','bot'],gm:['gmail','email','mail'],ui:['app'],interest:['interest'],legacy:['legacy','sheet']};
+var WIDE_MQ=window.matchMedia?matchMedia('(min-width:1200px)'):null;
+function txWide(){ return !!(WIDE_MQ&&WIDE_MQ.matches); }
+if(WIDE_MQ&&WIDE_MQ.addEventListener) WIDE_MQ.addEventListener('change',function(){ if(S.screen==='transactions') renderTransactions(); });
 
-  var head=el('div','screen-head');
-  head.appendChild(el('div','screen-title','Transactions'));
-  var toggle=el('button','btn sm'+(S.tx.edit?' primary':''), S.tx.edit?'Done':'✎ Edit');
-  toggle.title=S.tx.edit?'Back to browsing':'Bulk edit, inline edit and account rail';
-  toggle.onclick=function(){ S.tx.edit=!S.tx.edit; clearSel(); renderTransactions(); };
-  head.appendChild(toggle);
-  w.appendChild(head);
-
-  // sticky bulk-action bar (edit mode only; hidden until a selection exists)
-  if(S.tx.edit){ var bar=el('div','bulk-bar'); bar.id='bulkBar'; bar.hidden=true; w.appendChild(bar); }
-
-  // filters
-  var f=el('div','filters');
-  // Distinguish unset (→ current period) from an explicit '' ("all months"); '' meant
-  // the combo showed a specific month while the list fetched everything.
-  var seedMonth=S.tx.filters.month===undefined?S.month:(S.tx.filters.month===''?'(all months)':S.tx.filters.month);
-  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), seedMonth);
-  var fType=comboEl(['(all types)','Income','Expense','Transfer'], S.tx.filters.type||'(all types)');
-  var cats=Object.keys((S.boot.categories)||{}).sort();
-  var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
-  var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
-  fAcc.id='fAcc';   // the account rail writes the picked account back into this combo
-  var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
-  var fDate=inputEl('date', S.tx.filters.date||''); fDate.title='Filter by date';
-  // data-f names the S.tx.filters key each control writes, so markActiveFilters() can
-  // light the ones that are narrowing the list without holding these locals.
-  fMonth.dataset.f='month'; fType.dataset.f='type'; fCat.dataset.f='category';
-  fAcc.dataset.f='account'; fDate.dataset.f='date'; fSearch.dataset.f='search';
-  [fMonth,fType,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
-  // A day and a month are two ways to say the same thing, so a picked date drops the
-  // month rather than silently AND-ing with it (a date outside the month = no rows).
-  fDate.onchange=function(){ if(fDate.value) fMonth.value='(all months)'; applyFilters(); };
-  var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
-  f.appendChild(fSearch); f.appendChild(fDate); f.appendChild(fMonth); f.appendChild(fType); f.appendChild(fCat); f.appendChild(fAcc);
-  w.appendChild(f);
-
-  function applyFilters(){
-    S.tx.filters={
-      month: fMonth.value.indexOf('(all')===0?'':fMonth.value,
-      type: fType.value.indexOf('(all')===0?'':fType.value,
-      category: fCat.value.indexOf('(all')===0?'':fCat.value,
-      account: fAcc.value.indexOf('(all')===0?'':fAcc.value,
-      date: fDate.value,
-      search: fSearch.value.trim()
-    };
-    S.tx.offset=0; markActiveFilters(); loadTx(w);
+// The tokens a filter object shows, in field order. month '' = "all months": no token.
+function activeTokens(f){
+  return TX_KEYS.filter(function(k){ return f[k]!=null&&f[k]!==''; }).map(function(k){ return {k:k,v:String(f[k])}; });
+}
+function tokenText(k,v){
+  if(k==='month'){ var d=monthKey2date(v); return d?MONTHS_FULL[d.getMonth()]+' '+d.getFullYear():String(v); }
+  if(k==='date') return fmtDate(v);
+  if(k==='type') return TYPE_WORD[v]||v;
+  if(k==='source') return SOURCES[v]||v;
+  if(k==='minAmount') return '≥ '+money(v,true);
+  if(k==='maxAmount') return '≤ '+money(v,true);
+  if(k==='search') return '“'+v+'”';
+  return String(v);
+}
+function amountOf(s){
+  var m=/^₱?\s*(\d[\d,]*\.?\d*|\.\d+)\s*(k)?$/i.exec(String(s).trim()); if(!m) return null;
+  var n=parseFloat(m[1].replace(/,/g,'')); return isNaN(n)?null:(m[2]?n*1000:n);
+}
+// "aug", "august 2025", "2025-aug", "this month" → "2025-Aug". A bare month name is
+// the latest one not in the future.
+function monthFromText(lo, now){
+  if(lo.length>=4&&'this month'.indexOf(lo)===0) return monthKey(now);
+  if(lo.length>=4&&'last month'.indexOf(lo)===0) return monthKey(new Date(now.getFullYear(),now.getMonth()-1,1));
+  var m=/^(?:(\d{4})[\s-]*)?([a-z]{3,})(?:[\s-]*(\d{4}))?$/.exec(lo); if(!m) return null;
+  for(var i=0;i<12;i++) if(MONTHS_FULL[i].toLowerCase().indexOf(m[2])===0) break;
+  if(i===12) return null;
+  var y=+(m[1]||m[3])||(i<=now.getMonth()?now.getFullYear():now.getFullYear()-1);
+  return y+'-'+MONTHS[i];
+}
+/* The token grammar: what the typed text could mean, best guess first. The field's
+ * dropdown shows these; Enter takes the first. ctx = {categories, accounts, segments, now}.
+ *   "exact words" → Text only · >500 ≥500 <1k ≤300 → Amount only · 2026-09-18 → Date only
+ *   otherwise any of: Month, Type (spent/earned/moved), Source (gmail, telegram…),
+ *   Segment, Amount (a bare number = at least), the 3 best Category and Account
+ *   matches, and always Text contains. */
+function parseTokens(text, ctx){
+  var q=String(text||'').trim(), lo=q.toLowerCase(), out=[];
+  if(!q) return out;
+  var quoted=/^"([^"]+)"?$/.exec(q);
+  if(quoted) return [{k:'search',v:quoted[1]}];
+  var cmp=/^(>=|<=|>|<|≥|≤)\s*(.+)$/.exec(q), n=cmp?amountOf(cmp[2]):null;
+  if(n!=null) return [{k:/[>≥]/.test(cmp[1])?'minAmount':'maxAmount',v:String(n)}];
+  if(/^\d{4}-\d{2}-\d{2}$/.test(q)) return [{k:'date',v:q}];
+  var mk=monthFromText(lo, ctx.now||new Date()); if(mk) out.push({k:'month',v:mk});
+  function starts(words){ return lo.length>=2&&words.some(function(w){ return w.indexOf(lo)===0; }); }
+  if(starts(['spent','expense','expenses'])) out.push({k:'type',v:'Expense'});
+  if(starts(['earned','income'])) out.push({k:'type',v:'Income'});
+  if(starts(['moved','transfer','transfers'])) out.push({k:'type',v:'Transfer'});
+  Object.keys(SOURCE_WORDS).forEach(function(s){ if(starts(SOURCE_WORDS[s])) out.push({k:'source',v:s}); });
+  (ctx.segments||[]).forEach(function(s){ if(starts([s.toLowerCase()])) out.push({k:'segment',v:s}); });
+  n=amountOf(q); if(n!=null) out.push({k:'minAmount',v:String(n)});
+  function best(k,list){
+    list.map(function(s){ return {s:s,sc:fuzzyScore(q,s)}; }).filter(function(x){ return x.sc>=0; })
+      .sort(function(a,b){ return b.sc-a.sc; }).slice(0,3).forEach(function(x){ out.push({k:k,v:x.s}); });
   }
-
-  var listCard=el('div','card'); listCard.id='txListCard';
-  listCard.innerHTML=skRows(7);
-  // edit mode adds the account rail beside the list; browsing keeps the list full-width
-  if(S.tx.edit){
-    var split=el('div','tx-split');
-    var rail=el('div','tx-rail card'); rail.id='txAccts'; rail.innerHTML=skRows(6);
-    split.appendChild(rail); split.appendChild(listCard);
-    w.appendChild(split);
-  } else {
-    w.appendChild(listCard);
-  }
-  paint(w);
-
-  // default filter month to selected period on first open
-  if (S.tx.filters.month===undefined) S.tx.filters.month=S.month;
-  markActiveFilters();
-  loadTx(w);
-  if(S.tx.edit){ loadTxAccts(); updateBulkBar(); }
+  best('category',ctx.categories||[]); best('account',ctx.accounts||[]);
+  out.push({k:'search',v:q});
+  return out;
+}
+function tokenCtx(){
+  var c=(S.boot&&S.boot.categories)||{}, segs={};
+  Object.keys(c).forEach(function(k){ if(c[k].Segment) segs[c[k].Segment]=1; });
+  return {categories:Object.keys(c).sort(), accounts:acctOptions().map(function(o){ return o.value; }),
+          segments:Object.keys(segs), now:new Date()};
 }
 
-/* —— account rail (edit mode): balances beside the list, click to filter —— */
-function loadTxAccts(){
+// One filter in or out. A day and a month are two ways to say one thing, so each
+// clears the other (a date outside the month would return nothing).
+function setTxFilter(k,v,refocus){
+  var f=S.tx.filters;
+  if(v===''||v==null){ if(k==='month') f.month=''; else delete f[k]; }
+  else { f[k]=String(v); if(k==='date') f.month=''; if(k==='month') delete f.date; }
+  S.tx.offset=0; clearSel(); renderTransactions();
+  if(refocus){ var i=$('#tokInput'); if(i) i.focus(); }
+}
+function setTxFilters(f){ S.tx.filters=f; S.tx.offset=0; clearSel(); renderTransactions(); }
+
+/* —— smart lists: built-in presets in code, saved ones in meta.smart_lists —— */
+function builtinLists(){
+  var cats=(S.boot&&S.boot.categories)||{};
+  var out=[{name:'This month',filters:{month:monthKey(new Date())}},
+           {name:'Big spends, ₱5,000+',filters:{type:'Expense',minAmount:'5000'}}];
+  // ponytail: "Subscriptions" is one category; a recurring-row match if that proves too narrow.
+  if(cats['Shopping: Software Tools']) out.push({name:'Subscriptions',filters:{category:'Shopping: Software Tools'}});
+  out.push({name:'From Gmail',filters:{source:'gm'}},{name:'From Telegram',filters:{source:'tg'}});
+  return out;
+}
+function savedLists(){ return (S.boot&&S.boot.smartLists)||[]; }
+// A list without a month means every month, not "the Summary's month".
+function listFilters(l){ return Object.assign({month:''},l.filters); }
+function filterSig(f){ return TX_KEYS.map(function(k){ return f[k]==null?'':String(f[k]); }).join('|'); }
+function isListOn(l){ return filterSig(listFilters(l))===filterSig(S.tx.filters); }
+function cleanFilters(f){ var o={}; TX_KEYS.forEach(function(k){ if(f[k]!=null&&f[k]!=='') o[k]=String(f[k]); }); return o; }
+function putSmartLists(lists, msg){
+  return gs('api_setSmartLists',{lists:lists}).then(function(res){
+    if(S.boot) S.boot.smartLists=res.smartLists;
+    toast(msg,'ok'); if(S.screen==='transactions') renderTransactions();
+  }).catch(showErr);
+}
+function openSaveList(){
+  if(!activeTokens(S.tx.filters).length){ toast('Add a filter first','err'); return; }
+  if(savedLists().length>=20){ toast('You can keep 20 smart lists','err'); return; }
+  var name=inputEl('text','','e.g. Food over ₱1,000');
+  var save=el('button','btn primary','Save');
+  save.onclick=function(){
+    var n=name.value.trim(); if(!n){ toast('Give the list a name','err'); return; }
+    closeModal();
+    putSmartLists(savedLists().concat([{name:n,filters:cleanFilters(S.tx.filters)}]),'Saved “'+n+'”');
+  };
+  openModal(modalShell('Save as a smart list', fieldEl('Name',name,activeTokens(S.tx.filters).map(function(t){ return tokenText(t.k,t.v); }).join(' · ')), [save]));
+  setTimeout(function(){ name.focus(); },50);
+}
+function deleteList(i){
+  var l=savedLists()[i];
+  putSmartLists(savedLists().filter(function(_,j){ return j!==i; }),'Removed “'+l.name+'”');
+}
+
+function renderTransactions(){
+  if(needBoot('list', renderTransactions)) return;
+  if(S.tx.filters.month===undefined) S.tx.filters.month=S.month;   // first open: the Summary's month
+  var sel=!!S.tx.edit, wide=txWide();
+  var w=el('div','screen act'+(sel?' selecting':''));
+  var body=el('div','act-body'); w.appendChild(body);
+  if(wide) body.appendChild(filterPane());
+  var main=el('div','act-main'); body.appendChild(main);
+
+  var head=el('div','screen-head act-head');
+  head.appendChild(el('div','screen-title','Activity'));
+  var tg=el('button',sel?'btn sm primary':'link-btn act-sel',sel?'Done':'Select'); tg.type='button';
+  tg.onclick=function(){ S.tx.edit=!S.tx.edit; clearSel(); renderTransactions(); };
+  head.appendChild(tg);
+  main.appendChild(head);
+  main.appendChild(tokenField());
+
+  if(wide){
+    var bar=el('div','act-bar');
+    bar.appendChild(typeSeg(S.tx.filters.type,function(v){ setTxFilter('type',v); }));
+    bar.appendChild(el('span','act-hint','Click a category, account or date in the list to filter by it.'));
+    main.appendChild(bar);
+  } else {
+    var chips=el('div','chips');
+    var n=activeTokens(S.tx.filters).length;
+    var fb=el('button','chip dark',icon('filter')+'Filters'+(n?' · '+n:'')); fb.type='button'; fb.onclick=openFilterSheet;
+    chips.appendChild(fb);
+    builtinLists().concat(savedLists()).forEach(function(l){
+      var on=isListOn(l), c=el('button','chip'+(on?' on':''),esc(l.name)); c.type='button';
+      c.onclick=function(){ setTxFilters(on?{month:''}:listFilters(l)); };
+      chips.appendChild(c);
+    });
+    main.appendChild(chips);
+  }
+  var cnt=el('div','act-count'); cnt.id='txCount'; main.appendChild(cnt);
+  var list=el('div','act-list'); list.id='txListCard'; list.innerHTML=skCard(skRows(6)); main.appendChild(list);
+  var bb=el('div','bulk-bar'); bb.id='bulkBar'; bb.hidden=true; main.appendChild(bb);
+  paint(w);
+  loadTx(w);
+}
+
+function typeSeg(cur, onPick){
+  var s=el('div','seg');
+  [['','All'],['Expense','Spent'],['Income','Earned'],['Transfer','Moved']].forEach(function(o){
+    var b=el('button',(cur||'')===o[0]?'on':'',o[1]); b.type='button';
+    b.setAttribute('aria-pressed',(cur||'')===o[0]); b.onclick=function(){ onPick(o[0]); };
+    s.appendChild(b);
+  });
+  return s;
+}
+
+/* The search field: active filters as tokens, typed text as suggestions. */
+function tokenField(){
+  var wrap=el('div','tok-wrap'), box=el('label','tok-field');
+  box.innerHTML=icon('search');
+  activeTokens(S.tx.filters).forEach(function(t){
+    var c=el('span','tok','<span class="tok-f">'+esc(TOKEN_LABEL[t.k])+'</span>'+esc(tokenText(t.k,t.v)));
+    var x=el('button','tok-x',icon('close')); x.type='button'; x.setAttribute('aria-label','Remove the '+TOKEN_LABEL[t.k]+' filter');
+    x.onclick=function(e){ e.preventDefault(); setTxFilter(t.k,'',true); };
+    c.appendChild(x); box.appendChild(c);
+  });
+  var inp=el('input'); inp.id='tokInput'; inp.type='text'; inp.autocomplete='off'; inp.spellcheck=false;
+  inp.placeholder='Search'; inp.setAttribute('enterkeyhint','search'); inp.setAttribute('aria-label','Search or add a filter');
+  box.appendChild(inp);
+  var menu=el('div','tok-menu'); menu.hidden=true; menu.setAttribute('role','listbox');
+  wrap.appendChild(box); wrap.appendChild(menu);
+  var sugg=[], act=0;
+  function mark(){ Array.prototype.forEach.call(menu.querySelectorAll('.tok-opt'),function(o,i){ o.classList.toggle('on',i===act); }); }
+  function draw(){
+    sugg=parseTokens(inp.value,tokenCtx()).slice(0,7); act=0; menu.innerHTML='';
+    if(!sugg.length){ menu.hidden=true; return; }
+    sugg.forEach(function(s,i){
+      var o=el('div','tok-opt','<span class="tok-f">'+esc(TOKEN_LABEL[s.k])+'</span><span class="tok-v">'+
+        esc(s.k==='search'?'contains “'+s.v+'”':tokenText(s.k,s.v))+'</span>');
+      o.setAttribute('role','option');
+      o.onmousedown=function(e){ e.preventDefault(); };   // keep the focus, or the blur closes the menu first
+      o.onclick=function(){ setTxFilter(s.k,s.v,true); };
+      o.onmouseenter=function(){ act=i; mark(); };
+      menu.appendChild(o);
+    });
+    menu.appendChild(el('div','tok-hint','Try: >500 · aug · transfer · gmail · "exact words"'));
+    mark(); menu.hidden=false;
+  }
+  inp.oninput=draw;
+  inp.onfocus=function(){ if(inp.value) draw(); };
+  inp.onblur=function(){ setTimeout(function(){ menu.hidden=true; },120); };
+  inp.onkeydown=function(e){
+    if(e.key==='ArrowDown'&&!menu.hidden){ e.preventDefault(); act=Math.min(sugg.length-1,act+1); mark(); }
+    else if(e.key==='ArrowUp'&&!menu.hidden){ e.preventDefault(); act=Math.max(0,act-1); mark(); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(sugg[act]&&!menu.hidden) setTxFilter(sugg[act].k,sugg[act].v,true); }
+    else if(e.key==='Escape'&&!menu.hidden){ e.stopPropagation(); menu.hidden=true; }
+    else if(e.key==='Backspace'&&!inp.value){
+      var last=activeTokens(S.tx.filters).pop(); if(last) setTxFilter(last.k,'',true);
+    }
+  };
+  return wrap;
+}
+
+/* —— PC filter pane: smart lists, then the accounts with balances —— */
+function filterPane(){
+  var p=el('aside','act-pane');
+  p.appendChild(el('div','pane-h','Smart lists'));
+  function row(label,on,fn,del){
+    var r=el('div','pane-row'+(on?' on':'')), b=el('button','pane-btn',label); b.type='button'; b.onclick=fn; r.appendChild(b);
+    if(del){ var x=el('button','pane-x',icon('close')); x.type='button'; x.setAttribute('aria-label','Delete this smart list'); x.onclick=del; r.appendChild(x); }
+    p.appendChild(r);
+  }
+  var all={filters:{}};
+  row('All activity',isListOn(all),function(){ setTxFilters({month:''}); });
+  builtinLists().forEach(function(l){ row(esc(l.name),isListOn(l),function(){ setTxFilters(listFilters(l)); }); });
+  savedLists().forEach(function(l,i){ row(esc(l.name),isListOn(l),function(){ setTxFilters(listFilters(l)); },function(){ deleteList(i); }); });
+  var sv=el('button','link-btn pane-add','+ Save these filters as a list'); sv.type='button'; sv.onclick=openSaveList;
+  p.appendChild(sv);
+  p.appendChild(el('div','pane-h','Accounts'));
+  var host=el('div'); host.id='paneAccts'; host.innerHTML=skRows(4); p.appendChild(host);
+  loadPaneAccts(host);   // the host itself: a cached answer lands before paint() attaches it
+  return p;
+}
+function loadPaneAccts(host){
   return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
-    var host=$('#txAccts'); if(!host) return;
+    host=host||$('#paneAccts'); if(!host) return;
     host.innerHTML='';
-    host.appendChild(el('div','card-h','Accounts'));
-    var all=el('div','litem click rail'+(!S.tx.filters.account?' sel':''));
-    all.innerHTML='<div class="grow"><div class="t1">All accounts</div></div>';
-    all.onclick=function(){ pickRailAccount(''); };
-    host.appendChild(all);
-    var groups={};
-    (res.accounts||[]).forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
-    Object.keys(groups).sort().forEach(function(t){
-      host.appendChild(el('div','rail-grp',esc(t)));
-      groups[t].forEach(function(a){ host.appendChild(acctRailRow(a)); });
+    (res.accounts||[]).forEach(function(a){
+      var on=S.tx.filters.account===a.name;
+      var r=el('div','pane-row'+(on?' on':'')), b=el('button','pane-btn',
+        '<span class="acct-dot" style="background:'+(isHex6(a.color)?a.color:'var(--dim)')+'"></span>'+
+        '<span class="pane-n">'+esc(a.name)+'</span><span class="pane-v'+(a.isLiability?' neg':'')+'">'+esc(acctMain(a))+'</span>');
+      b.type='button'; b.onclick=function(){ setTxFilter('account',on?'':a.name); };
+      r.appendChild(b); host.appendChild(r);
     });
   }).catch(showErr);
 }
 
-// The rail and the account combo drive the SAME filter field, so a rail click has to
-// write the combo too or it sits there showing a stale account.
-function pickRailAccount(name){
-  S.tx.filters.account=name;
-  var c=$('#fAcc'); if(c) c.value=name||'(all accounts)';
-  S.tx.offset=0; markActiveFilters(); loadTxAccts(); loadTx();
-}
-
-/* Border-highlight every filter control that is currently narrowing the list. */
-function markActiveFilters(){
-  document.querySelectorAll('.filters [data-f]').forEach(function(e){
-    e.classList.toggle('on', !!S.tx.filters[e.dataset.f]);
-  });
-}
-
-function acctRailRow(a){
-  var sel=S.tx.filters.account===a.name;
-  var r=el('div','litem click rail'+(sel?' sel':''));
-  var avail=a.creditLimit?'<div class="t2">'+money(a.availableCredit)+' avail</div>':'';
-  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
-    '<div class="grow"><div class="t1">'+esc(a.name)+'</div>'+avail+'</div>'+
-    acctAmtHtml(a);
-  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
-    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
-    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
+/* —— phone/iPad Filters sheet: edits a draft, Done applies it —— */
+function openFilterSheet(){
+  var d=Object.assign({},S.tx.filters), node=el('div','fsheet');
+  function apply(){ if(d.date) d.month=''; closeModal(); setTxFilters(d); }
+  function combo(opts,key){
+    var c=comboEl([{value:'',label:'Any'}].concat(opts), d[key]||'');
+    c.onchange=function(){ d[key]=c.value; if(key==='month'&&c.value) delete d.date; };
+    return c;
   }
-  r.onclick=function(){ pickRailAccount(a.name); };
-  return r;
+  function draw(){
+    node.innerHTML='<div class="sheet-grab fs-grab"></div>';
+    var h=el('div','fs-h'), rs=el('button',null,'Reset'), dn=el('button','b','Done');
+    rs.type=dn.type='button'; rs.onclick=function(){ d={month:''}; draw(); }; dn.onclick=apply;
+    h.appendChild(rs); h.appendChild(el('b',null,'Filters')); h.appendChild(dn); node.appendChild(h);
+    var b=el('div','fs-b'); node.appendChild(b);
+    function sec(label,child){ var s=el('div','fs-sec'); s.appendChild(el('div','fs-l',label)); s.appendChild(child); b.appendChild(s); }
+    var sl=el('div','fs-chips');
+    builtinLists().concat(savedLists()).forEach(function(l){
+      var on=filterSig(listFilters(l))===filterSig(d), c=el('button','chip'+(on?' on':''),esc(l.name)); c.type='button';
+      c.onclick=function(){ d=on?{month:''}:listFilters(l); draw(); };
+      sl.appendChild(c);
+    });
+    sec('Smart lists',sl);
+    sec('Type',typeSeg(d.type,function(v){ d.type=v; draw(); }));
+    var g=el('div','fs-group');
+    function row(label,ctl){ var r=el('div','fs-row'); r.appendChild(el('span',null,label)); r.appendChild(ctl); g.appendChild(r); }
+    var cats=(S.boot&&S.boot.categories)||{}, segs={};
+    Object.keys(cats).forEach(function(k){ if(cats[k].Segment) segs[cats[k].Segment]=1; });
+    row('Month',combo(monthOptions(),'month'));
+    var di=inputEl('date',d.date||''); di.onchange=function(){ d.date=di.value; }; row('Date',di);
+    row('Category',combo(Object.keys(cats).sort(),'category'));
+    row('Segment',combo(Object.keys(segs),'segment'));
+    row('Added from',combo(Object.keys(SOURCES).map(function(k){ return {value:k,label:SOURCES[k]}; }),'source'));
+    b.appendChild(g);
+    var ac=el('div','fs-chips');
+    acctOptions().forEach(function(o){
+      var on=d.account===o.value, c=el('button','chip'+(on?' on':''),dotHTML(o.color)+esc(o.value)); c.type='button';
+      c.onclick=function(){ d.account=on?'':o.value; draw(); };
+      ac.appendChild(c);
+    });
+    sec('Accounts',ac);
+    var am=el('div','fs-amt');
+    [['minAmount','At least'],['maxAmount','At most']].forEach(function(x){
+      var i=inputEl('text',d[x[0]]||'','Any'); i.inputMode='decimal';
+      i.onchange=function(){ var n=amountOf(i.value); d[x[0]]=n==null?'':String(n); };
+      var l=el('label','fs-in'); l.appendChild(el('span',null,x[1])); l.appendChild(i); am.appendChild(l);
+    });
+    sec('Amount',am);
+    var f=el('div','fs-f'), go=el('button','btn primary','Show results'), sv=el('button','link-btn','Save as a smart list');
+    go.type=sv.type='button'; go.onclick=apply;
+    sv.onclick=function(){ apply(); openSaveList(); };
+    f.appendChild(go); f.appendChild(sv); node.appendChild(f);
+  }
+  draw();
+  openModal(node, {sheet:true});
 }
 
-// silent: skip the full-card spinner (keep optimistic rows on screen until fresh
-// server data lands, so an added/deleted row transitions smoothly instead of flashing).
+// silent: skip the skeleton (keep optimistic rows on screen until fresh server data
+// lands, so an added/deleted row transitions smoothly instead of flashing).
 function loadTx(w, silent){
   var st={filters:S.tx.filters, offset:S.tx.offset, limit:S.tx.limit};
   var key='tx|'+JSON.stringify(S.tx.filters||{})+'|'+S.tx.offset+'|'+S.tx.limit;
-  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skRows(7);
+  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skCard(skRows(6));
   return cachedCall(key, function(et){return fetchTxPage(st,et);}, function(res){
-    S.tx.total=res.total; S.tx.rows=res.transactions;
+    S.tx.total=res.total; S.tx.net=res.net; S.tx.rows=res.transactions;
     renderTxList();
   }).catch(showErr);
 }
 
+// Signed peso effect of one row: income adds, expense subtracts, a transfer moves
+// money and counts 0. A refund is a negative Expense, so it ADDS back.
+function txNet(t){
+  var php=Number(t['Amount (PHP)'])||0;
+  return String(t.Type)==='Expense'?-php:(String(t.Type)==='Income'?php:0);
+}
+function fmtNet(n){ n=Math.round(n*100)/100; return (n>0?'+':(n<0?'−':''))+money(Math.abs(n),true); }
 // Bucket rows into day groups (display order preserved) with each day's net.
-// Used by the transactions list in both browse and edit mode.
 function groupByDay(rows){
   var groups=[], byDate={};
   (rows||[]).forEach(function(t){
     var d=fmtDate(t.Date);
     if(!byDate[d]){ byDate[d]={label:d,rows:[],net:0,date:t.Date}; groups.push(byDate[d]); }
     byDate[d].rows.push(t);
-    // Signed, not absolute: a refund is a negative Expense, so subtracting it ADDS
-    // back to the day's net — which is what a refund does to the balance.
-    var php=Number(t['Amount (PHP)'])||0;
-    if(String(t.Type)==='Expense') byDate[d].net-=php;
-    else if(String(t.Type)==='Income') byDate[d].net+=php;
+    byDate[d].net+=txNet(t);
   });
   return groups;
 }
 function dayHeadEl(g){
-  var dt=parseDate(g.date), day=dt?DAYS[dt.getDay()]+' · ':'';
-  var net=Math.round(g.net*100)/100;
-  var iso=isoDate(g.date), on=iso&&S.tx.filters.date===iso;
-  var h=el('div','list-date','<span class="ld-date'+(on?' on':'')+'">'+esc(day+g.label)+'</span>'+
-    (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
-  var d=$('.ld-date',h);
-  d.title=on?'Show every date again':'Show only this date';
-  d.onclick=function(){ pickTxDate(on?'':iso); };
+  var dt=parseDate(g.date), iso=isoDate(g.date), on=iso&&S.tx.filters.date===iso;
+  var label=dt?DAYS[dt.getDay()]+', '+dt.getDate()+' '+MONTHS_FULL[dt.getMonth()]+
+    (dt.getFullYear()!==new Date().getFullYear()?' '+dt.getFullYear():''):g.label;
+  var h=el('div','day-h','<button type="button" class="ld-date'+(on?' on':'')+'">'+esc(label)+'</button>'+
+    (Math.round(g.net)?'<span class="'+(g.net>0?'pos':'')+'">'+fmtNet(g.net)+'</span>':''));
+  var b=$('.ld-date',h);
+  b.title=on?'Show every date again':'Show only this date';
+  b.onclick=function(){ setTxFilter('date',on?'':iso); };
   return h;
-}
-// Re-render the whole screen, not just the list: the date input and the month combo
-// both have to show what the click just did.
-function pickTxDate(iso){
-  S.tx.filters.date=iso;
-  if(iso) S.tx.filters.month='';
-  S.tx.offset=0;
-  renderTransactions();
 }
 
 /* The add field, the row modal and the Telegram deep link can all write from any screen,
@@ -1382,64 +1570,65 @@ function withPendingEdit(t){
 
 // A pending create only belongs on the list if the active filters would have returned
 // it — otherwise adding under one account/type flashes a row that the filter excludes.
-// Mirrors the server-side filter in api_listTransactions.
+// Mirrors the server-side filter in listTransactions. A pending row is always "App".
 function matchesTxFilters(t){
-  var f=S.tx.filters||{}, d=parseDate(t.Date);
+  var f=S.tx.filters||{}, d=parseDate(t.Date), abs=Math.abs(Number(t['Amount (PHP)'])||0);
+  var cat=(S.boot&&(S.boot.categories||{})[t.Category])||{};
   if(f.account && t.Account!==f.account && t.ToAccount!==f.account) return false;
   if(f.category && t.Category!==f.category) return false;
+  if(f.segment && cat.Segment!==f.segment) return false;
+  if(f.source && f.source!=='ui') return false;
   // an optimistic transfer may not carry its derived Type yet
   if(f.type && (txIsXfer(t)?'Transfer':String(t.Type||''))!==f.type) return false;
   if(f.month && (t.Period||(d?monthKey(d):''))!==f.month) return false;
   if(f.date && isoDate(t.Date)!==f.date) return false;
+  if(f.minAmount && abs<Number(f.minAmount)) return false;
+  if(f.maxAmount && abs>Number(f.maxAmount)) return false;
   if(f.search && ((t.Description||'')+' '+(t.Category||'')).toLowerCase()
                    .indexOf(f.search.toLowerCase())<0) return false;
   return true;
 }
 
-// Repaint the transactions list from S.tx.rows plus optimistic state (pending
-// creates shown at top, pending deletes shown in-place) — no server round-trip,
-// so edit-mode selection and the filter DOM stay put.
+// Repaint the list from S.tx.rows plus optimistic state (pending creates at the top,
+// pending deletes in place). No server round trip, so the selection and filters stay.
 function renderTxList(){
   var c=$('#txListCard'); if(!c) return;
-  var edit=!!S.tx.edit;
+  var sel=!!S.tx.edit, wide=txWide();
   // pending creates only make sense on the first page (they'd be the newest rows)
   var adds=(S.tx.offset<=0)?(S.tx.pendingAdds||[]).filter(matchesTxFilters):[];
-  var rows=S.tx.rows||[];
-  var total=(S.tx.total||0)+adds.length;
-  c.innerHTML='';
-  var head=el('div','row-between'); head.style.marginBottom='6px';
-  var label=total+' transaction'+(total===1?'':'s');
-  if(edit){
-    // select-all covers the current page's server rows (pending ones aren't editable yet)
-    var lbl=el('label','sel-all');
-    var selAll=el('input'); selAll.type='checkbox';
-    selAll.checked=rows.length>0 && rows.every(function(t){return S.tx.sel[t.ID];});
-    selAll.onclick=function(){
-      rows.forEach(function(t){ if(selAll.checked)S.tx.sel[t.ID]=true; else delete S.tx.sel[t.ID]; });
-      renderTxList();
-    };
-    lbl.appendChild(selAll);
-    lbl.appendChild(document.createTextNode(' '+label));
-    head.appendChild(lbl);
-  } else {
-    head.innerHTML='<div class="card-h" style="margin:0">'+label+'</div>';
+  var rows=S.tx.rows||[], allRows=adds.concat(rows), total=(S.tx.total||0)+adds.length;
+  var cnt=$('#txCount');
+  if(cnt){
+    cnt.innerHTML='<span>'+total+' result'+(total===1?'':'s')+(Math.round(S.tx.net||0)?' · '+fmtNet(S.tx.net):'')+'</span>';
+    if(sel&&rows.length){
+      var every=rows.every(function(t){ return S.tx.sel[t.ID]; });
+      var sa=el('button','link-btn',every?'Select none':'Select all'); sa.type='button';
+      sa.onclick=function(){ rows.forEach(function(t){ if(every) delete S.tx.sel[t.ID]; else S.tx.sel[t.ID]=true; }); renderTxList(); };
+      cnt.appendChild(sa);
+    }
   }
-  c.appendChild(head);
-  // group by day: header shows weekday + date + the day's net (income − spend)
-  var allRows=adds.concat(rows);   // optimistic adds sort ahead within their date
-  var l=el('div','list');
-  groupByDay(allRows).forEach(function(g){
-    l.appendChild(dayHeadEl(g));
-    g.rows.forEach(function(t){
-      var pending=isPendingRow(t);
-      l.appendChild(txRow(withPendingEdit(t),{edit:edit, pending:pending, clickable:!pending, hideDate:true}));
+  c.innerHTML='';
+  if(!allRows.length){ c.appendChild(el('div','card empty','<span class="empty-ico">⌕</span>No transactions match.')); }
+  else if(wide){
+    var tb=el('div','card tx-table'+(sel?' sel-mode':''));
+    tb.appendChild(el('div','tx-tr tx-th',(sel?'<span></span>':'')+'<span>Date</span><span>Description</span><span>Category</span><span>Account</span><span class="r">Amount</span>'));
+    allRows.forEach(function(t){ tb.appendChild(txTableRow(withPendingEdit(t),{edit:sel,pending:isPendingRow(t)})); });
+    c.appendChild(tb);
+  } else {
+    groupByDay(allRows).forEach(function(g){
+      var day=el('div','day'), card=el('div','day-card');
+      day.appendChild(dayHeadEl(g));
+      g.rows.forEach(function(t){
+        var pending=isPendingRow(t);
+        var r=txRow(withPendingEdit(t),{edit:sel,pending:pending,clickable:!pending,hideDate:true,tokens:!sel});
+        card.appendChild(!sel&&!pending?swipeWrap(r,t):r);
+      });
+      day.appendChild(card); c.appendChild(day);
     });
-  });
-  if(!allRows.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
-  c.appendChild(l);
+  }
   // pager (server rows only)
   if(S.tx.total>S.tx.limit){
-    var pg=el('div','row-between'); pg.style.marginTop='12px';
+    var pg=el('div','row-between pager');
     var prev=el('button','btn sm','← Prev'); prev.disabled=S.tx.offset<=0;
     prev.onclick=function(){S.tx.offset=Math.max(0,S.tx.offset-S.tx.limit);loadTx();};
     var next=el('button','btn sm','Next →'); next.disabled=S.tx.offset+S.tx.limit>=S.tx.total;
@@ -1449,93 +1638,184 @@ function renderTxList(){
     pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
     c.appendChild(pg);
   }
-  if(edit) updateBulkBar();
+  updateBulkBar();
 }
 
-/* One row renderer for both modes. opts:
- *   edit      — checkbox + inline single-field editors (the icon opens the full modal)
+// How a row reads: which way the money ran, its sign and its tint. The category type
+// says the usual direction, and a NEGATIVE amount reverses it: a refund is a negative
+// Expense, so it pays money back and reads "+". Spending is plain text, never red.
+function txView(t){
+  var type=String(t.Type||''), isXfer=txIsXfer(t);
+  var dir=isXfer?0:(type==='Expense'?-1:(type==='Income'?1:0))*(Number(t.Amount)<0?-1:1);
+  var cur=t.Currency||'PHP', isForeign=cur!=='PHP', amtPhp=t['Amount (PHP)'];
+  var seg=((S.boot&&(S.boot.categories||{})[t.Category])||{}).Segment;
+  var tint=isXfer?'accent':(dir>0?'pos':({Essentials:'ess',Rewards:'rew',Growth:'gro'})[seg]||'');
+  // Foreign-currency tx: the NATIVE amount in its own symbol, the peso figure beside it.
+  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(Math.abs(amtPhp));
+  return {isXfer:isXfer, dir:dir, isForeign:isForeign, amtPhp:amtPhp, seg:seg, tint:tint,
+          amt:(dir<0?'−':(dir>0?'+':''))+mainAmt, amtCls:dir>0?'pos':''};
+}
+// A category/account/date that adds itself as a filter token when clicked.
+function tokLink(html,k,v){
+  var s=el('span','tok-link',html); s.title='Filter by this';
+  s.onclick=function(e){ e.stopPropagation(); setTxFilter(k,S.tx.filters[k]===v?'':v); };
+  return s;
+}
+function selectClick(r,t){
+  return function(e){
+    if(e.target.closest('.ed,.t1-edit,.amt-edit,.ic-edit,input,.combo,.inline-edit')) return;
+    var on=!S.tx.sel[t.ID]; toggleSel(t.ID,on); r.classList.toggle('sel',on);
+    var chk=r.querySelector('.tx-check'); if(chk) chk.checked=on;
+  };
+}
+
+/* One list row for Activity (phone, iPad) and the Summary's Recent tile. opts:
+ *   edit      — Select mode: checkbox + inline single-field editors (the icon opens the modal)
  *   pending   — in-flight write: spinner glyph, nothing interactive
- *   clickable — browsing mode: the whole row opens the modal
- *   hideDate  — the list already groups rows under date headers                       */
+ *   clickable — browsing: the whole row opens the modal
+ *   hideDate  — the list already groups rows under date headers
+ *   tokens    — the category and account are filter links (Activity only)        */
 function txRow(t,opts){
   opts=opts||{};
-  var edit=!!opts.edit, pending=!!opts.pending, clickable=!!opts.clickable;
-  var type=String(t.Type||'');
-  var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
-  // Which way the money actually ran. The category type says the usual direction, and a
-  // NEGATIVE amount reverses it: a refund is a negative Expense, so it pays money back
-  // and reads "+" and green. Deriving the sign from the type alone printed "- -₱95".
-  var dir=(type==='Expense'?-1:(type==='Income'?1:0))*(Number(t.Amount)<0?-1:1);
-  var icCls=isXfer?'xfer':(dir<0?'out':(dir>0?'in':''));
-  var icCh=isXfer?'⇄':(dir<0?'−':(dir>0?'+':'•'));
-  var amtPhp=t['Amount (PHP)'];
-  var cur=t.Currency||'PHP';
-  var isForeign=cur!=='PHP';
-  // Foreign-currency tx: show the NATIVE amount in its own symbol; keep the PHP
-  // equivalent in the meta line so nothing is lost. Magnitudes both — `sign` carries it.
-  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(Math.abs(amtPhp));
-  var sign=dir<0?'-':(dir>0?'+':'');
-  var amtCls=dir<0?'neg':(dir>0?'pos':'');
-  var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
-
-  var r=el('div','litem'+(edit?' edit':'')+(clickable&&!edit?' click':'')+
+  var edit=!!opts.edit, pending=!!opts.pending, clickable=!!opts.clickable, v=txView(t);
+  var r=el('div','litem tx'+(edit?' edit':'')+(clickable&&!edit?' click':'')+
                         (edit&&S.tx.sel[t.ID]?' sel':'')+(pending?' pending':''));
-  // in-flight write: nothing on the row is editable until the server has agreed
   if(pending&&edit) r.style.pointerEvents='none';
-
   if(edit){
     var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.tx.sel[t.ID];
+    chk.setAttribute('aria-label','Select');
     chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID, chk.checked); r.classList.toggle('sel', chk.checked); };
     r.appendChild(chk);
+    r.onclick=selectClick(r,t);
   }
-  // a pending row swaps its type glyph for a spinner so it clearly reads as "loading"
+  var title=t.Description||t.Category||'';
   var ic=pending?el('div','ic','<span class="mini-spin"></span>')
-                :el('div','ic '+(edit?'ic-edit ':'')+icCls, icCh);
+                :el('div','ic tx-ic'+(v.tint?' s-'+v.tint:'')+(edit?' ic-edit':''), v.isXfer?'⇄':esc(title.charAt(0).toUpperCase()||'•'));
   if(edit&&!pending){ ic.title='Open details'; ic.onclick=function(e){ e.stopPropagation(); openTxModal(t); }; }
   r.appendChild(ic);
 
-  var grow=el('div','grow');
+  var grow=el('div','grow'), fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
   if(edit){
     // description — inline editable; empty = no description, and the ".t1-edit:empty"
     // CSS supplies the "+ note" affordance rather than a placeholder string
     var t1=el('div','t1 t1-edit', esc(t.Description||''));
     t1.title='Edit description';
-    t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(v){ commitInline(t,'Description',v); }); };
+    t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(val){ commitInline(t,'Description',val); }); };
     grow.appendChild(t1);
     var sub=el('div','t2');
+    sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
+      inlineCombo(host, catsForShape(v.isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
+    }));
+    sub.appendChild(document.createTextNode(' · '));
     sub.appendChild(editableSpan(dotHTML(fromC)+esc(t.Account||'(account)'), function(host){
       inlineCombo(host, acctOptions(), t.Account, function(val){ commitInline(t,'Account',val); });
     }));
-    if(isXfer) sub.appendChild(document.createTextNode(' → '+(t.ToAccount||'')));
-    sub.appendChild(document.createTextNode(' · '));
-    sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
-      inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
-    }));
-    if(isForeign) sub.appendChild(document.createTextNode(' · '+money(Math.abs(amtPhp))));
+    if(v.isXfer) sub.appendChild(document.createTextNode(' → '+(t.ToAccount||'')));
+    if(v.isForeign) sub.appendChild(document.createTextNode(' · '+money(Math.abs(v.amtPhp))));
     grow.appendChild(sub);
   } else {
-    // Description is optional: with none, the Category headlines the row and drops out
-    // of the sub line rather than printing twice under a "(no description)" placeholder.
-    var noDesc=!t.Description;
-    var line=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+
-             (noDesc?'':' · '+esc(t.Category||''));
-    grow.innerHTML='<div class="t1">'+esc(noDesc?(t.Category||''):t.Description)+'</div>'+
-      '<div class="t2">'+line+(opts.hideDate?'':' · '+esc(fmtDate(t.Date)))+'</div>';
+    grow.appendChild(el('div','t1',esc(title)));
+    var s2=el('div','t2'), tok=!!opts.tokens;
+    function part(html,k,val){ s2.appendChild(tok?tokLink(html,k,val):el('span',null,html)); }
+    // With no description the category is the title, so it leaves the sub line.
+    if(t.Description&&t.Category){ part(esc(t.Category),'category',t.Category); s2.appendChild(document.createTextNode(' · ')); }
+    part(dotHTML(fromC)+esc(t.Account||''),'account',t.Account);
+    if(v.isXfer){ s2.appendChild(document.createTextNode(' → ')); part(dotHTML(toC)+esc(t.ToAccount||''),'account',t.ToAccount); }
+    if(!opts.hideDate) s2.appendChild(document.createTextNode(' · '+fmtDate(t.Date)));
+    grow.appendChild(s2);
   }
   r.appendChild(grow);
 
-  // amount — inline editable in edit mode (edits the native magnitude; sign derives from Type)
-  var amt=el('div','amt '+(edit?'amt-edit ':'')+amtCls,
-    sign+mainAmt+(isForeign&&!edit?'<span class="amt-sub">'+money(Math.abs(amtPhp))+'</span>':''));
+  // amount — inline editable in Select mode (edits the native magnitude; sign derives from Type)
+  var amt=el('div','amt '+(edit?'amt-edit ':'')+v.amtCls,
+    v.amt+(v.isForeign&&!edit?'<span class="amt-sub">'+money(Math.abs(v.amtPhp))+'</span>':''));
   if(edit){
     amt.title='Edit amount';
-    amt.onclick=function(){ inlineInput(amt,'number', Number(t.Amount), function(v){ commitInline(t,'Amount',v); }); };
+    amt.onclick=function(e){ e.stopPropagation(); inlineInput(amt,'number', Number(t.Amount), function(val){ commitInline(t,'Amount',val); }); };
   }
   r.appendChild(amt);
-
-  if(fromC){ r.style.borderLeft='3px solid '+fromC; r.style.paddingLeft='9px'; }
-  if(clickable&&!edit) r.onclick=function(){ openTxModal(t); };
+  if(clickable&&!edit) r.onclick=function(){ if(swClose()) return; openTxModal(t); };
   return r;
+}
+
+/* One table row (1200px and wider). Browsing: the row opens the modal, and the date,
+ * category and account cells add a filter token. Select mode: checkbox + the same
+ * inline single-field editors as the list. */
+function txTableRow(t,opts){
+  var edit=!!opts.edit, pending=!!opts.pending, v=txView(t), dt=parseDate(t.Date);
+  var r=el('div','tx-tr'+(edit?' edit':' click')+(edit&&S.tx.sel[t.ID]?' sel':'')+(pending?' pending':''));
+  if(pending) r.style.pointerEvents='none';
+  function cell(cls,html){ var c=el('span','tx-td'+(cls?' '+cls:''),html||''); r.appendChild(c); return c; }
+  if(edit){
+    var cb=cell('');
+    var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.tx.sel[t.ID]; chk.setAttribute('aria-label','Select');
+    chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID,chk.checked); r.classList.toggle('sel',chk.checked); };
+    cb.appendChild(chk);
+    r.onclick=selectClick(r,t);
+  }
+  var dc=cell('dim'), dl=dt?MONTHS[dt.getMonth()]+' '+dt.getDate()+(dt.getFullYear()!==new Date().getFullYear()?', '+dt.getFullYear():''):'';
+  if(edit) dc.textContent=dl; else dc.appendChild(tokLink(esc(dl),'date',isoDate(t.Date)));
+  var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
+  var dsc=cell('');
+  var catH='<span class="cat-dot" style="background:'+(v.seg?SEG_COLOR[v.seg]||'var(--dim)':'var(--dim)')+'"></span>'+esc(t.Category||'');
+  var cc=cell(''), ac=cell('');
+  var acH=dotHTML(fromC)+esc(t.Account||'')+(v.isXfer?' → '+dotHTML(toC)+esc(t.ToAccount||''):'');
+  var am=cell('r amt '+v.amtCls, v.amt+(v.isForeign?'<span class="amt-sub">'+money(Math.abs(v.amtPhp))+'</span>':''));
+  if(edit){
+    var d1=el('span','t1-edit',esc(t.Description||'')); d1.title='Edit description'; dsc.appendChild(d1);
+    d1.onclick=function(e){ e.stopPropagation(); dsc.classList.add('editing'); inlineInput(d1,'text',t.Description||'',function(val){ commitInline(t,'Description',val); }); };
+    cc.appendChild(editableSpan(catH,function(host){ cc.classList.add('editing'); inlineCombo(host,catsForShape(v.isXfer),t.Category,function(val){ commitInline(t,'Category',val); }); }));
+    ac.appendChild(editableSpan(acH,function(host){ ac.classList.add('editing'); inlineCombo(host,acctOptions(),t.Account,function(val){ commitInline(t,'Account',val); }); }));
+    am.classList.add('amt-edit'); am.title='Edit amount';
+    am.onclick=function(e){ e.stopPropagation(); am.classList.add('editing'); inlineInput(am,'number',Number(t.Amount),function(val){ commitInline(t,'Amount',val); }); };
+  } else {
+    dsc.textContent=t.Description||'';
+    if(!t.Description) dsc.classList.add('dim');
+    cc.appendChild(tokLink(catH,'category',t.Category));
+    ac.appendChild(tokLink(dotHTML(fromC)+esc(t.Account||''),'account',t.Account));
+    if(v.isXfer){ ac.appendChild(document.createTextNode(' → ')); ac.appendChild(tokLink(dotHTML(toC)+esc(t.ToAccount||''),'account',t.ToAccount)); }
+    r.onclick=function(){ openTxModal(t); };
+  }
+  return r;
+}
+
+/* —— swipe for Edit / Delete (touch only; the modal and Select mode offer both too) —— */
+var swOpen=null;   // the one row whose actions are showing
+function swRest(w){ w.lastChild.style.transform=''; setTimeout(function(){ if(swOpen!==w) w.classList.remove('sw-on'); },320); }
+function swClose(){
+  if(!swOpen) return false;
+  var w=swOpen; swOpen=null; swRest(w); return true;
+}
+function swipeWrap(row,t){
+  var w=el('div','swipe'), acts=el('div','swipe-acts');
+  var eb=el('button','sw-edit','Edit'), db=el('button','sw-del','Delete');
+  eb.type=db.type='button';
+  eb.onclick=function(){ swClose(); openTxModal(t); };
+  db.onclick=function(){ swClose(); confirmDelete(t); };
+  acts.appendChild(eb); acts.appendChild(db); w.appendChild(acts); w.appendChild(row);
+  var x0=null, y0=0, dx=0, base=0, drag=false;
+  row.addEventListener('touchstart',function(e){
+    var p=e.touches[0]; x0=p.clientX; y0=p.clientY; dx=0; drag=false; base=swOpen===w?-152:0;
+    if(swOpen&&swOpen!==w) swClose();
+  },{passive:true});
+  row.addEventListener('touchmove',function(e){
+    if(x0==null) return;
+    var p=e.touches[0]; dx=p.clientX-x0;
+    if(!drag){
+      if(Math.abs(dx)<10) return;
+      if(Math.abs(p.clientY-y0)>Math.abs(dx)){ x0=null; return; }   // a scroll, not a swipe
+      drag=true; row.style.transition='none'; w.classList.add('sw-on');
+    }
+    row.style.transform='translateX('+Math.max(-152,Math.min(0,base+dx))+'px)';
+  },{passive:true});
+  row.addEventListener('touchend',function(){
+    if(x0==null||!drag){ x0=null; return; }
+    x0=null; row.style.transition='';
+    var open=base+dx<-60;
+    swOpen=open?w:null;
+    if(open) row.style.transform='translateX(-152px)'; else swRest(w);
+  });
+  return w;
 }
 
 // Parse a Date or "yyyy-MM-dd" string. ISO date strings are read as a LOCAL date
@@ -2508,18 +2788,19 @@ function selCount(){ return Object.keys(S.tx.sel).length; }
 function bulkSelectedIds(){ return Object.keys(S.tx.sel); }
 function clearSel(){ S.tx.sel={}; }
 
+// The floating bulk bar: "N selected · net", then the actions, Delete last.
 function updateBulkBar(){
   var bar=$('#bulkBar'); if(!bar) return;
   var n=selCount();
-  if(!n){ bar.hidden=true; bar.innerHTML=''; return; }
-  bar.hidden=false; bar.innerHTML='';
-  bar.appendChild(el('span','bulk-count',n+' selected'));
-  function add(label,cls,fn){ var b=el('button','btn sm '+(cls||''),label); b.onclick=fn; bar.appendChild(b); }
-  add('Recategorize','',openBulkRecat);
-  add('Reassign','',openBulkReassign);
-  add('Set date','',openBulkDate);
-  add('Delete','danger',openBulkDelete);
-  add('Clear','ghost',function(){ clearSel(); renderTxList(); });
+  bar.hidden=!n; bar.innerHTML=''; if(!n) return;
+  var net=0; (S.tx.rows||[]).forEach(function(t){ if(S.tx.sel[t.ID]) net+=txNet(t); });
+  bar.appendChild(el('span','bulk-count',n+' selected'+(Math.round(net)?' · '+fmtNet(net):'')));
+  function add(label,cls,fn){ var b=el('button',cls,label); b.type='button'; b.onclick=fn; bar.appendChild(b); return b; }
+  add('Category','',openBulkRecat);
+  add('Account','',openBulkReassign);
+  add('Date','',openBulkDate);
+  add('Delete','del',openBulkDelete);
+  add(icon('close'),'x',function(){ clearSel(); renderTxList(); }).setAttribute('aria-label','Clear the selection');
 }
 
 function bulkApply(patch){
@@ -2591,9 +2872,11 @@ function fitModal(){
   if(!vv||!root||root.hidden) return;
   root.style.top=vv.offsetTop+'px'; root.style.height=vv.height+'px';
 }
-function openModal(node){
+// opts.sheet: a bottom sheet on a phone (app.css), a centred card from 768px.
+function openModal(node, opts){
   var root=$('#modalRoot'); var card=$('#modalCard');
   closeModal.onClose=null;
+  root.classList.toggle('as-sheet', !!(opts&&opts.sheet));
   card.innerHTML=''; card.appendChild(node); root.hidden=false;
   if(window.visualViewport){ visualViewport.addEventListener('resize',fitModal); visualViewport.addEventListener('scroll',fitModal); fitModal(); }
   $('.modal-backdrop',root).onclick=closeModal;
@@ -3039,7 +3322,7 @@ function afterMutation(){
   // on screen stays put until the fresh server page lands, then swaps in place
   // (no spinner flash) — and a full render() would rebuild the filter/selection
   // DOM and flash skeletons on every write. Other screens fully re-render.
-  if(S.screen==='transactions'){ loadTx(null,true); if(S.tx.edit) loadTxAccts(); }
+  if(S.screen==='transactions'){ loadTx(null,true); if(txWide()) loadPaneAccts(); }
   else render();
 }
 
