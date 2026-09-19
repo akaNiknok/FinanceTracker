@@ -31,6 +31,7 @@ import {
   isInvestedNetWorth, isPulseAcct, isSharesAcct, NOT_SHARES_SRC, resolveAccount, resolveCategory
 } from './db.js';
 import { fxMap, resolveRate } from './fx.js';
+import { parse } from './gemini.js';
 
 // The Ledger's column names, which are still the sheet's — the Tax screen renders
 // these strings and LEDGER_COL_ORDER in app.js sorts by them.
@@ -121,7 +122,7 @@ async function accountsList(env, r) {
   // Budgets screen (which asks for USD explicitly) shows a figure.
   const fx = await fxMap(env, r.accounts.map((a) => a.currency)
     .concat(Object.values(prices).map((p) => p.currency)).concat(['USD']));
-  return { accounts: shapeAccounts(r, net, prices, fx), fx };
+  return { accounts: shapeAccounts(r, net, prices, fx), fx, prices };
 }
 
 // ── reads ────────────────────────────────────────────────────────────────────
@@ -351,6 +352,7 @@ export async function getRecurring(args, env) {
   })) };
 }
 
+const TX_SOURCES = ['tg', 'gm', 'ui', 'interest'];   // id prefixes; see telegram.js logItems and app.js gs()
 export async function listTransactions(args, env) {
   const r = await refs(env);
   const where = ['1 = 1'], bind = [];
@@ -365,6 +367,20 @@ export async function listTransactions(args, env) {
   // The v1 haystack was Description + " " + Category, matched as one string — keep it
   // concatenated so a term spanning the two still matches. LIKE is ASCII-case-insensitive.
   if (args.search) add("(COALESCE(t.description,'') || ' ' || c.name) LIKE ?", '%' + String(args.search) + '%');
+  // Amount bounds are peso magnitudes. On a share-priced source amount_php_u is a share
+  // QUANTITY (NOT_SHARES_SRC), so a bounded search leaves those rows out rather than
+  // matching 2 shares as 2 pesos.
+  const minU = parseFloat(args.minAmount), maxU = parseFloat(args.maxAmount);
+  if (!isNaN(minU) || !isNaN(maxU)) add(NOT_SHARES_SRC);
+  if (!isNaN(minU)) add('ABS(t.amount_php_u) >= ?', toU(minU));
+  if (!isNaN(maxU)) add('ABS(t.amount_php_u) <= ?', toU(maxU));
+  // Where a row came from is its id prefix; anything else is legacy (sheet-era ids).
+  if (args.source) {
+    const src = String(args.source);
+    if (TX_SOURCES.includes(src)) add('t.id LIKE ?', src + '-%');
+    else if (src === 'legacy') add(TX_SOURCES.map(() => 't.id NOT LIKE ?').join(' AND '), ...TX_SOURCES.map((x) => x + '-%'));
+    else throw new Error('Unknown source: ' + src);
+  }
 
   const from = ' FROM transactions t JOIN categories c ON c.id = t.category_id ' +
                'JOIN accounts a ON a.id = t.account_id LEFT JOIN accounts ta ON ta.id = t.to_account_id ' +
@@ -374,13 +390,16 @@ export async function listTransactions(args, env) {
   // rowid desc as the tie-break = insertion order, matching v1's __row tie-break, so
   // two same-day rows still show latest-entered first.
   const [cnt, page] = await env.DB.batch([
-    env.DB.prepare('SELECT COUNT(*) AS n' + from).bind(...bind),
+    // net = income − expense over the WHOLE filtered set, not the page: the Activity
+    // header's "N results · ₱X". Transfers move money, they do not add or spend it.
+    env.DB.prepare("SELECT COUNT(*) AS n, SUM(CASE c.type WHEN 'Income' THEN t.amount_php_u " +
+                   "WHEN 'Expense' THEN -t.amount_php_u ELSE 0 END) AS net" + from).bind(...bind),
     env.DB.prepare('SELECT t.*' + from + ' ORDER BY t.date DESC, t.rowid DESC LIMIT ? OFFSET ?')
       .bind(...bind, limit, offset)
   ]);
   return {
     status: 'success',
-    total: cnt.results[0].n, offset, limit,
+    total: cnt.results[0].n, net: fromU(cnt.results[0].net || 0), offset, limit,
     transactions: page.results.map((row) => shapeTx(row, r))
   };
 }
@@ -766,14 +785,18 @@ const quarterOf = (d) => d.slice(0, 4) + '-Q' + Math.ceil(+d.slice(5, 7) / 3);
 
 export async function getInvestments(args, env) {
   const r = await refs(env);
-  const { accounts } = await accountsList(env, r);
+  const { accounts, prices } = await accountsList(env, r);
+  const symOf = Object.fromEntries(r.accounts.map((a) => [a.name, a.symbol]));
   // Share-priced accounts only: a broker's cash balance (IBKR, subtype "For
   // Investment") is money waiting to buy, not a position, and the SPA's Assets card
   // already lists it. The SPA hides these same accounts from that card in turn.
   const positions = accounts.filter((a) => a.isShares).map((a) => ({
     name: a.name, subtype: a.subtype, currency: a.currency,
     quantity: a.balanceNative,
-    valuePhp: a.balancePhp
+    valuePhp: a.balancePhp,
+    // The quote behind valuePhp, for the Investments table's Price column.
+    ...(() => { const p = prices[symOf[a.name]];
+      return { price: p ? p.price : null, priceCurrency: p ? p.currency : null, pricedAt: p ? p.priced_at : null }; })()
   }));
   const total = positions.reduce((s, p) => s + (p.valuePhp || 0), 0);
   positions.forEach((p) => { p.weightPct = total ? Math.round((p.valuePhp || 0) / total * 1000) / 10 : 0; });
@@ -879,18 +902,25 @@ export async function getInvestments(args, env) {
   // (isInvestedNetWorth: IB01-as-EF counts, growth tickers don't) minus receivables
   // (money lent is not reachable in an emergency) minus credit balances.
   // ponytail: targetMonths is the doc's fixed 4-month rule; make it a meta key if it ever moves.
-  const efPhp = accounts.reduce((s, a) => {
-    if (a.isLiability) return s - (a.balancePhp || 0);
-    if (isInvestedNetWorth(a)) return s;
+  // The pool in its four parts, so the Summary tooltip can show the sum it is (v3).
+  // `parts` are signed as they add: credit and owed are negative.
+  const parts = { cashPhp: 0, efSharesPhp: 0, creditPhp: 0, owedPhp: 0 };
+  accounts.forEach((a) => {
+    const b = a.balancePhp || 0;
+    if (a.isLiability) parts.creditPhp -= b;
+    else if (isInvestedNetWorth(a)) return;
     // A receivable is asymmetric on purpose: money LENT is not reachable in an
     // emergency, so a positive balance adds nothing — but a NEGATIVE one is money the
     // owner owes, and a debt does shorten the runway. Excluding both hid ₱13.6k of it.
-    if (isReceivable(a)) return s + Math.min(0, a.balancePhp || 0);
-    return s + (a.balancePhp || 0);
-  }, 0);
+    else if (isReceivable(a)) parts.owedPhp += Math.min(0, b);
+    else if (a.isShares) parts.efSharesPhp += b;
+    else parts.cashPhp += b;
+  });
+  const efPhp = parts.cashPhp + parts.efSharesPhp + parts.creditPhp + parts.owedPhp;
+  Object.keys(parts).forEach((k) => { parts[k] = q2(parts[k]); });
   const avg = spendQ.results[0] && spendQ.results[0].s ? fromU(spendQ.results[0].s) / monthKeys.length : 0;
   const runway = {
-    efPhp: q2(efPhp),
+    efPhp: q2(efPhp), parts,
     avgMonthlyExpensePhp: q2(avg),
     months: avg ? Math.round(efPhp / avg * 10) / 10 : null,
     targetMonths: 4,
@@ -901,10 +931,12 @@ export async function getInvestments(args, env) {
     status: 'success',
     totalValuePhp: q2(total), totalCostPhp: q2(totalCostPhp),
     totalGainPhp: q2(total - totalCostPhp), positions,
-    pulse: { currentQuarter: quarterOf(manilaToday()), quarters },
+    // excluded = the holdings the pulse skips (an EF park like IB01), named in its footnote.
+    pulse: { currentQuarter: quarterOf(manilaToday()), quarters,
+             excluded: positions.filter((p) => !pulseSymbols.has(p.name)).map((p) => p.name) },
     runway,
     coreTargets: { 60: 'Core', 25: 'Growth', 15: 'Speculative' },
-    // Reference figures for the Accounts card, not a computed thing. These SUM TO 85
+    // Reference figures for the Investments allocation tile, not a computed thing. These SUM TO 85
     // ON PURPOSE: Stability was removed in v2.3.0 (the EF accrues as unspent residue,
     // which no monthly meter can track — the runway card is its only measure), and the
     // missing 15 IS that residue. Do not "correct" it back to 100.
@@ -914,11 +946,12 @@ export async function getInvestments(args, env) {
 
 export async function getBootstrap(args, env) {
   const r = await refs(env);
-  const [{ accounts, fx }, meta, recurring, minRow] = await Promise.all([
+  const [{ accounts, fx }, meta, recurring, minRow, recent] = await Promise.all([
     accountsList(env, r),
     metaAll(env),
     getRecurring({}, env),
-    env.DB.prepare('SELECT MIN(date) AS d FROM transactions').first()
+    env.DB.prepare('SELECT MIN(date) AS d FROM transactions').first(),
+    recentSets(env, r)
   ]);
   const categories = {};
   r.categories.forEach((c) => {
@@ -933,10 +966,47 @@ export async function getBootstrap(args, env) {
     budgets: (await budgetsPayload(env, args.month, fx)).budgets,
     recurring: recurring.rows,
     fxUsdPhp: fx.USD || null,
-    widgetAccounts: widgetNames(meta[WIDGET_META]),   // the Accounts screen's widget picker
+    widgetAccounts: widgetNames(meta[WIDGET_META]),   // the Admin screen's widget picker
+    smartLists: smartLists(meta[SMART_META]),         // Activity's saved filters
+    quickPicks: recent.quickPicks,                    // the add sheet's "Or repeat one" chips
+    descCategory: recent.descCategory,                // the add field's instant category guess
     // Oldest ledger month, so the month pickers reach all history.
     minMonth: minRow && minRow.d ? monthOf(minRow.d) : null
   };
+}
+
+/**
+ * The add field's memory, from ONE query over the last 90 days of non-transfer rows,
+ * grouped by (description, category, account, amount). quickPicks = the 8 most repeated
+ * sets; descCategory = lower-cased description -> the category of its LATEST use.
+ */
+async function recentSets(env, r) {
+  const { results } = await env.DB.prepare(
+    "SELECT description AS d, category_id AS c, account_id AS a, amount_u AS u, COUNT(*) AS n, MAX(date || id) AS last " +
+    "FROM transactions WHERE to_account_id IS NULL AND description IS NOT NULL AND description != '' " +
+    "AND date >= date(?, '-90 days') GROUP BY lower(description), category_id, account_id, amount_u"
+  ).bind(manilaToday()).all();
+  const descCategory = {}, latest = {};
+  results.forEach((x) => {
+    const k = x.d.toLowerCase();
+    if (!(k in latest) || x.last > latest[k]) { latest[k] = x.last; descCategory[k] = r.catById[x.c].name; }
+  });
+  const quickPicks = results.slice()
+    .sort((a, b) => b.n - a.n || (b.last > a.last ? 1 : b.last < a.last ? -1 : 0)).slice(0, 8)
+    .map((x) => ({ Description: x.d, Category: r.catById[x.c].name, Account: r.acctById[x.a].name, Amount: fromU(x.u) }));
+  return { quickPicks, descCategory };
+}
+
+/**
+ * GET {text} — the add field's parse on Return: the bot's own Gemini call, same prompt,
+ * so its category rules hold. A read (it writes nothing); the SPA saves through
+ * createTransaction/createTransfer afterwards, so the offline queue still applies.
+ */
+export async function getParse(args, env) {
+  const text = String(args.text || '').trim().slice(0, 500);
+  if (!text) return { status: 'success', intent: 'log', items: [], error: 'Nothing to parse.' };
+  const p = await parse(env, await refs(env), text);
+  return { status: 'success', intent: p.intent || 'log', items: p.error ? [] : (p.items || []), error: p.error || null };
 }
 
 // ── iOS widgets (widgets/FinanceTracker.js) ─────────────────────────────────
@@ -975,16 +1045,17 @@ export async function getWidget(args, env) {
   return {
     status: 'success', month: d.month, accounts, netWorth,
     segments: d.budgets.filter((b) => WIDGET_SEGMENTS.includes(b.segment)).map((b) => ({
-      segment: b.segment, period: b.period, currency: b.currency, actual: b.actualNative,
+      segment: b.segment, period: b.period, currency: b.currency, actual: b.actualNative, actualPhp: b.actualPhp,
       target: b.targetNative, remaining: b.remainingNative, pctUsed: b.pctUsed, isOver: b.isOver })),
     essentialsRewards: d.essentialsRewards,
     recent: d.recentTransactions.slice(0, 3).map((t) => ({
       Date: t.Date, Description: t.Description, Category: t.Category, Type: t.Type,
-      Amount: t.Amount, Currency: t.Currency, 'Amount (PHP)': t['Amount (PHP)'], ToAccount: t.ToAccount }))
+      Amount: t.Amount, Currency: t.Currency, 'Amount (PHP)': t['Amount (PHP)'], ToAccount: t.ToAccount,
+      Segment: t.Segment }))
   };
 }
 
-/** POST {names:[...]} — the balance widget's accounts, set from the Accounts screen. */
+/** POST {names:[...]} — the balance widget's accounts, set from the Admin screen. */
 export async function setWidgetAccounts(args, env) {
   const names = Array.isArray(args.names) ? args.names.filter((n) => n) : [];
   if (names.length > 3) throw new Error('The widget shows at most 3 accounts.');
@@ -996,6 +1067,34 @@ export async function setWidgetAccounts(args, env) {
   });
   await metaSet(env, WIDGET_META, JSON.stringify(canon));
   return { status: 'success', widgetAccounts: canon };
+}
+
+// ── Activity smart lists ─────────────────────────────────────────────────────
+/** meta key holding the saved filter sets: JSON [{name, filters}], at most 20. */
+const SMART_META = 'smart_lists';
+const SMART_KEYS = ['month', 'date', 'type', 'category', 'segment', 'account', 'source',
+                    'minAmount', 'maxAmount', 'search'];
+export function smartLists(v) {
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a.slice(0, 20) : []; }
+  catch (e) { return []; }
+}
+
+/** POST {lists:[{name, filters}]} — replaces the whole set; the SPA sends it back edited. */
+export async function setSmartLists(args, env) {
+  const lists = Array.isArray(args.lists) ? args.lists : [];
+  if (lists.length > 20) throw new Error('Keep at most 20 smart lists.');
+  const canon = lists.map((l) => {
+    const name = String((l && l.name) || '').trim().slice(0, 40);
+    if (!name) throw new Error('A smart list needs a name.');
+    const filters = {};
+    SMART_KEYS.forEach((k) => {
+      const v = l.filters && l.filters[k];
+      if (v != null && v !== '') filters[k] = String(v);
+    });
+    return { name, filters };
+  });
+  await metaSet(env, SMART_META, JSON.stringify(canon));
+  return { status: 'success', smartLists: canon };
 }
 
 // ── ledger (Tax screen) ──────────────────────────────────────────────────────

@@ -9,10 +9,9 @@
  * gs() sees a real failure and can queue the write.
  */
 const CACHE = 'ft-shell';
-// The two Inter subsets are shell files now, not a Google Fonts round trip: that is
-// what makes the app render in its own typeface offline instead of the fallback stack.
-const SHELL = ['/', '/app.css', '/app.js', '/manifest.json',
-               '/fonts/inter-latin.woff2', '/fonts/inter-latin-ext.woff2'];
+// No font files: the app uses the system font stack (DESIGN.md), so text renders
+// offline with nothing cached for it.
+const SHELL = ['/', '/app.css', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE)
@@ -29,27 +28,29 @@ self.addEventListener('activate', function (e) {
 
 self.addEventListener('fetch', function (e) {
   const url = new URL(e.request.url);
-  // Cross-origin (the Inter webfont) falls through to the browser, which already
-  // has the system-font fallback in --font when it can't be fetched.
+  // Cross-origin requests fall through to the browser untouched.
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   if (url.pathname === '/api' || url.pathname === '/login') return;
 
-  // ponytail: cache-first, refresh in the background. Ceiling — a deploy shows up on
-  // the NEXT launch, since nothing here is version-keyed. The Refresh button clears
-  // this cache, which is the escape hatch; if that ever stops being enough, stamp the
-  // app version into asset URLs from release.js and drop ignoreSearch below.
+  // Network-first with a short timeout, cache as the fallback. It was cache-first with a
+  // background refresh, which put a deploy on the NEXT launch: every change took two
+  // launches to show. Online, the Worker answers the conditional request with a 304, so
+  // this costs the same requests the background refresh already made; only a slow or
+  // dead network falls back to the cached copy (and still refreshes it for next time).
+  // ignoreSearch so a deep link (/?screen=transactions&tx=…) matches the cached "/".
   e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(function (hit) {
-    // ignoreSearch so a deep link (/?screen=budgets&tx=…) matches the cached "/".
-    // Data Saver on: a cached hit is served and NOT revalidated. Every launch otherwise
-    // spends six conditional requests to learn the shell did not change, and on a cell
-    // connection the radio wake-up costs more than the 304s do. Refresh still clears
-    // this cache, so a deploy is one tap away — the same escape hatch as above.
+    // Data Saver on: a cached hit is served and NOT revalidated. On a cell connection the
+    // radio wake-up costs more than the 304s do. Refresh clears this cache, so a deploy
+    // is still one tap away.
     if (hit && navigator.connection && navigator.connection.saveData) return hit;
     const fresh = fetch(e.request).then(function (res) {
-      if (res.ok) caches.open(CACHE).then(function (c) { c.put(e.request, res.clone()); });
+      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(e.request, copy); }); }
       return res;
     });
-    if (hit) { fresh.catch(function () {}); return hit; }   // offline failure is expected here
-    return fresh;
+    if (!hit) return fresh;
+    fresh.catch(function () {});   // offline failure is expected here; the cache answers
+    // ponytail: fixed 3 s budget before the cache wins; tune it if a slow network paints late.
+    const late = new Promise(function (ok) { setTimeout(function () { ok(hit); }, 3000); });
+    return Promise.race([fresh.catch(function () { return hit; }), late]);
   }));
 });

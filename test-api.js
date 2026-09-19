@@ -279,6 +279,59 @@ function d1(db) {
                 'the date filter is not one exact day');
     });
 
+    test('listTransactions: amount bounds, source, and the net of the whole set', async () => {
+      const aug = await api.listTransactions({ month: '2026-Aug', type: 'Expense', limit: 1 }, env);
+      assert.strictEqual(aug.net, -(250.5 + 1200), 'net must cover every row, not the page');
+      assert.strictEqual((await api.listTransactions({ month: '2026-Aug', type: 'Expense', minAmount: 1000 }, env)).total, 1);
+      assert.strictEqual((await api.listTransactions({ month: '2026-Aug', type: 'Expense', maxAmount: '300' }, env)).total, 1);
+      const ids = ['tg-77-0', 'gm-abc-0'];
+      await api.createTransaction({ ID: ids[0], Date: '2026-08-13', Category: 'Expense: Food', Account: 'Maya', Amount: 5 }, env);
+      await api.createTransaction({ ID: ids[1], Date: '2026-08-13', Category: 'Expense: Food', Account: 'Maya', Amount: -5 }, env);
+      try {
+        assert.deepStrictEqual((await api.listTransactions({ source: 'tg' }, env)).transactions.map((t) => t.ID), [ids[0]]);
+        assert.deepStrictEqual((await api.listTransactions({ source: 'gm' }, env)).transactions.map((t) => t.ID), [ids[1]]);
+        const all = (await api.listTransactions({}, env)).total;
+        assert.strictEqual((await api.listTransactions({ source: 'legacy' }, env)).total, all - 2);
+        // A refund is a negative amount: the bound compares the magnitude.
+        assert.ok((await api.listTransactions({ minAmount: 5, maxAmount: 5 }, env)).transactions.some((t) => t.ID === ids[1]));
+        await assert.rejects(api.listTransactions({ source: 'fax' }, env), /Unknown source/);
+      } finally { for (const ID of ids) await api.deleteTransaction({ ID }, env); }
+    });
+
+    test('setSmartLists: validated, capped, echoed in getBootstrap', async () => {
+      await assert.rejects(api.setSmartLists({ lists: [{ name: ' ', filters: {} }] }, env), /needs a name/);
+      await assert.rejects(api.setSmartLists({ lists: Array(21).fill({ name: 'x' }) }, env), /at most 20/);
+      const r = await api.setSmartLists({ lists: [{ name: 'Big food', filters: { category: 'Expense: Food', minAmount: 500, bogus: 'x', search: '' } }] }, env);
+      assert.deepStrictEqual(r.smartLists, [{ name: 'Big food', filters: { category: 'Expense: Food', minAmount: '500' } }]);
+      assert.deepStrictEqual((await api.getBootstrap({}, env)).smartLists, r.smartLists);
+      await api.setSmartLists({ lists: [] }, env);
+    });
+
+    test('getBootstrap: quickPicks and descCategory from the last 90 days', async () => {
+      const b = await api.getBootstrap({}, env);
+      assert.ok(Array.isArray(b.quickPicks) && b.quickPicks.length <= 8);
+      b.quickPicks.forEach((p) => assert.ok(p.Description && p.Category && p.Account && p.Amount));
+      const ID = 'ui-qp-1';
+      await api.createTransaction({ ID, Date: new Date().toISOString().slice(0, 10), Category: 'Expense: Food', Description: 'Zz Vitamins', Account: 'Maya', Amount: 620 }, env);
+      try { assert.strictEqual((await api.getBootstrap({}, env)).descCategory['zz vitamins'], 'Expense: Food'); }
+      finally { await api.deleteTransaction({ ID }, env); }
+    });
+
+    test('getParse: the bot parser, no text never calls Gemini', async () => {
+      const real = globalThis.fetch;
+      let calls = 0;
+      globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+        intent: 'log', error: null, query: null,
+        items: [{ Date: '2026-08-20', Category: 'Expense: Food', Description: 'Vitamins', Account: 'Maya', Amount: 620 }] }) }] } }] }), { status: 200 }); };
+      try {
+        assert.deepStrictEqual((await api.getParse({ text: ' ' }, env)).items, []);
+        assert.strictEqual(calls, 0);
+        const r = await api.getParse({ text: 'vitamins 620 maya' }, Object.assign({}, env, { GEMINI_API_KEY: 'x' }));
+        assert.strictEqual(r.items[0].Amount, 620);
+        assert.strictEqual(r.error, null);
+      } finally { globalThis.fetch = real; }
+    });
+
     test('getBudgets: percent of income, a USD cap at live FX, transfers counted', async () => {
       const b = await api.getBudgets({ month: '2026-Aug' }, env);
       const by = Object.fromEntries(b.budgets.map((x) => [x.segment, x]));
@@ -400,6 +453,8 @@ function d1(db) {
       assert.strictEqual(w.netWorth[5].value, (await api.getDashboard({}, env)).netWorth);
       assert.ok(w.recent.length <= 3);
       assert.ok(w.segments.every((b) => ['Essentials', 'Rewards'].includes(b.segment)));
+      assert.ok(w.segments.every((b) => typeof b.actualPhp === 'number'));   // the widget's stacked bar
+      assert.ok(w.recent.every((t) => 'Segment' in t));                     // the widget's icon tint
       assert.deepStrictEqual((await api.getBootstrap({}, env)).widgetAccounts, ['Wise']);
       await api.setWidgetAccounts({ names: [] }, env);
     });
@@ -468,6 +523,10 @@ function d1(db) {
       const by = Object.fromEntries((await api.getAccounts({}, env)).accounts.map((a) => [a.name, a]));
       const expected = Math.round((by.Maya.balancePhp + by.Wise.balancePhp - by.Card.balancePhp) * 100) / 100;
       assert.strictEqual(inv.runway.efPhp, expected);
+      // The parts are what the Summary tooltip lists, so they must add up to the pool.
+      const p = inv.runway.parts;
+      assert.strictEqual(p.creditPhp, -by.Card.balancePhp);
+      assert.strictEqual(dbm.q2(p.cashPhp + p.efSharesPhp + p.creditPhp + p.owedPhp), expected);
       // The average window is the last THREE CLOSED months and the fixture's dates are
       // absolute, so which fixture rows sit inside it moves with the real calendar. A
       // hard-coded 300/3 went red on its own on 2026-09-01, when July and August rolled
@@ -1256,6 +1315,9 @@ function d1(db) {
       assert.strictEqual(p.costPhp, 6000);
       assert.strictEqual(p.valuePhp, 2 * 120 * 50);
       assert.strictEqual(p.gainPhp, 6000);
+      // The quote behind valuePhp, for the Investments table's Price column.
+      assert.deepStrictEqual([p.price, p.priceCurrency, p.pricedAt], [120, 'USD', '2026-08-22']);
+      assert.ok(!inv.pulse.excluded.includes('ACME'), 'a growth ticker is in the pulse');
       assert.strictEqual(p.gainPct, 100);
       assert.strictEqual(inv.totalGainPhp, dbm.q2(inv.totalValuePhp - inv.totalCostPhp));
 
@@ -1318,6 +1380,7 @@ function d1(db) {
       // Out of the pulse: no leg, and the quarter's dollars did not move.
       assert.ok(!inv.pulse.quarters.some((q) => q.buys.some((b) => b.symbol === 'TBILL')),
                 'an EF park landed in the quarterly pulse');
+      assert.deepStrictEqual(inv.pulse.excluded, ['TBILL'], 'the footnote names the EF park');
       const q2q = inv.pulse.quarters.find((x) => x.quarter === '2026-Q2');
       assert.strictEqual(q2q.totalUsd, 100 + 240 - 150, 'the EF park inflated the quarter');
 

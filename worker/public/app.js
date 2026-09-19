@@ -3,8 +3,8 @@
  * Vanilla JS, served as a static asset by the Cloudflare Worker, which since
  * v2.0.0 IS the backend: /api runs against Cloudflare D1, not Apps Script. The
  * JSON contract did not change with that swap, so nothing in this file did
- * either, apart from the new Admin screen. Seven screens: Dashboard ·
- * Transactions · Accounts · Swap · Tax · Admin.
+ * either, apart from the new Admin screen. Six screens: Summary (key
+ * `dashboard`) · Activity (key `transactions`) · Accounts · Swap · Tax · Admin.
  * ========================================================================== */
 
 /* ── server bridge: /api → Promise ───────────────────────────────────────────
@@ -40,6 +40,7 @@ function gs(fn, arg, etag, _retried){
     init = { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) };
   }
   return fetch(url, init).then(function(res){
+    netSeen(true);
     // The passphrase cookie expired (or was never set). Ask once, then retry —
     // a clean 401 is why /api answers JSON instead of redirecting to a login page.
     if (res.status === 401 && !_retried) return unlock().then(function(){ return gs(fn, arg, etag, true); });
@@ -59,6 +60,7 @@ function gs(fn, arg, etag, _retried){
   }, function(){
     // fetch only rejects on a genuine network failure — a 4xx/5xx resolves — so this
     // branch IS "offline", without trusting navigator.onLine (true on a captive portal).
+    netSeen(false);
     if (body && QUEUEABLE[action] && !flushQueue._busy) return enqueue(fn, body);
     var err = new Error(read ? 'Offline — no cached copy of this yet'
                              : 'Offline — reconnect to save this');
@@ -85,6 +87,7 @@ function queueDrop(id){ queueSet(queue().filter(function(x){ return x.arg.ID !==
 function enqueue(fn, body){
   var q = queue(); q.push({ fn:fn, arg:body }); queueSet(q);
   toast('Saved offline — '+q.length+' waiting to sync','ok');
+  syncUI();
   return { status:'queued' };
 }
 /* Pending rows are derived from the queue, so an offline entry is still on screen
@@ -118,6 +121,7 @@ function flushQueue(){
   }, Promise.resolve()).catch(function(){}).then(function(){
     flushQueue._busy = false;
     rebuildPending();
+    syncUI();
     if(sent){ toast('Synced '+sent+(sent>1?' entries':' entry'),'ok'); afterMutation(); }
   });
 }
@@ -246,7 +250,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 10;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload
+var LS_CACHE = 'ft.cache', LS_SCHEMA = 14;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists; 13 = bootstrap.quickPicks + descCategory; 14 = positions carry price + pulse.excluded
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -272,11 +276,8 @@ function loadCache(){
 
 /* Transaction-page fetch. st = {filters,offset,limit}. */
 function fetchTxPage(st,etag){
-  var args={ limit:st.limit, offset:st.offset };
-  var fl=st.filters||{};
-  if(fl.month)args.month=fl.month; if(fl.category)args.category=fl.category;
-  if(fl.account)args.account=fl.account; if(fl.search)args.search=fl.search;
-  if(fl.type)args.type=fl.type; if(fl.date)args.date=fl.date;
+  var args={ limit:st.limit, offset:st.offset }, fl=st.filters||{};
+  TX_KEYS.forEach(function(k){ if(fl[k]) args[k]=fl[k]; });
   return gs('api_listTransactions',args,etag);
 }
 
@@ -287,9 +288,9 @@ var S = {
   screen:'dashboard',
   bootEtag:null,        // the ETag of the getBootstrap payload in S.boot
   cache:{},             // key → { data, etag, at } (stale-while-revalidate, persisted)
-  // edit: the Transactions screen's edit mode (account rail + checkboxes + inline edit);
-  // sel: ID → true for the bulk-action selection. pending*: optimistic in-flight writes.
-  tx:{ rows:[], total:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
+  // edit: Activity's Select mode (checkboxes + bulk bar + inline edit); filters: the
+  // tokens (TX_KEYS); sel: ID → true for the bulk selection. pending*: optimistic writes.
+  tx:{ rows:[], total:0, net:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
        pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },
   // admin: which whitelisted table the Admin grid is showing (sticky, like the screen)
   admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })(), offset:0 },
@@ -390,18 +391,6 @@ function monthPickerEl(){
   };
   return mp;
 }
-// Chart window picker. A native <select> on purpose — same control, same styling
-// and same keyboard behaviour as the month picker beside it.
-function rangePickerEl(){
-  var sel=el('select','month-picker range-picker'); sel.title='Chart range';
-  [6,12,24].forEach(function(n){ var o=el('option'); o.value=n; o.textContent=n+'m'; sel.appendChild(o); });
-  sel.value=S.cfMonths;
-  sel.onchange=function(){
-    S.cfMonths=+sel.value; prefSet('cfMonths',sel.value);
-    Promise.resolve(render()).then(function(){ var n=$('.range-picker'); if(n) n.focus(); });
-  };
-  return sel;
-}
 function buildMonthList(){
   var out=[], now=new Date();
   // Extend back to the oldest ledger month so older history is reachable; floor at
@@ -478,8 +467,7 @@ function boot(){
   document.querySelectorAll('.sheet-item').forEach(function(b){
     b.addEventListener('click', function(){ go(b.dataset.screen); });
   });
-  $('#refreshBtn').addEventListener('click', refresh);
-  $('#fab').addEventListener('click', function(){ withBoot(function(){ openTxModal(null); }); });
+  wireShell();
 
   // Browser back/forward moves between screens. Plain History API now that the app
   // is served from its own origin instead of the GAS sandbox iframe (which blocked
@@ -507,7 +495,7 @@ function boot(){
   // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
   if(p.get('tx')) openTxById(p.get('tx'));
   (warm ? revalidateBoot() : ensureBoot().then(function(){
-    if(S.screen==='dashboard'||S.screen==='accounts') render();
+    if(S.screen==='dashboard'||S.screen==='accounts'||S.screen==='investments') render();
   })).catch(function(e){ toast('Reference data failed: '+(e.message||e),'err'); });
   // Launching IS a reconnect signal: the 'online' event doesn't fire for an app that
   // was closed while offline and reopened with a connection.
@@ -515,22 +503,429 @@ function boot(){
 }
 
 function refresh(){
-  var btn=$('#refreshBtn'); btn.classList.add('spin');
+  var btns=document.querySelectorAll('.sync'); btns.forEach(function(b){ b.classList.add('busy'); });
   S.cache={}; S.boot=null; S.bootEtag=null; _bootPromise=null; saveCache();
   // Also drop the cached shell and retry the queue, which makes Refresh the single
-  // answer to both "I deployed and still see the old UI" (new files land next launch,
+  // answer to both "I deployed and still see the old UI" (a cached shell on a slow network,
   // see sw.js) and "this is still waiting to sync".
   if(window.caches) caches.keys().then(function(ks){ ks.forEach(function(n){ caches.delete(n); }); });
   flushQueue();
-  ensureBoot().then(function(){ return render(); }).finally(function(){ btn.classList.remove('spin'); });
+  ensureBoot().then(function(){ return render(); }).finally(function(){ btns.forEach(function(b){ b.classList.remove('busy'); }); });
 }
+
+/* ── shell: theme, sync state, the add field ─────────────────────────────────
+ * The nav, the add bar and the More sheet are static markup in index.html; this
+ * wires them. One nav element is the tab bar, the rail or the sidebar by width
+ * (app.css), so nothing here branches on the layout. */
+
+/* Theme: Auto / Light / Dark per device (DESIGN.md "Input parity and keys").
+ * 'ft.theme' absent = Auto. index.html's head script applies it before first
+ * paint; this is the same rule for a switch at run time. */
+var THEME_BG={light:'#F2F2F7',dark:'#000000'};   // = --bg; the theme-color meta cannot read a var()
+var darkMQ=window.matchMedia?matchMedia('(prefers-color-scheme: dark)'):null;
+function themePref(){ try{ var t=localStorage.getItem('ft.theme'); return t==='light'||t==='dark'?t:'auto'; }catch(e){ return 'auto'; } }
+function themeNow(){ var p=themePref(); return p!=='auto'?p:(darkMQ&&darkMQ.matches?'dark':'light'); }
+function applyTheme(pref, fade){
+  try{ if(pref==='auto') localStorage.removeItem('ft.theme'); else localStorage.setItem('ft.theme',pref); }catch(e){}
+  var root=document.documentElement;
+  if(fade){ root.classList.add('theme-fade'); setTimeout(function(){ root.classList.remove('theme-fade'); },220); }
+  if(pref==='auto') delete root.dataset.theme; else root.dataset.theme=pref;
+  var m=$('meta[name=theme-color]'); if(m) m.content=THEME_BG[themeNow()];
+  var now=themeNow();
+  document.querySelectorAll('link[rel=icon],link[rel=apple-touch-icon]').forEach(function(l){ l.href=now==='dark'?'/icon-180-dark.png':'/icon-180.png'; });
+  document.querySelectorAll('.theme-btn').forEach(function(b){
+    // The icon shows where a tap goes: a sun in dark, a moon in light.
+    b.innerHTML=icon(now==='dark'?'sun':'moon');
+    var label='Switch to '+(now==='dark'?'light':'dark')+(pref==='auto'?' (now following the system)':'');
+    b.setAttribute('aria-label',label); b.title=label+' · '+MOD+' Shift L · right-click or hold for Auto';
+  });
+}
+function toggleTheme(){ applyTheme(themeNow()==='dark'?'light':'dark', true); }
+function themeAuto(){ applyTheme('auto', true); toast('Theme follows the system','ok'); }
+function wireThemeBtn(b){
+  var held=null, skip=false;
+  b.addEventListener('click',function(){ if(skip){ skip=false; return; } toggleTheme(); });
+  b.addEventListener('contextmenu',function(e){ e.preventDefault(); themeAuto(); });
+  // Long press on touch = Auto. iOS sends no contextmenu for a button, so time it.
+  b.addEventListener('pointerdown',function(e){
+    if(e.pointerType!=='touch') return;
+    held=setTimeout(function(){ held=null; skip=true; themeAuto(); },550);
+  });
+  ['pointerup','pointerleave','pointercancel'].forEach(function(ev){
+    b.addEventListener(ev,function(){ if(held){ clearTimeout(held); held=null; } });
+  });
+}
+// Auto follows a system switch live, not only at the next launch.
+if(darkMQ&&darkMQ.addEventListener) darkMQ.addEventListener('change',function(){ if(themePref()==='auto') applyTheme('auto'); });
+
+var IS_APPLE=/Mac|iPhone|iPad/.test((typeof navigator!=='undefined'&&(navigator.platform||navigator.userAgent))||'');
+var MOD=IS_APPLE?'⌘':'Ctrl';
+
+/** One icon from the sprite in index.html, as markup. */
+function icon(name){ return '<svg class="ico" aria-hidden="true"><use href="#i-'+name+'"/></svg>'; }
+
+/* Sync state: online / offline / N queued. "Offline" is what gs() last saw (a
+ * fetch that rejected), not navigator.onLine, which reads true on a captive portal. */
+var net={offline:false, at:0};
+function netSeen(ok){
+  net.offline=!ok; if(ok) net.at=Date.now();
+  syncUI();
+}
+/** The words for the sync state. Pure, so test.js can pin them. */
+function syncText(offline, queued, at, now){
+  if(queued) return (offline?'Offline · ':'')+queued+' waiting to sync';
+  if(offline) return 'Offline';
+  if(!at) return 'Synced';
+  var min=Math.floor((now-at)/60000);
+  return min<1?'Synced just now':min<60?'Synced '+min+' min ago':'Synced '+Math.floor(min/60)+' h ago';
+}
+function syncUI(){
+  var q=queue().length, txt=syncText(net.offline,q,net.at,Date.now());
+  document.querySelectorAll('.sync').forEach(function(b){
+    b.classList.toggle('offline',net.offline); b.classList.toggle('queued',!!q);
+    $('.sync-label',b).textContent=txt;
+    b.title=txt+' · tap to refresh'; b.setAttribute('aria-label',b.title);
+  });
+  var more=$('#navMore'); if(more) more.classList.toggle('alert', net.offline||!!q);
+}
+window.addEventListener('offline',function(){ netSeen(false); });
+// Back online is not "synced": clear the flag, and let the next answer stamp the time.
+window.addEventListener('online',function(){ net.offline=false; syncUI(); });
+
+/* ════ The add field: type to add, search or jump ════
+ * parseAdd is the instant, local pass: the amount, the account (a name typed in full or
+ * as a 3+ letter prefix), and the category the same description had last time
+ * (getBootstrap.descCategory). Two accounts make a transfer only with "to" between
+ * them, so "grab 312 gcash" stays an expense even with a GrabPay account. Gemini
+ * (getParse, the bot's parser) fills what is left on Return, or after a pause when the
+ * local pass has an amount but no category. */
+function parseAdd(text,ctx){
+  var norm=function(s){ return String(s).toLowerCase().replace(/[^a-z0-9]/g,''); };
+  var words=String(text||'').trim().split(/\s+/).filter(Boolean), out={Amount:null,Account:'',ToAccount:'',Category:'',Description:''};
+  for(var i=0;i<words.length;i++){
+    var m=/^([-+]?)[₱$]?(\d[\d,]*(?:\.\d+)?)(k?)$/i.exec(words[i]);
+    if(m){ out.Amount=Number(m[2].replace(/,/g,''))*(m[3]?1000:1)*(m[1]==='-'?-1:1); words.splice(i,1); break; }
+  }
+  function acct(w){
+    var n=norm(w); if(!n) return null;
+    var hit=ctx.accounts.filter(function(a){ return norm(a)===n; });
+    if(!hit.length&&n.length>=3) hit=ctx.accounts.filter(function(a){ return norm(a).indexOf(n)===0; })
+      .sort(function(a,b){ return fuzzyScore(w,b)-fuzzyScore(w,a); });
+    return hit[0]||null;
+  }
+  var found=[];   // [{i, n (words), name}]; a two-word name is tried first
+  for(i=0;i<words.length;i++){
+    var two=i+1<words.length&&acct(words[i]+words[i+1]);
+    if(two&&norm(two)===norm(words[i]+words[i+1])){ found.push({i:i,n:2,name:two}); i++; continue; }
+    var one=acct(words[i]); if(one) found.push({i:i,n:1,name:one});
+  }
+  var drop={}, to=-1, src=null, dst=null;
+  words.forEach(function(w,j){ if(/^(to|->|→)$/i.test(w)) to=j; });
+  if(to>=0){
+    src=found.filter(function(f){ return f.i<to; }).pop(); dst=found.filter(function(f){ return f.i>to; })[0];
+    if(!src||!dst||src.name===dst.name) src=dst=null;
+  }
+  var use=src?[src,dst]:found.length?[found[found.length-1]]:[];   // "desc amount account": the last name wins
+  use.forEach(function(f){ drop[f.i]=1; if(f.n===2) drop[f.i+1]=1; });
+  if(src){ drop[to]=1; out.Account=src.name; out.ToAccount=dst.name; }
+  else if(use.length) out.Account=use[0].name;
+  var d=words.filter(function(w,j){ return !drop[j]; }).join(' ');
+  out.Description=d?d.charAt(0).toUpperCase()+d.slice(1):'';
+  out.Category=out.ToAccount?'':((ctx.descCategory||{})[d.toLowerCase()]||'');
+  return out;
+}
+function qaCtx(){
+  return {accounts:acctOptions().map(function(o){ return o.value; }), descCategory:(S.boot&&S.boot.descCategory)||{}};
+}
+function catType(c){ var x=((S.boot&&S.boot.categories)||{})[c]; return String((x&&x.Type)||''); }
+
+var QA={open:false, text:'', ai:null, aiFor:'', aiBusy:false, over:{}, kind:'', t:0, sel:0, rows:[]};
+// The draft = the local parse, then Gemini's answer for the same text, then the owner's own picks.
+function qaDraft(){
+  var d=parseAdd(QA.text,qaCtx()), ai=QA.aiFor===QA.text.trim()&&QA.ai;
+  if(ai){
+    ['Amount','Account','ToAccount','Category'].forEach(function(k){ if(!d[k]&&ai[k]) d[k]=ai[k]; });
+    if(ai.Description!=null) d.Description=ai.Description;
+    if(ai.Date) d.Date=ai.Date;
+  }
+  Object.keys(QA.over).forEach(function(k){ d[k]=QA.over[k]; });
+  if(!d.Account){ var la=prefGet('lastAcct'); if(la&&qaCtx().accounts.indexOf(la)>=0) d.Account=la; }
+  d.Date=d.Date||newTxDate();
+  var kind=QA.kind||(d.ToAccount?'xfer':catType(d.Category)==='Income'?'in':'out');
+  if(kind==='xfer'){ if(catType(d.Category)!=='Transfer') d.Category=catType('Transfer: Internal')?'Transfer: Internal':''; }
+  else { d.ToAccount=''; if(d.Category&&catType(d.Category)!==(kind==='in'?'Income':'Expense')) d.Category=''; }
+  d.kind=kind; return d;
+}
+function qaComplete(d){ return !!(d.Amount&&d.Account&&d.Category&&(d.kind!=='xfer'||(d.ToAccount&&d.ToAccount!==d.Account))); }
+
+// ⌘K: jump rows (screens) and the Activity search. Text with a digit is an add, not a jump.
+function qaJumps(text){
+  var q=text.trim(); if(!q) return [];
+  var rows=[];
+  if(!/\d/.test(q)) document.querySelectorAll('#nav .nav-item[data-screen]').forEach(function(b){
+    var sc=fuzzyScore(q,b.title);
+    if(sc>=40) rows.push({sc:sc,label:'Go to '+b.title,icon:'chevron',screen:b.dataset.screen});
+  });
+  rows.sort(function(a,b){ return b.sc-a.sc; });
+  rows.push({label:'Search Activity for “'+q+'”',icon:'search',search:q});
+  return rows;
+}
+
+function qaShow(){
+  if(!$('#qa')){
+    var bd=el('div','qa-bd'); bd.onclick=function(){ qaHide(); $('#addInput').blur(); }; $('#app').appendChild(bd);
+    var p=el('div','qa'); p.id='qa'; $('.addbar').appendChild(p);
+    // iPhone: the panel is a full-screen page, so it needs its own way out.
+    var top=el('div','qa-top'), x=barBtn('Cancel','',function(){ qaHide(); $('#addInput').blur(); });
+    top.appendChild(x); top.appendChild(el('div','ed-title','Add')); top.appendChild(el('span'));
+    $('.addbar').appendChild(top);
+    // A tap inside must not blur the field (the keyboard would drop mid-edit).
+    p.addEventListener('mousedown',function(e){ if(!e.target.closest('input')) e.preventDefault(); });
+  }
+  QA.open=true; document.body.classList.add('qa-on'); qaDraw(); qaFit();
+}
+function qaHide(){ QA.open=false; document.body.classList.remove('qa-on'); var p=$('#qa'); if(p) p.innerHTML=''; qaFit(); }
+function qaReset(){
+  clearTimeout(QA.t); QA.text=''; QA.ai=null; QA.aiFor=''; QA.over={}; QA.kind=''; QA.sel=0;
+  $('#addInput').value=''; qaHide();
+}
+
+function qaDraw(){
+  var p=$('#qa'); if(!p||!QA.open) return;
+  p.innerHTML='';
+  var text=QA.text.trim(), d=qaDraft(), jumps=d.Amount?[]:qaJumps(text), picks=(S.boot&&S.boot.quickPicks)||[];
+  var adding=!!text&&(!!d.Amount||jumps.length===1);   // no amount and no screen match: still an add, with Search under it
+  QA.rows=(adding?[{save:1}]:[]).concat(jumps);
+  if(QA.sel>=QA.rows.length) QA.sel=0;
+  if(adding){
+    var card=el('div','qa-card'+(QA.sel===0&&QA.rows.length>1?' sel':''));
+    var seg=el('div','seg-toggle qa-seg');
+    [['out','Spent'],['in','Earned'],['xfer','Moved']].forEach(function(k){
+      var b=el('button',k[0]===d.kind?'on':'',k[1]); b.type='button'; b.setAttribute('aria-pressed',String(k[0]===d.kind));
+      b.onclick=function(){ QA.kind=k[0]; qaDraw(); };
+      seg.appendChild(b);
+    });
+    card.appendChild(seg);
+    var n=Number(d.Amount)||0, sign=d.kind==='xfer'?'':(d.kind==='out')===(n>0)?'−':'+';
+    card.appendChild(el('div','qa-amt '+(n?d.kind:'ph'),n?esc(sign+moneyCur(Math.abs(n),acctCurrency(d.Account))):'No amount yet'));
+    card.appendChild(el('div','qa-desc',esc(d.Description||'No description')));
+    var g=el('div','ed-group qa-rows');
+    var want=d.kind==='xfer'?'Transfer':d.kind==='in'?'Income':'Expense';
+    var cats=Object.keys(S.boot.categories||{}).filter(function(c){ return catType(c)===want; }).sort();
+    qaRow(g,'Category',d.Category,catItems(cats),'Category');
+    qaRow(g,d.kind==='xfer'?'From':'Account',d.Account,acctOptions(),'Account');
+    if(d.kind==='xfer') qaRow(g,'To',d.ToAccount,acctOptions(),'ToAccount');
+    var dr=el('label','ed-row'); dr.appendChild(el('span','ed-lab','Date'));
+    var di=inputEl('date',d.Date); di.className='ed-in ed-date';
+    di.onchange=function(){ QA.over.Date=di.value; }; dr.appendChild(di); g.appendChild(dr);
+    card.appendChild(g);
+    card.appendChild(el('div','qa-hint',QA.aiBusy?'Reading it…':qaComplete(d)?'Return saves · works offline and syncs later':'Return fills the rest, or opens the full form'));
+    p.appendChild(card);
+  }
+  if(jumps.length){
+    var list=el('div','ed-group qa-jumps');
+    jumps.forEach(function(j,i){
+      var k=i+(adding?1:0), b=el('button','ed-row ed-link qa-jump'+(QA.sel===k?' sel':''),icon(j.icon)+'<span class="ed-txt">'+esc(j.label)+'</span>');
+      b.type='button'; b.onclick=function(){ qaRun(k); }; list.appendChild(b);
+    });
+    p.appendChild(list);
+  }
+  if(picks.length&&(!text||adding)){
+    p.appendChild(el('div','qa-lab','Or repeat one'));
+    var chips=el('div','qa-chips');
+    picks.forEach(function(k){
+      var c=el('button','qa-chip',esc(k.Description)+' <b>'+esc(moneyCur(k.Amount,acctCurrency(k.Account)))+'</b>'); c.type='button';
+      c.onclick=function(){
+        QA.over={Category:k.Category,Account:k.Account}; QA.kind=''; QA.sel=0;
+        $('#addInput').value=QA.text=k.Description+' '+k.Amount; qaDraw();
+      };
+      chips.appendChild(c);
+    });
+    p.appendChild(chips);
+  }
+  if(!p.children.length){
+    if(qaPhone()) p.appendChild(el('div','qa-hint qa-empty','Type what you spent, like “coffee 180 gcash”'));
+    else qaHide();
+  }
+}
+function qaRow(g,label,value,items,key){
+  var b=el('button','ed-row ed-link'); b.type='button';
+  b.appendChild(el('span','ed-lab',esc(label)));
+  var it=items.filter(function(i){ return i.value===value; })[0];
+  b.appendChild(el('span','ed-val',it?edDot(it.color)+'<span class="ed-txt">'+esc(it.label)+'</span>':'<span class="ed-ph">Choose</span>'));
+  b.insertAdjacentHTML('beforeend',icon('chevron'));
+  b.onclick=function(){ openPicker(label,items,value||'',function(v){ QA.over[key]=v; qaDraw(); }); };
+  g.appendChild(b);
+}
+
+// Gemini, once per text. Offline or a failure keeps the local parse and the typed text.
+function qaAsk(){
+  var text=QA.text.trim();
+  if(!text||QA.aiFor===text||net.offline) return Promise.resolve();
+  QA.aiBusy=true; qaDraw();
+  return gs('api_getParse',{text:text}).then(function(r){
+    if(QA.text.trim()===text){ QA.aiFor=text; QA.ai=(r.items||[])[0]||null; }
+  }).catch(function(){ if(QA.text.trim()===text){ QA.aiFor=text; QA.ai=null; } })
+    .then(function(){ QA.aiBusy=false; qaDraw(); });
+}
+function qaInput(){
+  QA.text=$('#addInput').value; QA.sel=0; QA.kind='';
+  if(!QA.text.trim()) QA.over={};
+  if(!S.boot) return withBoot(qaInput);
+  if(QA.open) qaDraw(); else qaShow();
+  clearTimeout(QA.t);
+  var d=qaDraft();
+  if(d.Amount&&!d.Category&&d.kind!=='xfer') QA.t=setTimeout(qaAsk,700);
+}
+function qaRun(k){
+  var r=QA.rows[k]; if(!r) return;
+  if(r.save) return qaSave();
+  qaReset(); $('#addInput').blur();
+  if(r.search){ S.tx.filters={month:'',search:r.search}; S.tx.offset=0; }
+  go(r.screen||'transactions');
+}
+// Save a whole draft. Else ask Gemini once, then fall back to the filled full form.
+function qaSave(){
+  if(!S.boot) return withBoot(qaSave);
+  var d=qaDraft(), text=QA.text.trim();
+  if(!text) return;
+  if(!qaComplete(d)&&QA.aiFor!==text&&!net.offline) return qaAsk().then(function(){ if(QA.text.trim()===text) qaSave(); });
+  var xfer=d.kind==='xfer', amount=Number(d.Amount);
+  var payload={Date:d.Date,Category:d.Category,Account:d.Account,Amount:amount,Description:d.Description};
+  if(xfer) payload.ToAccount=d.ToAccount;
+  qaReset(); $('#addInput').blur();
+  if(!qaComplete(d)){
+    if(!amount) payload.Amount='';
+    (xfer?openTransferModal:openTxModal)(payload);
+    return;
+  }
+  if(!xfer) prefSet('lastAcct',d.Account);
+  commitTx({t:null,payload:payload,isEdit:false,create:xfer?'api_createTransfer':'api_createTransaction',
+            addedMsg:xfer?'Transfer added':'Added',failMsg:xfer?'Transfer failed':'Add failed',
+            reopen:xfer?openTransferModal:openTxModal});
+}
+function qaKey(e){
+  if(e.key==='Enter'){ e.preventDefault(); if(QA.text.trim()) qaRun(QA.sel); }
+  else if(e.key==='Escape'){ if(QA.text) qaReset(); else qaHide(); this.blur(); }
+  else if((e.key==='ArrowDown'||e.key==='ArrowUp')&&QA.open&&QA.rows.length>1){
+    e.preventDefault(); var n=QA.rows.length; QA.sel=(QA.sel+(e.key==='ArrowDown'?1:n-1))%n; qaDraw();
+  }
+}
+// iPhone: the add panel is a full-screen page sized to the VISIBLE viewport, so the
+// field sits right on top of the keyboard. iOS pans the page to show a focused field;
+// the visual viewport (offsetTop, height) is what is really on screen.
+function qaPhone(){ return !matchMedia('(min-width:768px)').matches; }
+function qaFit(){
+  var bar=$('.addbar'); if(!bar) return;
+  bar.style.top=bar.style.height='';
+  bar.classList.toggle('kb',!!window.visualViewport&&innerHeight-visualViewport.height>120);
+  if(!window.visualViewport||!QA.open||!qaPhone()) return;
+  bar.style.top=Math.round(visualViewport.offsetTop)+'px';
+  bar.style.height=Math.round(visualViewport.height)+'px';
+}
+function qaFollowKeyboard(){
+  if(!window.visualViewport) return;
+  visualViewport.addEventListener('resize',qaFit); visualViewport.addEventListener('scroll',qaFit);
+}
+
+function wireShell(){
+  document.querySelectorAll('.theme-btn').forEach(wireThemeBtn);
+  applyTheme(themePref());
+  document.querySelectorAll('.sync').forEach(function(b){ b.addEventListener('click',function(){ closeSheet(); refresh(); }); });
+  $('.add-kbd').textContent=MOD+' K';
+  $('#addInput').placeholder=matchMedia('(min-width:768px)').matches
+    ? 'Add “grab 312 gcash”, search, or jump to a screen' : 'coffee 180 gcash';
+  var inp=$('#addInput');
+  inp.addEventListener('keydown',qaKey);
+  inp.addEventListener('input',qaInput);
+  inp.addEventListener('focus',function(){ if(!QA.open) withBoot(qaShow); });
+  qaFollowKeyboard();
+  // The + opens the full form, carrying whatever is typed (a plain click on the field focuses it).
+  $('.add-plus').addEventListener('click',function(e){
+    e.preventDefault();
+    withBoot(function(){
+      var d=qaDraft(), x=d.kind==='xfer', f=QA.text.trim()?{Date:d.Date,Account:d.Account,ToAccount:x?d.ToAccount:'',Amount:d.Amount||'',Description:d.Description,Category:d.Category}:null;
+      qaReset(); inp.blur(); (x?openTransferModal:openTxModal)(f);
+    });
+  });
+  document.addEventListener('keydown',function(e){
+    var mod=e.metaKey||e.ctrlKey;
+    if(!$('#modalRoot').hidden) return;   // a modal owns the keys while it is up
+    if(mod && !e.shiftKey && (e.key==='k'||e.key==='K')){ e.preventDefault(); $('#addInput').focus(); }
+    else if(mod && e.shiftKey && (e.key==='l'||e.key==='L')){ e.preventDefault(); toggleTheme(); }
+  });
+  syncUI();
+  setInterval(syncUI, 30000);   // "Synced N min ago" ages on its own
+}
+
+/* ── tooltip (ⓘ) ─────────────────────────────────────────────────────────────
+ * DESIGN.md "Tooltip". tip(spec) returns the ⓘ button; the popover is built on
+ * open. spec = {title, text, rows:[[label, value, bold?]], note}. Mouse: hover or
+ * focus opens it. Touch: a tap on the ⓘ. Esc or a tap outside closes it, and
+ * only one is open at a time. */
+function tipHTML(spec){
+  var h='';
+  if(spec.title) h+='<div class="tip-t">'+esc(spec.title)+'</div>';
+  if(spec.text) h+='<div class="tip-p">'+esc(spec.text)+'</div>';
+  if(spec.rows&&spec.rows.length) h+='<div class="tip-rows">'+spec.rows.map(function(r){
+    var c=r[2]?' class="b"':''; return '<span'+c+'>'+esc(r[0])+'</span><span'+c+'>'+esc(r[1])+'</span>';
+  }).join('')+'</div>';
+  if(spec.note) h+='<div class="tip-note">'+esc(spec.note)+'</div>';
+  if(spec.link) h+='<a class="tip-a" href="'+esc(spec.link[0])+'" target="_blank" rel="noopener">'+esc(spec.link[1])+'</a>';
+  return h;
+}
+var tipOpen=null, tipInPop=false;   // {btn, pop}; the pointer is on the popover (its link)
+function tipClose(){
+  tipInPop=false;
+  if(!tipOpen) return;
+  tipOpen.btn.setAttribute('aria-expanded','false'); tipOpen.pop.remove(); tipOpen=null;
+}
+function tipShow(btn, spec){
+  if(tipOpen&&tipOpen.btn===btn) return;
+  tipClose();
+  var pop=el('div','tip',tipHTML(typeof spec==='function'?spec():spec));
+  pop.setAttribute('role','tooltip'); pop.id='tip-live';
+  pop.addEventListener('mouseenter',function(){ tipInPop=true; });
+  pop.addEventListener('mouseleave',function(){ tipInPop=false; if(document.activeElement!==btn) tipClose(); });
+  $('#app').appendChild(pop);
+  btn.setAttribute('aria-expanded','true'); btn.setAttribute('aria-describedby','tip-live');
+  tipOpen={btn:btn,pop:pop};
+  // Above the ⓘ when it fits, else below; clamped to the viewport with a 12px margin.
+  var r=btn.getBoundingClientRect(), w=pop.offsetWidth, h=pop.offsetHeight;
+  var x=Math.min(Math.max(12, r.left+r.width/2-w/2), innerWidth-w-12);
+  var y=r.top-h-8>=12 ? r.top-h-8 : Math.min(r.bottom+8, innerHeight-h-12);
+  pop.style.left=x+'px'; pop.style.top=y+'px';
+}
+function tip(spec){
+  var b=el('button','tip-btn',icon('info'));
+  b.type='button'; b.setAttribute('aria-label',(spec.title||'What is this?')); b.setAttribute('aria-expanded','false');
+  var hover=false;
+  if(window.matchMedia&&matchMedia('(hover:hover) and (pointer:fine)').matches){
+    b.addEventListener('mouseenter',function(){ hover=true; tipShow(b,spec); });
+    // A short grace, so the pointer can cross the 8px gap to a link in the popover.
+    b.addEventListener('mouseleave',function(){ hover=false;
+      setTimeout(function(){ if(!hover&&!tipInPop&&document.activeElement!==b&&tipOpen&&tipOpen.btn===b) tipClose(); },150); });
+  }
+  b.addEventListener('focus',function(){ if(b.matches(':focus-visible')) tipShow(b,spec); });
+  b.addEventListener('blur',function(){ if(!hover&&!tipInPop&&tipOpen&&tipOpen.btn===b) tipClose(); });
+  // A click while hovering keeps it open; on touch it toggles.
+  b.addEventListener('click',function(e){
+    e.stopPropagation();
+    if(tipOpen&&tipOpen.btn===b&&!hover) tipClose(); else tipShow(b,spec);
+  });
+  return b;
+}
+document.addEventListener('click',function(e){ if(tipOpen&&!tipOpen.pop.contains(e.target)) tipClose(); });
+document.addEventListener('keydown',function(e){ if(e.key==='Escape') tipClose(); });
+// A fixed popover would float away from its ⓘ on scroll; close it instead.
+document.addEventListener('scroll',tipClose,true);
 
 /* The screen table — the single list of what a screen name may be. Also what `go()`
  * validates against, so a retired name can't stick in the URL or in localStorage.
  * (Function declarations hoist, so naming them here at load time is safe.) */
-var SCREEN_FNS={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,
+var SCREEN_FNS={dashboard:renderDashboard,transactions:renderTransactions,accounts:renderAccounts,investments:renderInvestments,
                 exchange:renderExchange,tax:renderTax,admin:renderAdmin};
-var SECONDARY_SCREENS={exchange:1,tax:1,admin:1};
+var SECONDARY_SCREENS={investments:1,exchange:1,tax:1,admin:1};
 /* Last screen, so a browser reload comes back where you were. The parent URL
  * (?screen=, pushed below) is the primary channel; localStorage covers reloads
  * that drop it — an iOS home-screen shortcut reopens its start_url, not the
@@ -573,7 +968,42 @@ function render(){
   screenGen++;
   return (SCREEN_FNS[S.screen]||renderDashboard)();
 }
-function paint(node){ var m=$('#main'); m.innerHTML=''; m.appendChild(node); }
+// The .screen fade plays only when a DIFFERENT screen arrives. A repaint of the same
+// screen (cache paint, then the revalidated data a moment later) swaps in place —
+// replaying the fade there read as the page flashing twice on every launch.
+function paint(node){
+  var m=$('#main'), same=paint.on===S.screen, old=same?figTexts(m):null;
+  if(same) node.style.animation='none';
+  paint.on=S.screen; m.innerHTML=''; m.appendChild(node);
+  if(old) rollFigs(figEls(node), old);
+}
+/* DESIGN.md "Motion": a figure that changes on a repaint (after a save, or when the
+ * revalidated data lands) rolls to its new value over 400ms. Only when the text
+ * around the number is the same, so "₱1,200" → "₱1,350" rolls and "—" → "₱0" snaps. */
+var NUM_RE=/-?[\d,]*\d(\.\d+)?/;
+function figEls(r){ return r.querySelectorAll('.fig,.fig-hero'); }
+function figTexts(r){ return Array.prototype.map.call(figEls(r),function(e){ return e.textContent; }); }
+function rollPlan(a,b){
+  var ma=NUM_RE.exec(a), mb=NUM_RE.exec(b);
+  if(a===b||!ma||!mb||a.replace(NUM_RE,'#')!==b.replace(NUM_RE,'#')) return null;
+  var dec=(mb[1]||'').length?mb[1].length-1:0;
+  return {from:+ma[0].replace(/,/g,''), to:+mb[0].replace(/,/g,''), dec:dec, text:function(v){
+    return b.replace(NUM_RE,v.toLocaleString('en-PH',{minimumFractionDigits:dec,maximumFractionDigits:dec})); }};
+}
+function rollFigs(els, old){
+  if(document.hidden||(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)) return;
+  Array.prototype.forEach.call(els,function(e,i){
+    var p=old[i]!=null&&rollPlan(old[i],e.textContent); if(!p) return;
+    var t0=performance.now(), end=e.textContent;
+    // rAF stops in a hidden tab: the timer makes sure the real value always lands.
+    setTimeout(function(){ e.textContent=end; },450);
+    (function step(now){
+      var k=Math.min(1,(now-t0)/400), ease=1-Math.pow(1-k,3);
+      e.textContent=k<1?p.text(p.from+(p.to-p.from)*ease):end;
+      if(k<1&&e.isConnected) requestAnimationFrame(step);
+    })(t0);
+  });
+}
 
 /* ── skeletons ───────────────────────────────────────────────────────────────
  * A placeholder shaped like the screen that's coming, instead of a spinner: the
@@ -588,20 +1018,18 @@ function skRows(n){
     '<div class="grow">'+skBar(12,(50+(i%3)*14)+'%')+skBar(10,'30%')+'</div>'+skBar(14,'72px')+'</div>';
   return o;
 }
-function skCard(inner){ return '<div class="card">'+inner+'</div>'; }
-function skTiles(n){
-  var o=''; for(var i=0;i<n;i++) o+='<div class="stat">'+skBar(11,'46%')+skBar(24,'70%')+'</div>';
-  return '<div class="grid grid-'+n+'">'+o+'</div>';
-}
+function skTile(inner,cls){ return '<div class="tile'+(cls?' '+cls:'')+'">'+inner+'</div>'; }
+function skFig(){ return skTile(skBar(11,'40%')+skBar(26,'62%')); }
 var SKELS={
-  dashboard:function(){ return '<div class="stat hero">'+skBar(11,'30%')+skBar(34,'58%')+skBar(10,'100%')+'</div>'+
-    skTiles(3)+skCard(skBar(11,'34%')+skBar(150,'100%'))+skCard(skBar(11,'26%')+skRows(4)); },
-  accounts: function(){ return skTiles(2)+skCard(skBar(11,'26%')+skRows(4))+skCard(skBar(11,'26%')+skRows(3)); },
-  list:     function(){ return '<div class="filters">'+skBar(34,'170px')+skBar(34,'130px')+skBar(34,'130px')+'</div>'+skCard(skRows(7)); },
-  table:    function(){ return skCard(skBar(11,'30%')+skRows(6)); }
+  dashboard:function(){ return '<div class="sum">'+skTile(skBar(11,'30%')+skBar(40,'58%')+skBar(10,'100%'),'t-nw')+
+    skFig()+skFig()+skTile(skBar(11,'34%')+skBar(150,'100%'),'t-hist')+'</div>'; },
+  accounts: function(){ return '<div class="sum">'+skFig()+skFig()+'</div><div style="height:12px"></div>'+skTile(skRows(4)); },
+  list:     function(){ return skBar(46,'100%')+'<div style="height:12px"></div>'+skTile(skRows(7)); },
+  table:    function(){ return skTile(skBar(11,'30%')+skRows(6)); }
 };
 function loading(kind){
   var f=SKELS[kind]||SKELS.table;
+  paint.on=null;   // the real screen after a skeleton still fades in
   $('#main').innerHTML='<div class="screen">'+skBar(21,'34%')+'<div style="height:16px"></div>'+f()+'</div>';
 }
 
@@ -631,35 +1059,6 @@ function barPath(x,y,w,h,r){
   return 'M'+x+' '+(y+h)+' V'+(y+r)+' Q'+x+' '+y+' '+(x+r)+' '+y+' H'+(x+w-r)+
          ' Q'+(x+w)+' '+y+' '+(x+w)+' '+(y+r)+' V'+(y+h)+' Z';
 }
-// 6-point sparkline: de-emphasis stroke, current period as an accent dot.
-function sparklineSVG(values,h){
-  if(!values || values.length<2) return null;
-  var w=110; h=h||26; var pad=4;
-  var max=Math.max.apply(null,values), min=Math.min.apply(null,values);
-  if(max===min) max=min+1;
-  var pts=values.map(function(v,i){
-    return [pad+i*(w-2*pad)/(values.length-1), h-pad-(v-min)/(max-min)*(h-2*pad)];
-  });
-  var svg=svgEl('svg',{class:'chart-svg stat-spark',viewBox:'0 0 '+w+' '+h,'aria-hidden':'true'});
-  svg.appendChild(svgEl('polyline',{points:pts.map(function(p){return p.join(',');}).join(' '),
-    fill:'none',stroke:'var(--text-faint)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
-  var lp=pts[pts.length-1];
-  svg.appendChild(svgEl('circle',{cx:lp[0],cy:lp[1],r:3.5,fill:'var(--accent)',stroke:'var(--surface)','stroke-width':2}));
-  return svg;
-}
-// Delta pill: arrow follows direction, color follows whether the move is GOOD
-// (spending up = red, income up = green — semantic color, not raw direction).
-function deltaEl(cur,prev,upIsGood,vsLabel){
-  if(cur==null||prev==null||!isFinite(prev)||prev<=0) return null;
-  var ch=(cur-prev)/prev*100;
-  var dir=ch>0.5?'up':(ch<-0.5?'down':'flat');
-  var cls=dir==='flat'?'flat':(((dir==='up')===!!upIsGood)?'up':'down');
-  var arrow=dir==='up'?'▲':(dir==='down'?'▼':'·');
-  var s=el('span','delta '+cls,arrow+' '+Math.abs(Math.round(ch))+'%'+
-    (vsLabel?' <span style="opacity:.72;font-weight:500">'+esc(vsLabel)+'</span>':''));
-  s.style.marginTop='8px';
-  return s;
-}
 // A per-month net-worth series. Prefers the REAL monthly snapshot (`snaps[month]`,
 // from nw_snapshots — captures FX/market moves); where a month has none yet it
 // estimates and flags `real:false`. Live month always uses `current`.
@@ -678,709 +1077,757 @@ function netWorthSeries(cf,current,snaps,roll){
   }
   return out;
 }
-// Cash-flow columns (income vs spending) + an optional net-worth line overlaid
-// on a SECOND axis (right). Two axes because net worth dwarfs the monthly flows
-// by ~10× — one shared scale would flatten whichever series it isn't zeroed for.
-// `ns` (netWorthSeries output) omitted → plain cash-flow chart, no right axis.
-// `width` = the host's real pixel width, so SVG text renders at 1:1 scale
-// (a fixed viewBox scaled down would shrink labels below legibility).
 // Months to skip between x-axis labels so a 24-month window does not smear them
 // into each other. ~34px is a 3-letter month plus air.
 function labelStep(n,pw){ return Math.ceil(n/Math.max(1,Math.floor(pw/34))); }
-function cashflowChart(cf,width,ns){
-  var wrap=el('div','chart-wrap');
-  var legend=el('div','chart-legend');
-  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-income)"></span>Income</span>'+
-    '<span class="lg"><span class="lg-key" style="background:var(--chart-spend)"></span>Spending</span>'+
-    (ns?'<span class="lg"><span class="lg-key" style="background:var(--accent);border-radius:1px;height:3px"></span>Liquid net worth</span>':'');
-  wrap.appendChild(legend);
-  var W=Math.max(300,width||640),H=200,L=48,R=ns?52:6,T=10,B=26,pw=W-L-R,ph=H-T-B;
-  var max=0; cf.forEach(function(m){max=Math.max(max,m.income,m.expense);});
-  max=niceCeil(max);
-  // Right axis spans the net-worth data range (not 0) so the trend is visible.
-  var lo=0,hi=1;
-  if(ns){ var v=ns.map(function(p){return p.nw;}); hi=Math.max.apply(null,v); lo=Math.min.apply(null,v);
-    if(hi===lo) hi=lo+1; var pad=(hi-lo)*0.12; hi+=pad; lo-=pad;
-    // A floating right axis puts its own zero somewhere mid-chart, so a NEGATIVE
-    // net worth still draws above the left axis's baseline ₱0 and reads positive.
-    // Keep zero inside the range and mark it (below), so the sign is visible.
-    if(lo<0) hi=Math.max(hi,0); }
-  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img','aria-label':(ns?'Cash flow and liquid net worth':'Cash flow — income vs spending')+', last '+cf.length+' months'});
-  [0,.5,1].forEach(function(f){
-    var y=T+ph-f*ph;
-    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
-    var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
-    if(ns){ var rt=svgEl('text',{x:W-R+8,y:y+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
-      rt.textContent=compactPhp(lo+(hi-lo)*f); svg.appendChild(rt); }
-  });
-  // The right axis's own zero: dashed, so a net-worth line below it reads as negative.
-  if(ns && lo<0 && hi>0){
-    var zy=T+ph-(0-lo)/(hi-lo)*ph;
-    svg.appendChild(svgEl('line',{x1:L,y1:zy,x2:W-R,y2:zy,stroke:'var(--accent)','stroke-width':1,
-      'stroke-dasharray':'3 3','stroke-opacity':0.45}));
-    // Label only when it will not sit on top of a tick label.
-    if([0,.5,1].every(function(f){ return Math.abs(zy-(T+ph-f*ph))>10; })){
-      var zt=svgEl('text',{x:W-R+8,y:zy+3.5,'text-anchor':'start',fill:'var(--text-faint)'});
-      zt.textContent=compactPhp(0); svg.appendChild(zt);
-    }
-  }
-  var band=pw/cf.length, bw=Math.min(20,band*0.26), lblStep=labelStep(cf.length,pw);
-  var cx=cf.map(function(m,i){ return L+band*i+band/2; });
-  var tip=el('div','chart-tip'); tip.hidden=true;
-  cf.forEach(function(m,i){
-    var hI=m.income/max*ph, hS=m.expense/max*ph;
-    if(hI>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]-bw-1,T+ph-hI,bw,hI),fill:'var(--chart-income)'}));
-    if(hS>=1) svg.appendChild(svgEl('path',{d:barPath(cx[i]+1,T+ph-hS,bw,hS),fill:'var(--chart-spend)'}));
-    // Long windows: label every Nth month, counting back from the newest, so the
-    // current month always keeps its (bold) label.
-    if((cf.length-1-i)%lblStep===0){
-      var lbl=svgEl('text',{x:cx[i],y:H-8,'text-anchor':'middle'});
-      if(i===cf.length-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
-      lbl.textContent=String(m.month).split('-')[1]||m.month;
-      svg.appendChild(lbl);
-    }
-  });
-  // Net-worth line + dots on top of the bars.
-  var ly=ns?ns.map(function(p){ return T+ph-(p.nw-lo)/(hi-lo)*ph; }):null;
-  if(ns){
-    svg.appendChild(svgEl('polyline',{points:cx.map(function(x,i){return x+','+ly[i];}).join(' '),
-      fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
-    ns.forEach(function(p,i){
-      // Real snapshot / live point → filled dot; estimated (rolled-back) → hollow ring.
-      svg.appendChild(svgEl('circle',{cx:cx[i],cy:ly[i],r:i===ns.length-1?4:2.5,
-        fill:p.real?'var(--accent)':'var(--surface)',stroke:p.real?'var(--surface)':'var(--accent)','stroke-width':2}));
-    });
-  }
-  cf.forEach(function(m,i){
-    var topY=T+ph-Math.max(m.income,m.expense)/max*ph;
-    if(ns) topY=Math.min(topY,ly[i]);
-    var hit=svgEl('rect',{x:L+band*i,y:T,width:band,height:ph,fill:'transparent'});
-    function show(){
-      tip.innerHTML='<b>'+esc(monthLabel(m.month))+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-income)"></span>Income <b>'+money(m.income,true)+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-spend)"></span>Spending <b>'+money(m.expense,true)+'</b>'+
-        (ns?'<br><span class="lg-key" style="background:var(--accent)"></span>Liquid net worth <b>'+money(ns[i].nw,true)+'</b>'+(ns[i].real?'':' <span style="opacity:.6">est.</span>'):'');
-      var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
-      var x=sr.left-wr.left+cx[i]/W*sr.width;
-      x=Math.max(78,Math.min(x,wr.width-78));
-      tip.style.left=x+'px';
-      tip.style.top=(sr.top-wr.top+topY/H*sr.height)+'px';
-      tip.hidden=false;
-    }
-    hit.addEventListener('mouseenter',show);
-    hit.addEventListener('click',show);                 // touch
-    hit.addEventListener('mouseleave',function(){ tip.hidden=true; });
-    svg.appendChild(hit);
-  });
-  svg.appendChild(svgEl('line',{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:'var(--border-2)','stroke-width':1}));
-  wrap.appendChild(svg); wrap.appendChild(tip);
-  return wrap;
-}
-// Net worth as an area chart: INVESTED (always ≥0) is the base band 0→shares,
-// LIQUID is a signed ribbon shares→total on top, so the TOP edge is always the
-// true net worth (liquid + invested). Invested-at-the-bottom is what keeps this
-// honest when liquid is negative — carrying more debt than non-invested cash —
-// because then the ribbon dips BELOW the shares line down to the real net worth,
-// instead of a stacked bottom band that can't go under the axis. Y anchors at 0.
-// `liq`/`stk` are netWorthSeries outputs; `real` marks a snapshot vs estimate.
-// ponytail: axis floor is 0 — a month with NEGATIVE net worth would clip below
-// the baseline. Never happens in the data (net worth stays positive); revisit
-// the domain to min(0, …) if that changes.
-function netWorthAreaChart(liq,stk,width){
-  var wrap=el('div','chart-wrap');
-  var legend=el('div','chart-legend');
-  legend.innerHTML='<span class="lg"><span class="lg-key" style="background:var(--chart-invested)"></span>Invested</span>'+
-    '<span class="lg"><span class="lg-key" style="background:var(--accent)"></span>Liquid</span>';
-  wrap.appendChild(legend);
-  var W=Math.max(300,width||640),H=200,L=48,R=14,T=10,B=26,pw=W-L-R,ph=H-T-B,n=liq.length;
-  var shr=stk.map(function(p){return Math.max(0,p.nw);});
-  var tot=liq.map(function(p,i){return p.nw+shr[i];});
-  // Axis must clear both the total line and the shares top (shares > total when liquid<0).
-  var max=niceCeil(Math.max.apply(null,tot.concat(shr).concat([1])));
-  var xf=function(i){ return n<2?L+pw/2:L+pw*i/(n-1); };
-  var yf=function(v){ return T+ph-v/max*ph; };
-  var x=liq.map(function(p,i){return xf(i);});
-  var yShr=shr.map(function(v){return yf(v);});
-  var yTot=tot.map(function(v){return yf(v);});
-  var svg=svgEl('svg',{class:'chart-svg',viewBox:'0 0 '+W+' '+H,role:'img',
-    'aria-label':'Net worth by month — invested and liquid, last '+n+' months'});
-  // Vertical fades: a flat translucent slab over a dark card reads as mud, and
-  // two flat slabs read as one. ponytail: fixed gradient ids — one instance of
-  // this chart exists per page, and a duplicate would resolve to an identical def.
-  var defs=svgEl('defs',{});
-  [['nwInvGrad','var(--chart-invested)',0.55,0.14],['nwLiqGrad','var(--accent)',0.45,0.10]].forEach(function(g){
-    var lg=svgEl('linearGradient',{id:g[0],x1:0,y1:0,x2:0,y2:1});
-    lg.appendChild(svgEl('stop',{offset:'0%','stop-color':g[1],'stop-opacity':g[2]}));
-    lg.appendChild(svgEl('stop',{offset:'100%','stop-color':g[1],'stop-opacity':g[3]}));
-    defs.appendChild(lg);
-  });
-  svg.appendChild(defs);
-  [0,.5,1].forEach(function(f){
-    var y=T+ph-f*ph;
-    if(f>0) svg.appendChild(svgEl('line',{x1:L,y1:y,x2:W-R,y2:y,stroke:'var(--grid-line)','stroke-width':1}));
-    var t=svgEl('text',{x:L-8,y:y+3.5,'text-anchor':'end'}); t.textContent=compactPhp(max*f); svg.appendChild(t);
-  });
-  var base=T+ph;
-  // Invested base band (baseline → shares), then the signed liquid ribbon (shares → total).
-  svg.appendChild(svgEl('polygon',{points:L+','+base+' '+x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+(x[n-1])+','+base,
-    fill:'url(#nwInvGrad)'}));
-  svg.appendChild(svgEl('polygon',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' ')+' '+
-    x.slice().reverse().map(function(xi,i){var j=n-1-i;return xi+','+yTot[j];}).join(' '),
-    fill:'url(#nwLiqGrad)'}));
-  // Invested top edge: without a line of its own the two bands share a soft
-  // colour change and read as one smear.
-  svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yShr[i];}).join(' '),
-    fill:'none',stroke:'var(--chart-invested)','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
-  // Total (top-edge) line + real/estimate dots.
-  svg.appendChild(svgEl('polyline',{points:x.map(function(xi,i){return xi+','+yTot[i];}).join(' '),
-    fill:'none',stroke:'var(--accent)','stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round'}));
-  liq.forEach(function(p,i){
-    svg.appendChild(svgEl('circle',{cx:x[i],cy:yTot[i],r:i===n-1?4:2.5,
-      fill:p.real?'var(--accent)':'var(--surface)',stroke:p.real?'var(--surface)':'var(--accent)','stroke-width':2}));
-  });
-  var tip=el('div','chart-tip'); tip.hidden=true;
-  var band=pw/Math.max(1,n-1), lblStep=labelStep(n,pw);
-  liq.forEach(function(p,i){
-    // First/last labels sit ON the axis ends — centred they collide with the
-    // y-axis labels and overflow the right edge.
-    if((n-1-i)%lblStep===0){
-      var lbl=svgEl('text',{x:x[i],y:H-8,'text-anchor':i===0?'start':(i===n-1?'end':'middle')});
-      if(i===n-1){ lbl.setAttribute('fill','var(--text-dim)'); lbl.setAttribute('font-weight','700'); }
-      lbl.textContent=String(p.month).split('-')[1]||p.month;
-      svg.appendChild(lbl);
-    }
-    var hit=svgEl('rect',{x:i===0?L:x[i]-band/2,y:T,width:i===0||i===n-1?band/2:band,height:ph,fill:'transparent'});
-    function show(){
-      tip.innerHTML='<b>'+esc(monthLabel(p.month))+'</b><br>'+
-        '<span class="lg-key" style="background:var(--chart-invested)"></span>Invested <b>'+money(shr[i],true)+'</b><br>'+
-        '<span class="lg-key" style="background:var(--accent)"></span>Liquid <b>'+money(p.nw,true)+'</b><br>'+
-        'Net worth <b>'+money(tot[i],true)+'</b>'+(p.real?'':' <span style="opacity:.6">est.</span>');
-      var sr=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
-      var px=sr.left-wr.left+x[i]/W*sr.width; px=Math.max(78,Math.min(px,wr.width-78));
-      tip.style.left=px+'px'; tip.style.top=(sr.top-wr.top+yTot[i]/H*sr.height)+'px';
-      tip.hidden=false;
-    }
-    hit.addEventListener('mouseenter',show);
-    hit.addEventListener('click',show);
-    hit.addEventListener('mouseleave',function(){ tip.hidden=true; });
-    svg.appendChild(hit);
-  });
-  svg.appendChild(svgEl('line',{x1:L,y1:base,x2:W-R,y2:base,stroke:'var(--border-2)','stroke-width':1}));
-  wrap.appendChild(svg); wrap.appendChild(tip);
-  return wrap;
-}
-// Categorical hues in FIXED slot order (validated on --surface: adjacent CVD
-// ΔE 8.4, normal-vision 19.3, all ≥3:1). Slot 7 is the "Other" bucket — the
-// palette is never cycled, so the slice count is capped instead.
-var PIE_HUES=['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300'];
-var PIE_OTHER='var(--text-faint)';
-function pieHue(i){ return i<PIE_HUES.length?PIE_HUES[i]:PIE_OTHER; }
-// Donut of expenses by category: slices ordered biggest-first (so adjacent
-// slices are adjacent palette slots), tail folded into "Other". The legend
-// carries the amount and share, so slice identity is never color-alone.
-// ponytail: no hover tooltip — the legend already shows every number one would
-// carry; native <title> covers the "which slice is that" case.
-// "Other" drills down through a native <details> (keyboard + screen reader for
-// free); its tail stays a list rather than more slices because the palette is
-// capped at 6 and is never cycled.
-function donutChart(entries){
-  var top=entries.slice(0,PIE_HUES.length), rest=entries.slice(PIE_HUES.length);
-  if(rest.length){
-    var o=0; rest.forEach(function(p){o+=p[1];});
-    top.push(['Other ('+rest.length+')',o]);
-  }
-  var total=0; top.forEach(function(p){total+=p[1];});
-  if(!(total>0)) return null;
 
-  var wrap=el('div','donut-wrap');
-  var R=52,SW=22,C=2*Math.PI*R;                       // circumference in user units
-  var svg=svgEl('svg',{class:'donut',viewBox:'0 0 128 128',role:'img',
-    'aria-label':'Expenses by category, '+monthLabel(S.month)});
-  var off=0, otherSlice=null;
-  top.forEach(function(pair,i){
-    var frac=pair[1]/total, len=frac*C, gap=Math.min(2,len*0.5); // 2px surface gap between slices
-    var c=svgEl('circle',{cx:64,cy:64,r:R,fill:'none',stroke:pieHue(i),'stroke-width':SW,
-      'stroke-dasharray':(len-gap)+' '+(C-len+gap),'stroke-dashoffset':-off,
-      transform:'rotate(-90 64 64)'});
-    var t=svgEl('title'); t.textContent=pair[0]+' — '+money(pair[1],true)+' ('+Math.round(frac*100)+'%)';
-    c.appendChild(t); svg.appendChild(c);
-    if(rest.length&&i===top.length-1) otherSlice=c;
-    off+=len;
-  });
-  var mid=el('div','donut-mid','<div class="donut-mid-l">Total</div><div class="donut-mid-v">'+money(total,true)+'</div>');
-  var ring=el('div','donut-ring'); ring.appendChild(svg); ring.appendChild(mid);
-  wrap.appendChild(ring);
+/* ════════════════════════════════════════════════════════════════════════
+ *  SUMMARY (screen key `dashboard`) — the v3 tile grid (DESIGN.md "Layout").
+ *  4 columns on PC, 2 on iPad, 1 on iPhone; the spans live in app.css (.sum).
+ *  Every derived figure carries a tip() with its real formula (DESIGN.md tooltips).
+ * ════════════════════════════════════════════════════════════════════════ */
 
-  function dlRow(pair,color,cls){
-    var r=el('div','dl-row'+(cls?' '+cls:''));
-    r.innerHTML='<span class="lg-key" style="background:'+color+'"></span>'+
-      '<span class="dl-name">'+esc(pair[0])+'</span>'+
-      '<span class="dl-val">'+money(pair[1],true)+'</span>'+
-      '<span class="dl-pct">'+Math.round(pair[1]/total*100)+'%</span>';
-    return r;
-  }
-  var lg=el('div','donut-legend'), det=null;
-  top.forEach(function(pair,i){
-    if(!(rest.length&&i===top.length-1)){ lg.appendChild(dlRow(pair,pieHue(i))); return; }
-    det=el('details','dl-drill');
-    var sm=el('summary'); sm.appendChild(dlRow(pair,PIE_OTHER)); det.appendChild(sm);
-    rest.forEach(function(p){ det.appendChild(dlRow(p,PIE_OTHER,'dl-sub')); });
-    lg.appendChild(det);
-  });
-  if(det&&otherSlice){
-    otherSlice.style.cursor='pointer';
-    otherSlice.onclick=function(){ det.open=!det.open; };
-  }
-  wrap.appendChild(lg);
-  return wrap;
-}
-// Budget meter: track is a lighter step of the fill's own ramp; the pace notch
-// marks how much of the period has elapsed (spend "should" sit near it).
-function meterRow(b,paceFrac){
-  // The server measures a budget in the currency it is planned in (Growth is a
-  // $200/month parking target) and names that currency, so the meter never converts
-  // and never drifts with FX. Pesos keep the whole-number format.
-  var cur=b.currency||'PHP';
-  var fmt=cur==='PHP'?function(n){return money(n,true);}
-                     :function(n){return n==null?'—':moneyCur(n,cur);};
-  var r=el('div'); r.style.marginBottom='18px';
-  var p=b.pctUsed==null?0:b.pctUsed;
-  var state=b.isOver?'over':(p>=85?'warn':'');
-  var head=el('div','row-between');
-  head.innerHTML='<div><strong>'+esc(b.segment)+'</strong> <span class="pill">'+esc(b.period)+'</span></div>'+
-    '<div class="mono" style="font-size:13px">'+fmt(b.actualNative)+' <span class="faint">/ '+fmt(b.targetNative)+'</span></div>';
-  r.appendChild(head);
-  var m=el('div','meter '+state);
-  m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,p)+'%"></div>';
-  if(paceFrac!=null&&paceFrac>0.02&&paceFrac<0.98){
-    var pm=el('div','meter-pace'); pm.style.left='calc('+(paceFrac*100)+'% - 1px)';
-    pm.title=Math.round(paceFrac*100)+'% of the period has elapsed';
-    m.appendChild(pm);
-  }
-  r.appendChild(m);
-  var over=b.isOver&&b.remainingNative!=null;
-  var sub=el('div','row-between'); sub.style.cssText='margin-top:6px;font-size:12px';
-  sub.innerHTML='<span class="dim">'+pct(b.pctUsed)+' used</span>'+
-    '<span class="'+(b.isOver?'neg':'dim')+'">'+(b.remainingNative==null?'':
-      (over?fmt(Math.abs(b.remainingNative))+' over':fmt(b.remainingNative)+' left'))+'</span>';
-  r.appendChild(sub);
-  return r;
-}
-// Fraction of the current budget period already elapsed (null off-period).
-function periodPace(period,monthStr){
-  var now=new Date();
-  if(monthStr!==monthKey(now)) return null;
-  var day=now.getDate(), days=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
-  if(/^quarter/i.test(String(period))) return (now.getMonth()%3+day/days)/3;
-  return day/days;
-}
-
-/* Days remaining as "X years, X months" — the FI countdown's only format. Rounded to
- * WHOLE MONTHS first and split after, so 11.6 months reads "1 year, 0 months" and not
- * "0 years, 12 months". 365.2425 is the same Gregorian mean the Worker projects with.
- * The payload keeps the exact day count; only the display is this coarse. */
+/* The FI countdown, short: "10y 1m". Rounded to WHOLE MONTHS first and split after,
+ * so 11.6 months reads "1y 0m" and not "0y 12m". 365.2425 is the same Gregorian
+ * mean the Worker projects with. The payload keeps the exact day count. */
 function yearsMonths(days){
   var mo=Math.round(days/(365.2425/12));
   if(mo<1) return 'Under a month';
   var y=Math.floor(mo/12); mo-=y*12;
-  return y+' year'+(y===1?'':'s')+', '+mo+' month'+(mo===1?'':'s');
+  return (y?y+'y ':'')+mo+'m';
+}
+function monthLong(m){ var d=monthKey2date(m); return d?d.toLocaleString('en-US',{month:'long'}):String(m); }
+function isoMonthLabel(iso){ return MONTHS[+iso.slice(5,7)-1]+' '+iso.slice(0,4); }   // "2036-10-04" → "Oct 2036"
+var SEG_COLOR={Essentials:'var(--ess)',Rewards:'var(--rew)',Growth:'var(--gro)'};
+
+// A tile with its label row: label, optional right-hand text, optional ⓘ.
+function sumTile(cls,label,right,tipSpec){
+  var t=el('section','tile '+cls), h=el('div','tile-h');
+  h.appendChild(typeof label==='string'?el('span','tile-l',esc(label)):label);
+  if(right) h.appendChild(el('span','tile-r',right));
+  if(tipSpec) h.appendChild(tip(tipSpec));
+  t.appendChild(h); return t;
+}
+// A 6px meter on --track: fills = [[fraction, colour]], tick = a target fraction.
+function bar6(fills,tick){
+  var b=el('div','bar6');
+  fills.forEach(function(f){ var i=el('i'); i.style.width=Math.max(0,Math.min(100,f[0]*100))+'%'; i.style.background=f[1]; b.appendChild(i); });
+  if(tick!=null){ var k=el('b'); k.style.left='calc('+(tick*100)+'% - 1px)'; b.appendChild(k); }
+  return b;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
- *  DASHBOARD — hierarchy: hero number → KPI row → cash flow → budgets →
- *  expenses by category → recent. One glance answers "am I okay?".
- * ════════════════════════════════════════════════════════════════════════ */
+/* The two history series (liquid, invested) that the net-worth sparkline and the
+ * history tile both draw. netWorthSeries rolls the flows BACKWARD from the newest
+ * month, so that month needs a real anchor: the live figures on the live month,
+ * and the month's own snapshot on a past one (netWorthHistory carries every month
+ * but the live one). */
+function nwSeries(d,cf,isLive){
+  if(cf.length<2) return null;
+  var nwh=d.netWorthHistory||{}, sh=d.sharesHistory||{}, liqHist={}, lastM=cf[cf.length-1].month;
+  Object.keys(nwh).forEach(function(m){ liqHist[m]=nwh[m]-(sh[m]||0); });
+  var anchorNw=isLive?(d.netWorth||0):nwh[lastM], anchorSh=isLive?(d.sharesValue||0):sh[lastM];
+  if(anchorNw==null) return null;
+  return {liq:netWorthSeries(cf, anchorNw-(anchorSh||0), liqHist, true),
+          stk:netWorthSeries(cf, anchorSh||0, sh, false)};
+}
+
+function nwTile(d,ser){
+  var br=d.bridge, liabAbs=Math.abs(d.liabilities||0);
+  var tipSpec=br?{
+    title:'What moved your net worth',
+    text:'The change since the '+monthLabel(br.from)+' close, split into what the ledger explains and what it does not.',
+    rows:[['Net worth at the '+monthLabel(br.from)+' close',money(br.startNetWorth,true)],
+          ['+ Saved (income − spending)',signedMoney(br.savings)],
+          ['+ Market, FX and timing',signedMoney(br.residual)],
+          ['= Net worth '+(br.live?'now':'at the '+monthLabel(br.month)+' close'),money(br.endNetWorth,true),true],
+          ['Change',signedMoney(br.deltaNetWorth),true]],
+    note:'Market, FX and timing is the rest: price and rate moves, and a flow logged in another month. If it stays negative, some spending may not be logged.'}:null;
+  var t=sumTile('t-nw','Net worth','<span class="hide-phone">Assets '+money(d.assets,true)+' · Liabilities −'+money(liabAbs,true)+'</span>',tipSpec);
+  t.appendChild(el('div','fig-hero',money(d.netWorth,true)));
+  if(br){
+    var up=br.deltaNetWorth>=0, row=el('div','nw-bridge');
+    row.innerHTML='<span class="nw-chip '+(up?'pos':'neg')+'">'+(up?'▲ ':'▼ ')+money(Math.abs(br.deltaNetWorth),true)+
+      (br.live?' since '+esc(monthLong(br.from)):' in '+esc(monthLong(br.month)))+'</span><span class="hide-phone">Saved '+signedMoney(br.savings)+
+      ' · Market, FX and timing '+signedMoney(br.residual)+'</span>';
+    t.appendChild(row);
+  }
+  // Sparkline: total net worth per month. preserveAspectRatio=none with a
+  // non-scaling stroke, so it fills any width with no measuring and no redraw.
+  if(ser){
+    var v=ser.liq.map(function(p,i){ return p.nw+Math.max(0,ser.stk[i].nw); });
+    var hi=Math.max.apply(null,v), lo=Math.min.apply(null,v); if(hi===lo){ hi+=1; lo-=1; }
+    var n=v.length, pts=v.map(function(x,i){ return (i*350/(n-1)).toFixed(1)+','+(6+(hi-x)/(hi-lo)*44).toFixed(1); });
+    var svg=svgEl('svg',{class:'nw-spark',viewBox:'0 0 350 56',preserveAspectRatio:'none','aria-hidden':'true'});
+    svg.appendChild(svgEl('path',{d:'M'+pts.join(' L')+' L350,56 L0,56 Z',fill:'var(--accent)','fill-opacity':.16}));
+    svg.appendChild(svgEl('path',{d:'M'+pts.join(' L'),fill:'none',stroke:'var(--accent)','stroke-width':2.2,'vector-effect':'non-scaling-stroke'}));
+    t.appendChild(svg);
+  } else t.classList.add('pad-b');
+  return t;
+}
+
+/* Left to spend: the Essentials + Rewards budget minus their signed spend. The
+ * other segments (Growth) are money kept, not spent, so they sit below as rows. */
+function leftTile(d,isLive){
+  var er=d.essentialsRewards; if(!er||er.targetPhp==null) return null;
+  var now=new Date(), daysLeft=isLive?(new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()):null;
+  var left=er.remainingPhp, perDay=daysLeft>0&&left>0?left/daysLeft:null;
+  var inWhat=isLive?'this month':'in '+monthLabel(S.month);
+  var rows=[['Essentials + Rewards budget',money(er.targetPhp,true)],['− Spent '+inWhat,money(er.actualPhp,true)],
+            ['= Left to spend',money(left,true),true]];
+  if(perDay!=null) rows.push(['÷ Days left',String(daysLeft)],['= A day',money(perDay,true),true]);
+  var t=sumTile('t-lts','Left to spend',daysLeft!=null?daysLeft+' day'+(daysLeft===1?'':'s')+' left':esc(monthLabel(S.month)),
+    {title:'What you can still spend '+inWhat,text:'Your Essentials and Rewards budgets, less what they spent.',rows:rows,
+     note:'Spend is signed, so a refund nets its category down. Growth is money you keep, so it is not in this figure.'});
+  var fig=el('div','fig-row');
+  fig.innerHTML='<span class="fig'+(left<0?' neg':'')+'">'+(left<0?money(-left,true)+' over':money(left,true))+'</span>'+
+    '<span class="fig-sub">of '+money(er.targetPhp,true)+'</span>';
+  t.appendChild(fig);
+  var byName={}; (d.budgets||[]).forEach(function(b){ byName[b.segment]=b; });
+  t.appendChild(bar6(er.segments.map(function(s){
+    return [er.targetPhp?((byName[s]||{}).actualPhp||0)/er.targetPhp:0, SEG_COLOR[s]||'var(--dim)'];
+  })));
+  if(perDay!=null) t.appendChild(el('div','lts-day','About <b>'+money(perDay,true)+' a day</b> keeps you on budget.'));
+  var list=el('div','seg-rows');
+  (d.budgets||[]).forEach(function(b){
+    var cur=b.currency||'PHP', fmt=function(n){ return cur==='PHP'?money(n,true):moneyCur(n,cur); };
+    var spend=er.segments.indexOf(b.segment)>=0, rem=b.remainingNative, val, cls='';
+    if(rem==null) val='—';
+    else if(spend){ val=rem>=0?fmt(rem)+' left':fmt(-rem)+' over'; if(rem<0) cls='neg'; }
+    else { val=rem<=0?'Funded ✓':fmt(rem)+' to go'; if(rem<=0) cls='pos'; }
+    var r=el('div','seg-row');
+    r.innerHTML='<span class="seg-dot" style="background:'+(SEG_COLOR[b.segment]||'var(--dim)')+'"></span>'+
+      '<span class="seg-name">'+esc(b.segment)+(/^month/i.test(b.period)?'':' <span class="dim">· '+esc(String(b.period).toLowerCase())+'</span>')+'</span>'+
+      '<span class="seg-val '+cls+'">'+val+'</span>'+
+      '<span class="seg-sub">'+fmt(b.actualNative)+' of '+(b.targetNative==null?'—':fmt(b.targetNative))+'</span>';
+    list.appendChild(r);
+  });
+  t.appendChild(list);
+  return t;
+}
+
+function twoLabels(long,short){ return el('span','tile-l','<span class="lg-long">'+long+'</span><span class="lg-short">'+short+'</span>'); }
+
+function fireTile(f){
+  var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsMonths(f.days));
+  var when=f.date?isoMonthLabel(f.date):null;
+  var t=sumTile('t-fire',twoLabels('Financially free in','Free in'),null,{
+    title:'When your savings can pay for your life',
+    text:'Net worth grows by your savings and a real return, until it reaches 25 times a year of spending (the '+f.withdrawalRatePct+'% rule).',
+    rows:[['Average monthly spend',money(f.monthlyExpensePhp,true)],['× 12 × 25 = Target',money(f.targetPhp,true),true],
+          ['Net worth at the last close, less money lent',money(f.netWorthPhp,true)],['= Progress',f.progressPct+'%',true],
+          ['Average monthly savings',money(f.monthlySavingsPhp,true)],['Real return',f.realReturnPct+'% a year'],
+          ['= Free in',lead+(when?' ('+when+')':''),true]],
+    note:'Averages use the last 3 closed months. The date moves only at a month close, so the countdown falls by one day each day.'});
+  t.appendChild(el('div','fig',esc(lead)));
+  t.appendChild(bar6([[(f.progressPct||0)/100,'var(--pos)']]));
+  t.appendChild(el('div','tile-foot',f.days==null
+    ?'Saving '+money(f.monthlySavingsPhp,true)+' a month does not reach '+money(f.targetPhp,true)
+    :'<span class="hide-phone">'+money(f.netWorthPhp,true)+' of '+compactPhp(f.targetPhp)+(when?' · ':'')+'</span>'+(when?'On track for '+when:'')));
+  return t;
+}
+
+/* Emergency runway, from getInvestments (the Accounts card's payload, shared cache).
+ * The meter runs to 1.5 × the target, so the target tick sits at two thirds. */
+function fillRunway(t,rw){
+  t.innerHTML='';
+  var p=rw&&rw.parts, rows=[];
+  if(p){
+    rows.push(['Cash accounts',money(p.cashPhp,true)]);
+    if(p.efSharesPhp) rows.push(['+ Emergency fund shares',money(p.efSharesPhp,true)]);
+    rows.push(['− Credit you owe',money(-p.creditPhp,true)]);
+    if(p.owedPhp) rows.push(['− Money you owe (receivable)',money(-p.owedPhp,true)]);
+  }
+  if(rw){
+    rows.push(['= Reachable cash',money(rw.efPhp,true),true],['÷ Average monthly spend',money(rw.avgMonthlyExpensePhp,true)],
+              ['= Runway',rw.months==null?'—':rw.months+' months',true]);
+  }
+  var h=sumTile('',twoLabels('Emergency runway','Runway'),null,rw?{title:'How long your cash lasts',
+    text:'Money you can reach in a few days, divided by what you usually spend in a month.',rows:rows,
+    note:'Money you lent is left out, because you cannot reach it. Money you owe through a receivable comes off. Average spend uses the last 3 closed months.'}:null).firstChild;
+  t.appendChild(h);
+  if(!rw||rw.months==null){ t.appendChild(el('div','fig','—')); t.appendChild(el('div','tile-foot',rw?'No spending in the last 3 closed months':'Loading…')); return; }
+  var tm=rw.targetMonths, sev=rw.months>=tm?'pos':(rw.months>=tm/2?'warn':'neg');
+  t.appendChild(el('div','fig',rw.months+' months'));
+  t.appendChild(bar6([[rw.months/(tm*1.5),'var(--'+sev+')']],2/3));
+  t.appendChild(el('div','tile-foot','<span class="hide-phone">'+money(rw.efPhp,true)+' · </span>Target '+tm+' months'));
+}
+
+/* The history tile's two charts on ONE month axis: the same x per month, so a
+ * month is one column through both (DESIGN.md "Charts"). Pure of the page: it
+ * returns the two SVGs and the geometry, so test.js can read it. */
+function historyCharts(cf,liq,stk,isLive,W){
+  // A point scale, not equal columns: the first and last months sit at the edges,
+  // inset only by the width of a bar pair, so the lines use the whole tile.
+  var n=cf.length, gap=n>1?W/n:W, bw=Math.min(18,gap*0.22), pad=bw+3;
+  var step=n>1?(W-2*pad)/(n-1):0, cx=cf.map(function(m,i){ return n>1?pad+step*i:W/2; });
+  var shr=stk.map(function(p){ return Math.max(0,p.nw); }), tot=liq.map(function(p,i){ return p.nw+shr[i]; });
+  // Net worth: invested is the base band 0→shares, liquid a signed ribbon on top,
+  // so the top edge is the real total. The domain keeps zero in range: a month with
+  // a NEGATIVE net worth must draw below a marked zero, never read as positive.
+  var H1=140, T=8, B=4, hi=Math.max.apply(null,tot.concat(shr).concat([1]))*1.08, lo=Math.min(0,Math.min.apply(null,tot));
+  var y=function(v){ return T+(hi-v)/(hi-lo)*(H1-T-B); };
+  var s1=svgEl('svg',{class:'hist-svg',viewBox:'0 0 '+W+' '+H1,'aria-hidden':'true'});
+  cx.forEach(function(x){ s1.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:H1,stroke:'var(--track)','stroke-width':1})); });
+  var y0=y(0), fwd=function(a){ return cx.map(function(x,i){ return x+','+y(a[i]); }).join(' '); };
+  s1.appendChild(svgEl('polygon',{points:cx[0]+','+y0+' '+fwd(shr)+' '+cx[n-1]+','+y0,fill:'var(--gro)','fill-opacity':.45}));
+  s1.appendChild(svgEl('polygon',{points:fwd(shr)+' '+cx.slice().reverse().map(function(x,j){ return x+','+y(tot[n-1-j]); }).join(' '),
+    fill:'var(--accent)','fill-opacity':.3}));
+  if(lo<0) s1.appendChild(svgEl('line',{x1:0,y1:y0,x2:W,y2:y0,stroke:'var(--dim)','stroke-width':1,'stroke-dasharray':'3 3'}));
+  s1.appendChild(svgEl('polyline',{points:fwd(shr),fill:'none',stroke:'var(--gro)','stroke-width':1.5,'stroke-linejoin':'round'}));
+  s1.appendChild(svgEl('polyline',{points:fwd(tot),fill:'none',stroke:'var(--accent)','stroke-width':2.2,'stroke-linejoin':'round','stroke-linecap':'round'}));
+  // An estimated month (no snapshot, rolled back through cash flow) is a hollow ring.
+  liq.forEach(function(p,i){ if(!p.real) s1.appendChild(svgEl('circle',{cx:cx[i],cy:y(tot[i]),r:3,fill:'var(--card)',stroke:'var(--accent)','stroke-width':1.5})); });
+  // Cash flow: in left, out right (position is the second channel after colour).
+  var H2=110, T2=6, max=1; cf.forEach(function(m){ max=Math.max(max,m.income,m.expense); });
+  var s2=svgEl('svg',{class:'hist-svg',viewBox:'0 0 '+W+' '+H2,'aria-hidden':'true'});
+  cx.forEach(function(x){ s2.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:H2,stroke:'var(--track)','stroke-width':1})); });
+  cf.forEach(function(m,i){
+    var op=isLive&&i===n-1?.5:1, hI=m.income/max*(H2-T2), hO=m.expense/max*(H2-T2);
+    if(hI>=1) s2.appendChild(svgEl('path',{d:barPath(cx[i]-bw-2,H2-hI,bw,hI,3),fill:'var(--chart-in)','fill-opacity':op}));
+    if(hO>=1) s2.appendChild(svgEl('path',{d:barPath(cx[i]+2,H2-hO,bw,hO,3),fill:'var(--chart-out)','fill-opacity':op}));
+  });
+  return {nw:s1, cf:s2, cx:cx, step:step, pad:pad, bw:bw, y0:y0, yTot:tot.map(y), tot:tot, shr:shr};
+}
+
+var histHide=null;   // the open inspect line: one history tile exists, so one document listener
+document.addEventListener('pointerdown',function(e){ if(histHide&&!(e.target.closest&&e.target.closest('.hist-plot'))) histHide(); });
+
+function historyTile(cf,ser,isLive){
+  var n=cf.length, lbl=n===6?'Last 6 months':(n===12?'Last year':'Last '+n+' months');
+  var t=sumTile('t-hist',lbl);
+  var seg=el('div','seg');
+  [[6,'6M'],[12,'1Y'],[24,'2Y']].forEach(function(o){
+    var b=el('button',o[0]===S.cfMonths?'on':'',o[1]); b.type='button'; b.setAttribute('aria-pressed',o[0]===S.cfMonths);
+    b.onclick=function(){ if(S.cfMonths===o[0]) return; S.cfMonths=o[0]; prefSet('cfMonths',o[0]); render(); };
+    seg.appendChild(b);
+  });
+  t.firstChild.appendChild(seg);
+  var key=function(c,l){ return '<span class="lg"><span class="lg-key" style="background:'+c+'"></span>'+l+'</span>'; };
+  var plot=el('div','hist-plot');
+  plot.appendChild(el('div','hist-lg','<b>Net worth</b>'+key('var(--accent)','Liquid')+key('var(--gro)','Invested')));
+  var h1=el('div'); plot.appendChild(h1);
+  plot.appendChild(el('div','hist-lg','<b>Cash flow</b>'+key('var(--chart-in)','In')+key('var(--chart-out)','Out')));
+  var h2=el('div'); plot.appendChild(h2);
+  var line=el('div','hist-line'), tipBox=el('div','hist-tip'), hit=el('div','hist-hit');
+  line.hidden=tipBox.hidden=true;
+  hit.tabIndex=0; hit.setAttribute('role','img');
+  hit.setAttribute('aria-label','Net worth and cash flow by month. Use the arrow keys to read a month.');
+  plot.appendChild(line); plot.appendChild(tipBox); plot.appendChild(hit);
+  t.appendChild(plot);
+  var labels=el('div','hist-x');
+  t.appendChild(labels);
+  var cur=-1, g=null;
+  function show(i){
+    if(!g) return;
+    cur=i=Math.max(0,Math.min(n-1,i));
+    var m=cf[i], L=ser.liq[i], W=plot.clientWidth, px=g.cx[i]/g.W*W;
+    line.style.left=px+'px'; line.hidden=false;
+    var r=function(c,k,v){ return '<span>'+(c?'<span class="lg-key" style="background:'+c+'"></span>':'')+k+'</span><b>'+v+'</b>'; };
+    tipBox.innerHTML='<div class="hist-tip-t">'+esc(monthLabel(m.month))+(isLive&&i===n-1?' so far':'')+'</div><div class="hist-tip-rows">'+
+      r('var(--accent)','Liquid',money(L.nw,true))+r('var(--gro)','Invested',money(g.shr[i],true))+
+      r('','Net worth',money(g.tot[i],true)+(L.real?'':' <span class="est">est.</span>'))+
+      r('var(--chart-in)','In',money(m.income,true))+r('var(--chart-out)','Out',money(m.expense,true))+
+      r('','Saved',signedMoney(m.income-m.expense))+'</div>';
+    tipBox.hidden=false;
+    var tw=tipBox.offsetWidth;
+    tipBox.style.left=(px-tw-12>=0?px-tw-12:Math.min(px+12,W-tw))+'px';
+    histHide=hide;
+  }
+  function hide(){ line.hidden=tipBox.hidden=true; cur=-1; histHide=null; }
+  // The nearest month to the pointer, on the chart's own point scale.
+  function at(e){ if(!g) return 0; var b=hit.getBoundingClientRect(), x=(e.clientX-b.left)/b.width*g.W; return g.step?Math.round((x-g.pad)/g.step):0; }
+  hit.addEventListener('pointermove',function(e){ if(e.pointerType==='mouse') show(at(e)); });
+  hit.addEventListener('pointerleave',function(e){ if(e.pointerType==='mouse') hide(); });
+  hit.addEventListener('click',function(e){ show(at(e)); });   // touch and pen: a tap
+  hit.addEventListener('keydown',function(e){
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight'){ e.preventDefault(); show(cur<0?n-1:cur+(e.key==='ArrowLeft'?-1:1)); }
+    else if(e.key==='Escape') hide();
+  });
+  hit.addEventListener('blur',hide);
+  // Drawn at the host's real width, after mount (the skill's rAF chart rule).
+  requestAnimationFrame(function(){
+    if(!plot.isConnected) return;
+    var W=Math.max(240,h1.clientWidth);
+    g=historyCharts(cf,ser.liq,ser.stk,isLive,W); g.W=W;
+    h1.appendChild(g.nw); h2.appendChild(g.cf);
+    // Labels sit on the same x as the points. The end ones align to the bar pair's
+    // outer edge, so "Sep so far" never spills out of the tile.
+    var ls=labelStep(n,W);
+    cf.forEach(function(m,i){
+      var last=i===n-1, first=i===0&&n>1;
+      // A narrow step: the wide "so far" label would cover the label before it.
+      if((n-1-i)%ls!==0||(isLive&&g.step<60&&i===n-1-ls)) return;
+      var s=el('span',last?'on':'',esc(String(m.month).split('-')[1])+(last&&isLive?' so far':''));
+      if(last&&n>1){ s.style.right=((W-g.cx[i]-g.bw-2)/W*100)+'%'; }
+      else if(first){ s.style.left=((g.cx[i]-g.bw-2)/W*100)+'%'; }
+      else { s.style.left=(g.cx[i]/W*100)+'%'; s.style.transform='translateX(-50%)'; }
+      labels.appendChild(s);
+    });
+  });
+  return t;
+}
+
+function catTile(d){
+  var sc=d.spendByCategory||{}, total=0;
+  var cats=Object.keys(sc).map(function(k){ total+=sc[k]; return [k,sc[k]]; })
+    .filter(function(p){ return p[1]>0; }).sort(function(a,b){ return b[1]-a[1]; });
+  if(!cats.length) return null;
+  // One part-to-whole bar (HIG: bar marks for proportions, a gap between
+  // adjacent colours), coloured by segment, then the rows as its legend. Top 5,
+  // the tail folded into "Other", which opens in place to list what it holds.
+  // A category that nets to zero or below (refunds) has no slice, but still
+  // counts in the total; shares are of the positive sum, so the slices add to 100%.
+  var top=cats.slice(0,5), rest=cats.slice(5), pos=0;
+  cats.forEach(function(p){ pos+=p[1]; });
+  if(rest.length) top.push(['Other ('+rest.length+')',rest.reduce(function(s,p){ return s+p[1]; },0),true]);
+  var bc=(S.boot&&S.boot.categories)||{};
+  function col(p){ return p[2]?'var(--dim)':SEG_COLOR[bc[p[0]]&&bc[p[0]].Segment]||'var(--dim)'; }
+  function pct(v){ var x=v/pos*100; return (x<1?'<1':Math.round(x))+'%'; }
+  function row(p,cls){
+    var r=el(p[2]?'button':'div','cat-row'+(cls?' '+cls:''));
+    r.innerHTML='<span class="seg-dot" style="background:'+col(p)+'"></span><span class="cat-name"><span>'+esc(p[0])+'</span>'+
+      (p[2]?' '+icon('chevron'):'')+'</span><span class="cat-pct">'+pct(p[1])+'</span><span class="cat-val">'+money(p[1],true)+'</span>';
+    return r;
+  }
+  var t=sumTile('t-cats','Spending by category','<b>'+money(total,true)+'</b>');
+  var bar=bar6(top.map(function(p){ return [p[1]/pos,col(p)]; }));
+  bar.classList.add('cat-bar'); bar.setAttribute('role','img');
+  bar.setAttribute('aria-label',top.map(function(p){ return p[0]+' '+pct(p[1]); }).join(', '));
+  t.appendChild(bar);
+  top.forEach(function(p){
+    var r=row(p); t.appendChild(r);
+    if(!p[2]) return;
+    var sub=el('div','cat-sub'); rest.forEach(function(q){ sub.appendChild(row(q)); });
+    r.type='button'; t.appendChild(sub);
+    function set(open){ S.catOpen=open; r.setAttribute('aria-expanded',open); sub.hidden=!open; }
+    set(!!S.catOpen);
+    r.onclick=function(){ set(!S.catOpen); };
+  });
+  return t;
+}
+
+function recentTile(d){
+  var more=el('button','link-btn','See all'); more.type='button'; more.onclick=function(){ go('transactions'); };
+  var t=sumTile('t-recent','Recent'); t.firstChild.appendChild(more);
+  var rl=el('div','list'), rows=(d.recentTransactions||[]).slice(0,5);
+  rows.forEach(function(x){ rl.appendChild(txRow(x,{clickable:true})); });
+  if(!rows.length) rl.appendChild(el('div','empty','No transactions yet.'));
+  t.appendChild(rl);
+  return t;
+}
+
 function renderDashboard(){
   var key='dashboard|'+S.month+'|'+S.cfMonths;
   if(!S.cache[key]) loading('dashboard');
   return cachedCall(key, function(et){return gs('api_getDashboard',{month:S.month,months:S.cfMonths},et);}, function(d){
-    var w=el('div','screen cols');
+    var w=el('div','screen');
     var head=el('div','screen-head');
-    head.appendChild(el('div','screen-title','Dashboard'));
+    head.appendChild(el('div','screen-title','Summary'));
     head.appendChild(monthPickerEl());
     w.appendChild(head);
-
-    var cf=d.cashflow||[];
-    var cur=cf.length?cf[cf.length-1]:null, prev=cf.length>1?cf[cf.length-2]:null;
-    var prevLbl=prev?('vs '+String(prev.month).split('-')[1]):null;
-
-    // The two hero cards are ONE row at desktop width (see .hero-row in app.css):
-    // side by side in a multicol they land in different columns, keep their own
-    // heights and leave a ragged gap under the shorter one. The wrapper is
-    // display:contents until 1200px, so the phone stack is unchanged.
-    var heroes=el('div','hero-row wide'); w.appendChild(heroes);
-
-    // ── FI countdown: the top line, above net worth ──
-    // Every input is a closed month (api.js fireEta), so the target DATE holds still
-    // for the whole month and this number falls by exactly one day a day. It is here
-    // to be read first, before the balance it is made of.
-    var f=d.fire;
-    if(f){
-      var fc=el('div','stat hero');
-      var lead=f.days==null?'Not on this path':(f.days<=0?'Reached':yearsMonths(f.days));
-      var sub=f.days==null
-        ?'Saving '+money(f.monthlySavingsPhp,true)+'/mo is not enough to reach '+money(f.targetPhp,true)
-        :money(f.netWorthPhp,true)+' of '+money(f.targetPhp,true)+' · '+f.progressPct+'%'+
-         (f.date?' · on track for '+MONTHS[+f.date.slice(5,7)-1]+' '+f.date.slice(0,4):'');
-      // Same split bar the net-worth hero uses, so the two cards read as one system.
-      // The flex floors stop a 0% or 100% side collapsing the bar to nothing.
-      var pct=Math.max(0,Math.min(100,f.progressPct||0));
-      fc.innerHTML='<div class="stat-label">Financial independence in</div>'+
-        '<div class="stat-value">'+esc(lead)+'</div>'+
-        '<div class="split-bar"><div class="split-a" style="flex:'+Math.max(pct,0.0001)+'"></div>'+
-        '<div class="split-r" style="flex:'+Math.max(100-pct,0.0001)+'"></div></div>'+
-        '<div class="stat-sub">'+sub+'</div>'+
-        '<div class="stat-sub">'+f.withdrawalRatePct+'% rule · '+money(f.monthlyExpensePhp,true)+
-        '/mo spend · saving '+money(f.monthlySavingsPhp,true)+'/mo at '+f.realReturnPct+'% real</div>';
-      heroes.appendChild(fc);
-    }
-
-    // ── hero: net worth + asset/liability split bar ──
-    var hero=el('div','stat hero');
-    var assets=d.assets||0, liabAbs=Math.abs(d.liabilities||0);
-    hero.innerHTML='<div class="stat-label">Net worth</div><div class="stat-value">'+money(d.netWorth,true)+'</div>';
-    if(assets>0||liabAbs>0){
-      var sb=el('div','split-bar');
-      sb.innerHTML='<div class="split-a" style="flex:'+(assets||0.0001)+'"></div>'+
-        (liabAbs>0?'<div class="split-l" style="flex:'+liabAbs+'"></div>':'');
-      hero.appendChild(sb);
-      var lg=el('div','split-legend');
-      lg.innerHTML='<span><span class="lg-key" style="background:var(--chart-income)"></span>Assets <b>'+money(assets,true)+'</b></span>'+
-        '<span><span class="lg-key" style="background:var(--chart-neg)"></span>Liabilities <b>'+money(liabAbs,true)+'</b></span>';
-      hero.appendChild(lg);
-    }
-    heroes.appendChild(hero);
-
-    // ── KPI row ──
-    // A live (incomplete) month vs a finished month is a misleading delta, so
-    // deltas only show for completed months; the live month says "month to date".
-    var isLive=S.month===monthKey(new Date());
-    var monthSpend=0; Object.keys(d.spendBySegment||{}).forEach(function(k){monthSpend+=d.spendBySegment[k];});
-    var stats=el('div','grid grid-3 kpis wide');
-    var tIn=el('div','stat','<div class="stat-label">Income</div><div class="stat-value">'+money(cur?cur.income:null,true)+'</div>');
-    var dIn=!isLive&&cur&&prev?deltaEl(cur.income,prev.income,true,prevLbl):null;
-    if(dIn)tIn.appendChild(dIn); else if(isLive)tIn.appendChild(el('div','stat-sub','month to date'));
-    var sparkIn=sparklineSVG(cf.map(function(m){return m.income;}));
-    if(sparkIn)tIn.appendChild(sparkIn);
-    stats.appendChild(tIn);
-    var tSp=el('div','stat','<div class="stat-label">Spending</div><div class="stat-value">'+money(cur?cur.expense:monthSpend,true)+'</div>');
-    var dSp=!isLive&&cur&&prev?deltaEl(cur.expense,prev.expense,false,prevLbl):null;
-    if(dSp)tSp.appendChild(dSp); else if(isLive)tSp.appendChild(el('div','stat-sub','month to date'));
-    var spark=sparklineSVG(cf.map(function(m){return m.expense;}));
-    if(spark)tSp.appendChild(spark);
-    stats.appendChild(tSp);
-    var tInv=el('div','stat','<div class="stat-label">Invested</div><div class="stat-value">'+money(d.sharesValue,true)+'</div>');
-    tInv.appendChild(el('div','stat-sub','shares & funds'));
-    stats.appendChild(tInv);
-    w.appendChild(stats);
-
-    // ── cash flow + net worth — drawn after paint at the host's real width.
-    // Split net worth into liquid (cash, driven by the flow bars) and invested
-    // (shares, market-driven). The cash-flow line rides the LIQUID series so bars
-    // and line move together; the invested part gets its own stacked-area chart.
-    // netWorthSeries rolls the flows BACKWARD from the newest month, so that month
-    // needs a real anchor: the live figures on the live month, and the month's own
-    // snapshot on a past one (netWorthHistory carries every month but the live one).
-    // Without the second case a past month drew no line at all.
-    var liq=null, stk=null;
-    if(cf.length>=2){
-      var nwh=d.netWorthHistory||{}, sh=d.sharesHistory||{}, liqHist={}, lastM=cf[cf.length-1].month;
-      Object.keys(nwh).forEach(function(m){ liqHist[m]=nwh[m]-(sh[m]||0); });
-      var anchorNw=isLive?(d.netWorth||0):nwh[lastM], anchorSh=isLive?(d.sharesValue||0):sh[lastM];
-      if(anchorNw!=null){
-        liq=netWorthSeries(cf, anchorNw-(anchorSh||0), liqHist, true);
-        stk=netWorthSeries(cf, anchorSh||0, sh, false);
-      }
-    }
-    if(cf.length>=2){
-      var cc=el('div','card wide'), ch=el('div','card-h card-h-row');
-      ch.appendChild(el('span','',(liq?'Cash flow & liquid net worth':'Cash flow')+' · last '+cf.length+' months'));
-      ch.appendChild(rangePickerEl());
-      cc.appendChild(ch);
-      var cfHost=el('div'); cc.appendChild(cfHost);
-      w.appendChild(cc);
-      requestAnimationFrame(function(){
-        if(cfHost.isConnected) cfHost.appendChild(cashflowChart(cf, cfHost.clientWidth, liq));
-      });
-    }
-    var brc=null;   // built below, appended AFTER the net-worth chart so the two
-                    // full-width charts sit together in the desktop 2-col grid
-    // ── net-worth bridge: what moved net worth, and how much of it the ledger
-    // explains. Savings is income − expense for the month; the residual is market,
-    // FX and timing — and a residual that keeps running negative is spending nobody
-    // logged. Absent for a month whose predecessor has no snapshot yet. ──
-    if(d.bridge){
-      var br=d.bridge; brc=el('div','card');
-      brc.appendChild(el('div','card-h','Net worth bridge · '+esc(br.from)+' → '+
-        esc(br.month)+(br.live?' (live)':'')));
-      var rows=[['Net worth change',br.deltaNetWorth,'from '+money(br.startNetWorth,true)+' to '+money(br.endNetWorth,true)],
-                ['Saved',br.savings,'income − expense this month'],
-                ['Market, FX & timing',br.residual,'everything the ledger does not explain']];
-      var bl=el('div','list');
-      rows.forEach(function(x){
-        var r=el('div','litem');
-        r.innerHTML='<div class="grow"><div class="t1">'+esc(x[0])+'</div>'+
-          '<div class="t2">'+esc(x[2])+'</div></div>'+
-          '<div class="amt '+(x[1]>=0?'pos':'neg')+'">'+signedMoney(x[1])+'</div>';
-        bl.appendChild(r);
-      });
-      brc.appendChild(bl);
-    }
-
-    if(liq){
-      var nc=el('div','card wide');
-      nc.appendChild(el('div','card-h','Net worth · liquid vs invested · last '+cf.length+' months'));
-      var nwHost=el('div'); nc.appendChild(nwHost);
-      w.appendChild(nc);
-      requestAnimationFrame(function(){
-        if(nwHost.isConnected) nwHost.appendChild(netWorthAreaChart(liq, stk, nwHost.clientWidth));
-      });
-    }
-    if(brc) w.appendChild(brc);
-
-    // ── budgets — the whole Budgets screen, merged here in v2.14.0 ──
-    // It was a nav item showing a subset of what the Dashboard already drew (the
-    // same meterRow list, off the same budgetsPayload). Recurring & installments
-    // went to Accounts, beside the liabilities it is really about.
-    var pace=periodPace('Monthly',S.month);
-    var er=d.essentialsRewards;
-    if(er){
-      var ec=el('div','card hero');
-      var now=new Date(), daysLeft=isLive   // isLive: the KPI row already asked
-        ? (new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()) : null;
-      ec.innerHTML='<div class="card-h card-h-row"><span>Essentials + Rewards</span>'+
-        (daysLeft!=null?('<span class="dim" style="text-transform:none;letter-spacing:0">'+
-          daysLeft+' day'+(daysLeft===1?'':'s')+' left</span>'):'')+'</div>'+
-        '<div class="row-between"><div class="stat-value" style="font-size:26px">'+money(er.actualPhp,true)+'</div>'+
-        '<div class="dim">of '+money(er.targetPhp,true)+'</div></div>';
-      var em=el('div','meter '+(er.isOver?'over':((er.pctUsed||0)>=85?'warn':'')));
-      em.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,er.pctUsed||0)+'%"></div>';
-      if(pace!=null&&pace>0.02&&pace<0.98){
-        var pm=el('div','meter-pace'); pm.style.left='calc('+(pace*100)+'% - 1px)';
-        pm.title=Math.round(pace*100)+'% of the month has elapsed';
-        em.appendChild(pm);
-      }
-      ec.appendChild(em);
-      w.appendChild(ec);
-    }
-    if (d.budgets && d.budgets.length){
-      var bc=el('div','card');
-      bc.appendChild(el('div','card-h card-h-row','<span>Segment targets</span>'+
-        (d.incomePhp?('<span class="dim" style="text-transform:none;letter-spacing:0">planning income '+
-          money(d.incomePhp,true)+'/mo</span>'):'')));
-      d.budgets.forEach(function(b){ bc.appendChild(meterRow(b, periodPace(b.period,S.month))); });
-      w.appendChild(bc);
-    }
-
-    // ── expenses by category (donut) ──
-    // Spend is signed now (a refund is a negative expense row), and a category that
-    // nets zero or below has no slice to draw — an arc cannot have negative length.
-    // It still counts in the month total and in its budget meter.
-    var cats=Object.keys(d.spendByCategory||{}).map(function(k){return [k,d.spendByCategory[k]];})
-      .filter(function(p){return p[1]>0;})
-      .sort(function(a,b){return b[1]-a[1];});
-    var pie=cats.length?donutChart(cats):null;
-    if(pie){
-      var pc=el('div','card');
-      pc.appendChild(el('div','card-h','Expenses by category'));
-      pc.appendChild(pie);
-      w.appendChild(pc);
-    }
-
-    // ── recent transactions ──
-    var rc=el('div','card');
-    var rh=el('div','row-between'); rh.innerHTML='<div class="card-h" style="margin:0">Recent</div>';
-    var more=el('button','btn sm ghost','View all →'); more.onclick=function(){go('transactions');};
-    rh.appendChild(more); rc.appendChild(rh);
-    var rl=el('div','list'); rl.style.marginTop='8px';
-    (d.recentTransactions||[]).forEach(function(t){ rl.appendChild(txRow(t,{clickable:true})); });
-    if(!(d.recentTransactions||[]).length) rl.appendChild(el('div','empty','<span class="empty-ico">◌</span>No transactions yet.'));
-    rc.appendChild(rl); w.appendChild(rc);
-
+    var g=el('div','sum'); w.appendChild(g);
+    var cf=d.cashflow||[], isLive=S.month===monthKey(new Date()), ser=nwSeries(d,cf,isLive);
+    g.appendChild(nwTile(d,ser));
+    var lt=leftTile(d,isLive); if(lt) g.appendChild(lt);
+    var pair=el('div','t-pair'), rw=el('section','tile t-rw');
+    if(d.fire) pair.appendChild(fireTile(d.fire));
+    pair.appendChild(rw); fillRunway(rw,null);
+    g.appendChild(pair);
+    if(ser) g.appendChild(historyTile(cf,ser,isLive));
+    var ct=catTile(d); if(ct) g.appendChild(ct);
+    g.appendChild(recentTile(d));
     paint(w);
+    // Runway rides the Accounts screen's payload (no new route) and fills in when it lands.
+    cachedCall('investments', function(et){return gs('api_getInvestments',null,et);}, function(inv){
+      if(rw.isConnected) fillRunway(rw,inv.runway);
+    }).catch(function(){ var f=rw.querySelector('.tile-foot'); if(f) f.textContent='Not available offline'; });
   }).catch(showErr);
 }
 
-function tile(label,val,sub){
-  return el('div','stat','<div class="stat-label">'+esc(label)+'</div><div class="stat-value">'+
-    (typeof val==='string'?val:esc(val))+'</div>'+(sub?'<div class="stat-sub">'+esc(sub)+'</div>':''));
-}
 
 /* ════════════════════════════════════════════════════════════════════════
- *  TRANSACTIONS — browse by default; the Edit toggle turns the same list into
- *  the review surface (account rail + multi-select bulk edit + inline single-
- *  field edit). One list, one state slice, one row renderer for both modes.
+ *  ACTIVITY (screen key `transactions`). One filter object, S.tx.filters, drawn as
+ *  tokens in a search field. Browse by default; Select mode adds checkboxes, the
+ *  floating bulk bar and the inline single-field editors. From 1200px: a filter
+ *  pane and a table. Below: a list grouped by day and a Filters sheet.
  * ════════════════════════════════════════════════════════════════════════ */
-function renderTransactions(){
-  if(needBoot('list', renderTransactions)) return;
-  var w=el('div','screen');
+var TX_KEYS=['month','date','type','category','segment','account','source','minAmount','maxAmount','search'];
+var TOKEN_LABEL={month:'Month',date:'Date',type:'Type',category:'Category',segment:'Segment',account:'Account',
+  source:'Source',minAmount:'Amount',maxAmount:'Amount',search:'Text'};
+var TYPE_WORD={Expense:'Spent',Income:'Earned',Transfer:'Moved'};
+var SOURCES={tg:'Telegram',gm:'Gmail',ui:'App',interest:'Interest',legacy:'Legacy'};
+var SOURCE_WORDS={tg:['telegram','bot'],gm:['gmail','email','mail'],ui:['app'],interest:['interest'],legacy:['legacy','sheet']};
+var WIDE_MQ=window.matchMedia?matchMedia('(min-width:1200px)'):null;
+function txWide(){ return !!(WIDE_MQ&&WIDE_MQ.matches); }
+if(WIDE_MQ&&WIDE_MQ.addEventListener) WIDE_MQ.addEventListener('change',function(){ if(S.screen==='transactions') renderTransactions(); });
 
-  var head=el('div','screen-head');
-  head.appendChild(el('div','screen-title','Transactions'));
-  var toggle=el('button','btn sm'+(S.tx.edit?' primary':''), S.tx.edit?'Done':'✎ Edit');
-  toggle.title=S.tx.edit?'Back to browsing':'Bulk edit, inline edit and account rail';
-  toggle.onclick=function(){ S.tx.edit=!S.tx.edit; clearSel(); renderTransactions(); };
-  head.appendChild(toggle);
-  w.appendChild(head);
-
-  // sticky bulk-action bar (edit mode only; hidden until a selection exists)
-  if(S.tx.edit){ var bar=el('div','bulk-bar'); bar.id='bulkBar'; bar.hidden=true; w.appendChild(bar); }
-
-  // filters
-  var f=el('div','filters');
-  // Distinguish unset (→ current period) from an explicit '' ("all months"); '' meant
-  // the combo showed a specific month while the list fetched everything.
-  var seedMonth=S.tx.filters.month===undefined?S.month:(S.tx.filters.month===''?'(all months)':S.tx.filters.month);
-  var fMonth=comboEl([{value:'(all months)',label:'(all months)'}].concat(monthOptions()), seedMonth);
-  var fType=comboEl(['(all types)','Income','Expense','Transfer'], S.tx.filters.type||'(all types)');
-  var cats=Object.keys((S.boot.categories)||{}).sort();
-  var fCat=comboEl(['(all categories)'].concat(cats), S.tx.filters.category||'(all categories)');
-  var fAcc=comboEl([{value:'(all accounts)',label:'(all accounts)'}].concat(acctOptions()), S.tx.filters.account||'(all accounts)');
-  fAcc.id='fAcc';   // the account rail writes the picked account back into this combo
-  var fSearch=el('input','search'); fSearch.placeholder='Search…'; fSearch.value=S.tx.filters.search||'';
-  var fDate=inputEl('date', S.tx.filters.date||''); fDate.title='Filter by date';
-  // data-f names the S.tx.filters key each control writes, so markActiveFilters() can
-  // light the ones that are narrowing the list without holding these locals.
-  fMonth.dataset.f='month'; fType.dataset.f='type'; fCat.dataset.f='category';
-  fAcc.dataset.f='account'; fDate.dataset.f='date'; fSearch.dataset.f='search';
-  [fMonth,fType,fCat,fAcc].forEach(function(s){s.onchange=applyFilters;});
-  // A day and a month are two ways to say the same thing, so a picked date drops the
-  // month rather than silently AND-ing with it (a date outside the month = no rows).
-  fDate.onchange=function(){ if(fDate.value) fMonth.value='(all months)'; applyFilters(); };
-  var st; fSearch.oninput=function(){clearTimeout(st);st=setTimeout(applyFilters,350);};
-  f.appendChild(fSearch); f.appendChild(fDate); f.appendChild(fMonth); f.appendChild(fType); f.appendChild(fCat); f.appendChild(fAcc);
-  w.appendChild(f);
-
-  function applyFilters(){
-    S.tx.filters={
-      month: fMonth.value.indexOf('(all')===0?'':fMonth.value,
-      type: fType.value.indexOf('(all')===0?'':fType.value,
-      category: fCat.value.indexOf('(all')===0?'':fCat.value,
-      account: fAcc.value.indexOf('(all')===0?'':fAcc.value,
-      date: fDate.value,
-      search: fSearch.value.trim()
-    };
-    S.tx.offset=0; markActiveFilters(); loadTx(w);
+// The tokens a filter object shows, in field order. month '' = "all months": no token.
+function activeTokens(f){
+  return TX_KEYS.filter(function(k){ return f[k]!=null&&f[k]!==''; }).map(function(k){ return {k:k,v:String(f[k])}; });
+}
+function tokenText(k,v){
+  if(k==='month'){ var d=monthKey2date(v); return d?MONTHS_FULL[d.getMonth()]+' '+d.getFullYear():String(v); }
+  if(k==='date') return fmtDate(v);
+  if(k==='type') return TYPE_WORD[v]||v;
+  if(k==='source') return SOURCES[v]||v;
+  if(k==='minAmount') return '≥ '+money(v,true);
+  if(k==='maxAmount') return '≤ '+money(v,true);
+  if(k==='search') return '“'+v+'”';
+  return String(v);
+}
+function amountOf(s){
+  var m=/^₱?\s*(\d[\d,]*\.?\d*|\.\d+)\s*(k)?$/i.exec(String(s).trim()); if(!m) return null;
+  var n=parseFloat(m[1].replace(/,/g,'')); return isNaN(n)?null:(m[2]?n*1000:n);
+}
+// "aug", "august 2025", "2025-aug", "this month" → "2025-Aug". A bare month name is
+// the latest one not in the future.
+function monthFromText(lo, now){
+  if(lo.length>=4&&'this month'.indexOf(lo)===0) return monthKey(now);
+  if(lo.length>=4&&'last month'.indexOf(lo)===0) return monthKey(new Date(now.getFullYear(),now.getMonth()-1,1));
+  var m=/^(?:(\d{4})[\s-]*)?([a-z]{3,})(?:[\s-]*(\d{4}))?$/.exec(lo); if(!m) return null;
+  for(var i=0;i<12;i++) if(MONTHS_FULL[i].toLowerCase().indexOf(m[2])===0) break;
+  if(i===12) return null;
+  var y=+(m[1]||m[3])||(i<=now.getMonth()?now.getFullYear():now.getFullYear()-1);
+  return y+'-'+MONTHS[i];
+}
+// "sep 17", "17 september", "sep 17 2025", "9/17", "9/17/2025" → "2026-09-17".
+// No year = the latest one not in the future.
+function dateFromText(lo, now){
+  var m=/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/.exec(lo), mo, d, y;
+  if(m){ mo=+m[1]-1; d=+m[2]; y=m[3]; }
+  else {
+    m=/^([a-z]{3,})\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?$/.exec(lo);
+    var r=/^(\d{1,2})\s+([a-z]{3,})\.?(?:,?\s+(\d{4}))?$/.exec(lo);
+    if(!m&&r) m=[r[0],r[2],r[1],r[3]];
+    if(!m) return null;
+    for(mo=0;mo<12;mo++) if(MONTHS_FULL[mo].toLowerCase().indexOf(m[1])===0) break;
+    d=+m[2]; y=m[3];
   }
-
-  var listCard=el('div','card'); listCard.id='txListCard';
-  listCard.innerHTML=skRows(7);
-  // edit mode adds the account rail beside the list; browsing keeps the list full-width
-  if(S.tx.edit){
-    var split=el('div','tx-split');
-    var rail=el('div','tx-rail card'); rail.id='txAccts'; rail.innerHTML=skRows(6);
-    split.appendChild(rail); split.appendChild(listCard);
-    w.appendChild(split);
-  } else {
-    w.appendChild(listCard);
+  if(!(mo>=0&&mo<12)||d<1) return null;
+  if(!y){ y=now.getFullYear(); if(new Date(y,mo,d)>now) y--; }
+  var dt=new Date(+y,mo,d);
+  return dt.getMonth()===mo?isoDate(dt):null;
+}
+/* The token grammar: what the typed text could mean, best guess first. The field's
+ * dropdown shows these; Enter takes the first. ctx = {categories, accounts, segments, now}.
+ *   "exact words" → Text only · >500 ≥500 <1k ≤300 → Amount only · 2026-09-18 → Date only
+ *   sep 17, 17 sep, 9/17 → Date first, then Text
+ *   otherwise any of: Month, Type (spent/earned/moved), Source (gmail, telegram…),
+ *   Segment, Amount (a bare number = at least), the 3 best Category and Account
+ *   matches, and always Text contains. */
+function parseTokens(text, ctx){
+  var q=String(text||'').trim(), lo=q.toLowerCase(), out=[];
+  if(!q) return out;
+  var quoted=/^"([^"]+)"?$/.exec(q);
+  if(quoted) return [{k:'search',v:quoted[1]}];
+  var cmp=/^(>=|<=|>|<|≥|≤)\s*(.+)$/.exec(q), n=cmp?amountOf(cmp[2]):null;
+  if(n!=null) return [{k:/[>≥]/.test(cmp[1])?'minAmount':'maxAmount',v:String(n)}];
+  if(/^\d{4}-\d{2}-\d{2}$/.test(q)) return [{k:'date',v:q}];
+  var dd=dateFromText(lo, ctx.now||new Date()); if(dd) out.push({k:'date',v:dd});
+  var mk=monthFromText(lo, ctx.now||new Date()); if(mk) out.push({k:'month',v:mk});
+  function starts(words){ return lo.length>=2&&words.some(function(w){ return w.indexOf(lo)===0; }); }
+  if(starts(['spent','expense','expenses'])) out.push({k:'type',v:'Expense'});
+  if(starts(['earned','income'])) out.push({k:'type',v:'Income'});
+  if(starts(['moved','transfer','transfers'])) out.push({k:'type',v:'Transfer'});
+  Object.keys(SOURCE_WORDS).forEach(function(s){ if(starts(SOURCE_WORDS[s])) out.push({k:'source',v:s}); });
+  (ctx.segments||[]).forEach(function(s){ if(starts([s.toLowerCase()])) out.push({k:'segment',v:s}); });
+  n=amountOf(q); if(n!=null) out.push({k:'minAmount',v:String(n)});
+  function best(k,list){
+    list.map(function(s){ return {s:s,sc:fuzzyScore(q,s)}; }).filter(function(x){ return x.sc>=0; })
+      .sort(function(a,b){ return b.sc-a.sc; }).slice(0,3).forEach(function(x){ out.push({k:k,v:x.s}); });
   }
-  paint(w);
-
-  // default filter month to selected period on first open
-  if (S.tx.filters.month===undefined) S.tx.filters.month=S.month;
-  markActiveFilters();
-  loadTx(w);
-  if(S.tx.edit){ loadTxAccts(); updateBulkBar(); }
+  best('category',ctx.categories||[]); best('account',ctx.accounts||[]);
+  out.push({k:'search',v:q});
+  return out;
+}
+function tokenCtx(){
+  var c=(S.boot&&S.boot.categories)||{}, segs={};
+  Object.keys(c).forEach(function(k){ if(c[k].Segment) segs[c[k].Segment]=1; });
+  return {categories:Object.keys(c).sort(), accounts:acctOptions().map(function(o){ return o.value; }),
+          segments:Object.keys(segs), now:new Date()};
 }
 
-/* —— account rail (edit mode): balances beside the list, click to filter —— */
-function loadTxAccts(){
+// One filter in or out. A day and a month are two ways to say one thing, so each
+// clears the other (a date outside the month would return nothing).
+function setTxFilter(k,v,refocus){
+  var f=S.tx.filters;
+  if(v===''||v==null){ if(k==='month') f.month=''; else delete f[k]; }
+  else { f[k]=String(v); if(k==='date') f.month=''; if(k==='month') delete f.date; }
+  S.tx.offset=0; clearSel(); renderTransactions();
+  if(refocus){ var i=$('#tokInput'); if(i) i.focus(); }
+}
+function setTxFilters(f){ S.tx.filters=f; S.tx.offset=0; clearSel(); renderTransactions(); }
+
+/* —— smart lists: built-in presets in code, saved ones in meta.smart_lists —— */
+function builtinLists(){
+  var out=[{name:'This month',filters:{month:monthKey(new Date())}},
+           {name:'Big spends, ₱5,000+',filters:{type:'Expense',minAmount:'5000'}}];
+  out.push({name:'From Gmail',filters:{source:'gm'}},{name:'From Telegram',filters:{source:'tg'}});
+  return out;
+}
+function savedLists(){ return (S.boot&&S.boot.smartLists)||[]; }
+// A list without a month means every month, not "the Summary's month".
+function listFilters(l){ return Object.assign({month:''},l.filters); }
+function filterSig(f){ return TX_KEYS.map(function(k){ return f[k]==null?'':String(f[k]); }).join('|'); }
+function isListOn(l){ return filterSig(listFilters(l))===filterSig(S.tx.filters); }
+function cleanFilters(f){ var o={}; TX_KEYS.forEach(function(k){ if(f[k]!=null&&f[k]!=='') o[k]=String(f[k]); }); return o; }
+function putSmartLists(lists, msg){
+  return gs('api_setSmartLists',{lists:lists}).then(function(res){
+    if(S.boot) S.boot.smartLists=res.smartLists;
+    toast(msg,'ok'); if(S.screen==='transactions') renderTransactions();
+  }).catch(showErr);
+}
+function openSaveList(){
+  if(!activeTokens(S.tx.filters).length){ toast('Add a filter first','err'); return; }
+  if(savedLists().length>=20){ toast('You can keep 20 smart lists','err'); return; }
+  var name=inputEl('text','','e.g. Food over ₱1,000');
+  var save=el('button','btn primary','Save');
+  save.onclick=function(){
+    var n=name.value.trim(); if(!n){ toast('Give the list a name','err'); return; }
+    closeModal();
+    putSmartLists(savedLists().concat([{name:n,filters:cleanFilters(S.tx.filters)}]),'Saved “'+n+'”');
+  };
+  openModal(modalShell('Save as a smart list', fieldEl('Name',name,activeTokens(S.tx.filters).map(function(t){ return tokenText(t.k,t.v); }).join(' · ')), [save]));
+  setTimeout(function(){ name.focus(); },50);
+}
+function deleteList(i){
+  var l=savedLists()[i];
+  putSmartLists(savedLists().filter(function(_,j){ return j!==i; }),'Removed “'+l.name+'”');
+}
+
+function renderTransactions(){
+  if(needBoot('list', renderTransactions)) return;
+  if(S.tx.filters.month===undefined) S.tx.filters.month=S.month;   // first open: the Summary's month
+  var sel=!!S.tx.edit, wide=txWide();
+  var w=el('div','screen act'+(sel?' selecting':''));
+  var body=el('div','act-body'); w.appendChild(body);
+  if(wide) body.appendChild(filterPane());
+  var main=el('div','act-main'); body.appendChild(main);
+
+  var head=el('div','screen-head act-head');
+  head.appendChild(el('div','screen-title','Activity'));
+  var tg=el('button',sel?'btn sm primary':'link-btn act-sel',sel?'Done':'Select'); tg.type='button';
+  tg.onclick=function(){ S.tx.edit=!S.tx.edit; clearSel(); renderTransactions(); };
+  head.appendChild(tg);
+  main.appendChild(head);
+  main.appendChild(tokenField());
+
+  if(wide){
+    var bar=el('div','act-bar');
+    bar.appendChild(typeSeg(S.tx.filters.type,function(v){ setTxFilter('type',v); }));
+    bar.appendChild(el('span','act-hint','Click a category, account or date in the list to filter by it.'));
+    main.appendChild(bar);
+  } else {
+    var chips=el('div','chips');
+    var n=activeTokens(S.tx.filters).length;
+    var fb=el('button','chip dark',icon('filter')+'Filters'+(n?' · '+n:'')); fb.type='button'; fb.onclick=openFilterSheet;
+    chips.appendChild(fb);
+    builtinLists().concat(savedLists()).forEach(function(l){
+      var on=isListOn(l), c=el('button','chip'+(on?' on':''),esc(l.name)); c.type='button';
+      c.onclick=function(){ setTxFilters(on?{month:''}:listFilters(l)); };
+      chips.appendChild(c);
+    });
+    main.appendChild(chips);
+  }
+  var cnt=el('div','act-count'); cnt.id='txCount'; main.appendChild(cnt);
+  var list=el('div','act-list'); list.id='txListCard'; list.innerHTML=skTile(skRows(6)); main.appendChild(list);
+  var bb=el('div','bulk-bar'); bb.id='bulkBar'; bb.hidden=true; main.appendChild(bb);
+  paint(w);
+  loadTx(w);
+}
+
+function typeSeg(cur, onPick){
+  var s=el('div','seg');
+  [['','All'],['Expense','Spent'],['Income','Earned'],['Transfer','Moved']].forEach(function(o){
+    var b=el('button',(cur||'')===o[0]?'on':'',o[1]); b.type='button';
+    b.setAttribute('aria-pressed',(cur||'')===o[0]); b.onclick=function(){ onPick(o[0]); };
+    s.appendChild(b);
+  });
+  return s;
+}
+
+/* The search field: active filters as tokens, typed text as suggestions. */
+function tokenField(){
+  var wrap=el('div','tok-wrap'), box=el('label','tok-field');
+  box.innerHTML=icon('search');
+  activeTokens(S.tx.filters).forEach(function(t){
+    var c=el('span','tok','<span class="tok-f">'+esc(TOKEN_LABEL[t.k])+'</span>'+esc(tokenText(t.k,t.v)));
+    var x=el('button','tok-x',icon('close')); x.type='button'; x.setAttribute('aria-label','Remove the '+TOKEN_LABEL[t.k]+' filter');
+    x.onclick=function(e){ e.preventDefault(); setTxFilter(t.k,'',true); };
+    c.appendChild(x); box.appendChild(c);
+  });
+  var inp=el('input'); inp.id='tokInput'; inp.type='text'; inp.autocomplete='off'; inp.spellcheck=false;
+  inp.placeholder='Search'; inp.setAttribute('enterkeyhint','search'); inp.setAttribute('aria-label','Search or add a filter');
+  box.appendChild(inp);
+  var menu=el('div','tok-menu'); menu.hidden=true; menu.setAttribute('role','listbox');
+  wrap.appendChild(box); wrap.appendChild(menu);
+  var sugg=[], act=0;
+  function mark(){ Array.prototype.forEach.call(menu.querySelectorAll('.tok-opt'),function(o,i){ o.classList.toggle('on',i===act); }); }
+  function draw(){
+    sugg=parseTokens(inp.value,tokenCtx()).slice(0,7); act=0; menu.innerHTML='';
+    if(!sugg.length){ menu.hidden=true; return; }
+    sugg.forEach(function(s,i){
+      var o=el('div','tok-opt','<span class="tok-f">'+esc(TOKEN_LABEL[s.k])+'</span><span class="tok-v">'+
+        esc(s.k==='search'?'contains “'+s.v+'”':tokenText(s.k,s.v))+'</span>');
+      o.setAttribute('role','option');
+      o.onmousedown=function(e){ e.preventDefault(); };   // keep the focus, or the blur closes the menu first
+      o.onclick=function(){ setTxFilter(s.k,s.v,true); };
+      o.onmouseenter=function(){ act=i; mark(); };
+      menu.appendChild(o);
+    });
+    menu.appendChild(el('div','tok-hint','Try: >500 · aug · transfer · gmail · "exact words"'));
+    mark(); menu.hidden=false;
+  }
+  inp.oninput=draw;
+  inp.onfocus=function(){ if(inp.value) draw(); };
+  inp.onblur=function(){ setTimeout(function(){ menu.hidden=true; },120); };
+  inp.onkeydown=function(e){
+    if(e.key==='ArrowDown'&&!menu.hidden){ e.preventDefault(); act=Math.min(sugg.length-1,act+1); mark(); }
+    else if(e.key==='ArrowUp'&&!menu.hidden){ e.preventDefault(); act=Math.max(0,act-1); mark(); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(sugg[act]&&!menu.hidden) setTxFilter(sugg[act].k,sugg[act].v,true); }
+    else if(e.key==='Escape'&&!menu.hidden){ e.stopPropagation(); menu.hidden=true; }
+    else if(e.key==='Backspace'&&!inp.value){
+      var last=activeTokens(S.tx.filters).pop(); if(last) setTxFilter(last.k,'',true);
+    }
+  };
+  return wrap;
+}
+
+/* —— PC filter pane: smart lists, then the accounts with balances —— */
+function filterPane(){
+  var p=el('aside','act-pane');
+  p.appendChild(el('div','pane-h','Smart lists'));
+  function row(label,on,fn,del){
+    var r=el('div','pane-row'+(on?' on':'')), b=el('button','pane-btn',label); b.type='button'; b.onclick=fn; r.appendChild(b);
+    if(del){ var x=el('button','pane-x',icon('close')); x.type='button'; x.setAttribute('aria-label','Delete this smart list'); x.onclick=del; r.appendChild(x); }
+    p.appendChild(r);
+  }
+  var all={filters:{}};
+  row('All activity',isListOn(all),function(){ setTxFilters({month:''}); });
+  builtinLists().forEach(function(l){ row(esc(l.name),isListOn(l),function(){ setTxFilters(listFilters(l)); }); });
+  savedLists().forEach(function(l,i){ row(esc(l.name),isListOn(l),function(){ setTxFilters(listFilters(l)); },function(){ deleteList(i); }); });
+  var sv=el('button','link-btn pane-add','Save as a smart list'); sv.type='button'; sv.onclick=openSaveList;
+  p.appendChild(sv);
+  p.appendChild(el('div','pane-h','Accounts'));
+  var host=el('div'); host.id='paneAccts'; host.innerHTML=skRows(4); p.appendChild(host);
+  loadPaneAccts(host);   // the host itself: a cached answer lands before paint() attaches it
+  return p;
+}
+function loadPaneAccts(host){
   return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
-    var host=$('#txAccts'); if(!host) return;
+    host=host||$('#paneAccts'); if(!host) return;
     host.innerHTML='';
-    host.appendChild(el('div','card-h','Accounts'));
-    var all=el('div','litem click rail'+(!S.tx.filters.account?' sel':''));
-    all.innerHTML='<div class="grow"><div class="t1">All accounts</div></div>';
-    all.onclick=function(){ pickRailAccount(''); };
-    host.appendChild(all);
-    var groups={};
-    (res.accounts||[]).forEach(function(a){var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
-    Object.keys(groups).sort().forEach(function(t){
-      host.appendChild(el('div','rail-grp',esc(t)));
-      groups[t].forEach(function(a){ host.appendChild(acctRailRow(a)); });
+    (res.accounts||[]).forEach(function(a){
+      var on=S.tx.filters.account===a.name;
+      var r=el('div','pane-row'+(on?' on':'')), b=el('button','pane-btn',
+        '<span class="acct-dot" style="background:'+(isHex6(a.color)?a.color:'var(--dim)')+'"></span>'+
+        '<span class="pane-n">'+esc(a.name)+'</span><span class="pane-v'+(a.isLiability?' neg':'')+'">'+esc(acctMain(a))+'</span>');
+      b.type='button'; b.onclick=function(){ setTxFilter('account',on?'':a.name); };
+      r.appendChild(b); host.appendChild(r);
     });
   }).catch(showErr);
 }
 
-// The rail and the account combo drive the SAME filter field, so a rail click has to
-// write the combo too or it sits there showing a stale account.
-function pickRailAccount(name){
-  S.tx.filters.account=name;
-  var c=$('#fAcc'); if(c) c.value=name||'(all accounts)';
-  S.tx.offset=0; markActiveFilters(); loadTxAccts(); loadTx();
-}
-
-/* Border-highlight every filter control that is currently narrowing the list. */
-function markActiveFilters(){
-  document.querySelectorAll('.filters [data-f]').forEach(function(e){
-    e.classList.toggle('on', !!S.tx.filters[e.dataset.f]);
-  });
-}
-
-function acctRailRow(a){
-  var sel=S.tx.filters.account===a.name;
-  var r=el('div','litem click rail'+(sel?' sel':''));
-  var avail=a.creditLimit?'<div class="t2">'+money(a.availableCredit)+' avail</div>':'';
-  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
-    '<div class="grow"><div class="t1">'+esc(a.name)+'</div>'+avail+'</div>'+
-    acctAmtHtml(a);
-  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
-    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
-    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
+/* —— phone/iPad Filters sheet: edits a draft, Done applies it —— */
+function openFilterSheet(){
+  var d=Object.assign({},S.tx.filters), node=el('div','fsheet');
+  function apply(){ if(d.date) d.month=''; closeModal(); setTxFilters(d); }
+  function combo(opts,key){
+    var c=comboEl([{value:'',label:'Any'}].concat(opts), d[key]||'');
+    c.onchange=function(){ d[key]=c.value; if(key==='month'&&c.value) delete d.date; };
+    return c;
   }
-  r.onclick=function(){ pickRailAccount(a.name); };
-  return r;
+  function draw(){
+    node.innerHTML='<div class="sheet-grab fs-grab"></div>';
+    var h=el('div','fs-h'), rs=el('button',null,'Reset'), dn=el('button','b','Done');
+    rs.type=dn.type='button'; rs.onclick=function(){ d={month:''}; draw(); }; dn.onclick=apply;
+    h.appendChild(rs); h.appendChild(el('b',null,'Filters')); h.appendChild(dn); node.appendChild(h);
+    var b=el('div','fs-b'); node.appendChild(b);
+    function sec(label,child){ var s=el('div','fs-sec'); s.appendChild(el('div','fs-l',label)); s.appendChild(child); b.appendChild(s); }
+    var sl=el('div','fs-chips');
+    builtinLists().concat(savedLists()).forEach(function(l){
+      var on=filterSig(listFilters(l))===filterSig(d), c=el('button','chip'+(on?' on':''),esc(l.name)); c.type='button';
+      c.onclick=function(){ d=on?{month:''}:listFilters(l); draw(); };
+      sl.appendChild(c);
+    });
+    sec('Smart lists',sl);
+    sec('Type',typeSeg(d.type,function(v){ d.type=v; draw(); }));
+    var g=el('div','fs-group');
+    function row(label,ctl){ var r=el('div','fs-row'); r.appendChild(el('span',null,label)); r.appendChild(ctl); g.appendChild(r); }
+    var cats=(S.boot&&S.boot.categories)||{}, segs={};
+    Object.keys(cats).forEach(function(k){ if(cats[k].Segment) segs[cats[k].Segment]=1; });
+    row('Month',combo(monthOptions(),'month'));
+    var di=inputEl('date',d.date||''); di.onchange=function(){ d.date=di.value; }; row('Date',di);
+    row('Category',combo(Object.keys(cats).sort(),'category'));
+    row('Segment',combo(Object.keys(segs),'segment'));
+    row('Added from',combo(Object.keys(SOURCES).map(function(k){ return {value:k,label:SOURCES[k]}; }),'source'));
+    b.appendChild(g);
+    var ac=el('div','fs-chips');
+    acctOptions().forEach(function(o){
+      var on=d.account===o.value, c=el('button','chip'+(on?' on':''),dotHTML(o.color)+esc(o.value)); c.type='button';
+      c.onclick=function(){ d.account=on?'':o.value; draw(); };
+      ac.appendChild(c);
+    });
+    sec('Accounts',ac);
+    var am=el('div','fs-amt');
+    [['minAmount','At least'],['maxAmount','At most']].forEach(function(x){
+      var i=inputEl('text',d[x[0]]||'','Any'); i.inputMode='decimal';
+      i.onchange=function(){ var n=amountOf(i.value); d[x[0]]=n==null?'':String(n); };
+      var l=el('label','fs-in'); l.appendChild(el('span',null,x[1])); l.appendChild(i); am.appendChild(l);
+    });
+    sec('Amount',am);
+    var f=el('div','fs-f'), go=el('button','btn primary','Show results'), sv=el('button','link-btn','Save as a smart list');
+    go.type=sv.type='button'; go.onclick=apply;
+    sv.onclick=function(){ apply(); openSaveList(); };
+    f.appendChild(go); f.appendChild(sv); node.appendChild(f);
+  }
+  draw();
+  openModal(node, {sheet:true});
 }
 
-// silent: skip the full-card spinner (keep optimistic rows on screen until fresh
-// server data lands, so an added/deleted row transitions smoothly instead of flashing).
+// silent: skip the skeleton (keep optimistic rows on screen until fresh server data
+// lands, so an added/deleted row transitions smoothly instead of flashing).
 function loadTx(w, silent){
   var st={filters:S.tx.filters, offset:S.tx.offset, limit:S.tx.limit};
   var key='tx|'+JSON.stringify(S.tx.filters||{})+'|'+S.tx.offset+'|'+S.tx.limit;
-  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skRows(7);
+  var card=$('#txListCard'); if(card && !silent && !S.cache[key]) card.innerHTML=skTile(skRows(6));
   return cachedCall(key, function(et){return fetchTxPage(st,et);}, function(res){
-    S.tx.total=res.total; S.tx.rows=res.transactions;
+    S.tx.total=res.total; S.tx.net=res.net; S.tx.rows=res.transactions;
     renderTxList();
   }).catch(showErr);
 }
 
+// Signed peso effect of one row: income adds, expense subtracts, a transfer moves
+// money and counts 0. A refund is a negative Expense, so it ADDS back.
+function txNet(t){
+  var php=Number(t['Amount (PHP)'])||0;
+  return String(t.Type)==='Expense'?-php:(String(t.Type)==='Income'?php:0);
+}
+function fmtNet(n){ n=Math.round(n*100)/100; return (n>0?'+':(n<0?'−':''))+money(Math.abs(n),true); }
 // Bucket rows into day groups (display order preserved) with each day's net.
-// Used by the transactions list in both browse and edit mode.
 function groupByDay(rows){
   var groups=[], byDate={};
   (rows||[]).forEach(function(t){
     var d=fmtDate(t.Date);
     if(!byDate[d]){ byDate[d]={label:d,rows:[],net:0,date:t.Date}; groups.push(byDate[d]); }
     byDate[d].rows.push(t);
-    // Signed, not absolute: a refund is a negative Expense, so subtracting it ADDS
-    // back to the day's net — which is what a refund does to the balance.
-    var php=Number(t['Amount (PHP)'])||0;
-    if(String(t.Type)==='Expense') byDate[d].net-=php;
-    else if(String(t.Type)==='Income') byDate[d].net+=php;
+    byDate[d].net+=txNet(t);
   });
   return groups;
 }
 function dayHeadEl(g){
-  var dt=parseDate(g.date), day=dt?DAYS[dt.getDay()]+' · ':'';
-  var net=Math.round(g.net*100)/100;
-  var iso=isoDate(g.date), on=iso&&S.tx.filters.date===iso;
-  var h=el('div','list-date','<span class="ld-date'+(on?' on':'')+'">'+esc(day+g.label)+'</span>'+
-    (net?('<span class="ld-sum '+(net>0?'pos':'')+'">'+(net>0?'+':'−')+money(Math.abs(net),true)+'</span>'):''));
-  var d=$('.ld-date',h);
-  d.title=on?'Show every date again':'Show only this date';
-  d.onclick=function(){ pickTxDate(on?'':iso); };
+  var dt=parseDate(g.date), iso=isoDate(g.date), on=iso&&S.tx.filters.date===iso;
+  var label=dt?DAYS[dt.getDay()]+', '+dt.getDate()+' '+MONTHS_FULL[dt.getMonth()]+
+    (dt.getFullYear()!==new Date().getFullYear()?' '+dt.getFullYear():''):g.label;
+  var h=el('div','day-h','<button type="button" class="ld-date'+(on?' on':'')+'">'+esc(label)+'</button>'+
+    (Math.round(g.net)?'<span class="'+(g.net>0?'pos':'')+'">'+fmtNet(g.net)+'</span>':''));
+  var b=$('.ld-date',h);
+  b.title=on?'Show every date again':'Show only this date';
+  b.onclick=function(){ setTxFilter('date',on?'':iso); };
   return h;
 }
-// Re-render the whole screen, not just the list: the date input and the month combo
-// both have to show what the click just did.
-function pickTxDate(iso){
-  S.tx.filters.date=iso;
-  if(iso) S.tx.filters.month='';
-  S.tx.offset=0;
-  renderTransactions();
-}
 
-/* The FAB, the row modal and the Telegram deep link can all write from any screen,
+/* The add field, the row modal and the Telegram deep link can all write from any screen,
  * so repaint the list only when it's actually on screen. */
 function repaintTxList(){
   if(S.screen==='transactions') renderTxList();
@@ -1404,160 +1851,247 @@ function withPendingEdit(t){
 
 // A pending create only belongs on the list if the active filters would have returned
 // it — otherwise adding under one account/type flashes a row that the filter excludes.
-// Mirrors the server-side filter in api_listTransactions.
+// Mirrors the server-side filter in listTransactions. A pending row is always "App".
 function matchesTxFilters(t){
-  var f=S.tx.filters||{}, d=parseDate(t.Date);
+  var f=S.tx.filters||{}, d=parseDate(t.Date), abs=Math.abs(Number(t['Amount (PHP)'])||0);
+  var cat=(S.boot&&(S.boot.categories||{})[t.Category])||{};
   if(f.account && t.Account!==f.account && t.ToAccount!==f.account) return false;
   if(f.category && t.Category!==f.category) return false;
+  if(f.segment && cat.Segment!==f.segment) return false;
+  if(f.source && f.source!=='ui') return false;
   // an optimistic transfer may not carry its derived Type yet
   if(f.type && (txIsXfer(t)?'Transfer':String(t.Type||''))!==f.type) return false;
   if(f.month && (t.Period||(d?monthKey(d):''))!==f.month) return false;
   if(f.date && isoDate(t.Date)!==f.date) return false;
+  if(f.minAmount && abs<Number(f.minAmount)) return false;
+  if(f.maxAmount && abs>Number(f.maxAmount)) return false;
   if(f.search && ((t.Description||'')+' '+(t.Category||'')).toLowerCase()
                    .indexOf(f.search.toLowerCase())<0) return false;
   return true;
 }
 
-// Repaint the transactions list from S.tx.rows plus optimistic state (pending
-// creates shown at top, pending deletes shown in-place) — no server round-trip,
-// so edit-mode selection and the filter DOM stay put.
+// Repaint the list from S.tx.rows plus optimistic state (pending creates at the top,
+// pending deletes in place). No server round trip, so the selection and filters stay.
 function renderTxList(){
   var c=$('#txListCard'); if(!c) return;
-  var edit=!!S.tx.edit;
+  var sel=!!S.tx.edit, wide=txWide();
   // pending creates only make sense on the first page (they'd be the newest rows)
   var adds=(S.tx.offset<=0)?(S.tx.pendingAdds||[]).filter(matchesTxFilters):[];
-  var rows=S.tx.rows||[];
-  var total=(S.tx.total||0)+adds.length;
+  var rows=S.tx.rows||[], allRows=adds.concat(rows), total=(S.tx.total||0)+adds.length;
+  var cnt=$('#txCount');
+  if(cnt){
+    cnt.innerHTML='<span>'+total+' result'+(total===1?'':'s')+(Math.round(S.tx.net||0)?' · '+fmtNet(S.tx.net):'')+'</span>';
+    if(sel&&rows.length){
+      var every=rows.every(function(t){ return S.tx.sel[t.ID]; });
+      var sa=el('button','link-btn',every?'Select none':'Select all'); sa.type='button';
+      sa.onclick=function(){ rows.forEach(function(t){ if(every) delete S.tx.sel[t.ID]; else S.tx.sel[t.ID]=true; }); renderTxList(); };
+      cnt.appendChild(sa);
+    }
+  }
   c.innerHTML='';
-  var head=el('div','row-between'); head.style.marginBottom='6px';
-  var label=total+' transaction'+(total===1?'':'s');
-  if(edit){
-    // select-all covers the current page's server rows (pending ones aren't editable yet)
-    var lbl=el('label','sel-all');
-    var selAll=el('input'); selAll.type='checkbox';
-    selAll.checked=rows.length>0 && rows.every(function(t){return S.tx.sel[t.ID];});
-    selAll.onclick=function(){
-      rows.forEach(function(t){ if(selAll.checked)S.tx.sel[t.ID]=true; else delete S.tx.sel[t.ID]; });
-      renderTxList();
-    };
-    lbl.appendChild(selAll);
-    lbl.appendChild(document.createTextNode(' '+label));
-    head.appendChild(lbl);
+  if(!allRows.length){ c.appendChild(el('div','tile empty',icon('search')+'No transactions match.')); }
+  else if(wide){
+    var tb=el('div','card tx-table'+(sel?' sel-mode':''));
+    tb.appendChild(el('div','tx-tr tx-th',(sel?'<span></span>':'')+'<span>Date</span><span>Description</span><span>Category</span><span>Account</span><span class="r">Amount</span>'));
+    allRows.forEach(function(t){ tb.appendChild(txTableRow(withPendingEdit(t),{edit:sel,pending:isPendingRow(t)})); });
+    c.appendChild(tb);
   } else {
-    head.innerHTML='<div class="card-h" style="margin:0">'+label+'</div>';
-  }
-  c.appendChild(head);
-  // group by day: header shows weekday + date + the day's net (income − spend)
-  var allRows=adds.concat(rows);   // optimistic adds sort ahead within their date
-  var l=el('div','list');
-  groupByDay(allRows).forEach(function(g){
-    l.appendChild(dayHeadEl(g));
-    g.rows.forEach(function(t){
-      var pending=isPendingRow(t);
-      l.appendChild(txRow(withPendingEdit(t),{edit:edit, pending:pending, clickable:!pending, hideDate:true}));
+    groupByDay(allRows).forEach(function(g){
+      var day=el('div','day'), card=el('div','day-card');
+      day.appendChild(dayHeadEl(g));
+      g.rows.forEach(function(t){
+        var pending=isPendingRow(t);
+        var r=txRow(withPendingEdit(t),{edit:sel,pending:pending,clickable:!pending,hideDate:true,tokens:!sel});
+        card.appendChild(!sel&&!pending?swipeWrap(r,t):r);
+      });
+      day.appendChild(card); c.appendChild(day);
     });
-  });
-  if(!allRows.length) l.appendChild(el('div','empty','<span class="empty-ico">⌕</span>No transactions match.'));
-  c.appendChild(l);
-  // pager (server rows only)
-  if(S.tx.total>S.tx.limit){
-    var pg=el('div','row-between'); pg.style.marginTop='12px';
-    var prev=el('button','btn sm','← Prev'); prev.disabled=S.tx.offset<=0;
-    prev.onclick=function(){S.tx.offset=Math.max(0,S.tx.offset-S.tx.limit);loadTx();};
-    var next=el('button','btn sm','Next →'); next.disabled=S.tx.offset+S.tx.limit>=S.tx.total;
-    next.onclick=function(){S.tx.offset+=S.tx.limit;loadTx();};
-    var info=el('div','dim','Showing '+(S.tx.offset+1)+'–'+Math.min(S.tx.offset+S.tx.limit,S.tx.total));
-    info.style.fontSize='12px';
-    pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
-    c.appendChild(pg);
   }
-  if(edit) updateBulkBar();
+  if(S.tx.total>S.tx.limit) c.appendChild(pagerEl(S.tx.offset,S.tx.limit,S.tx.total,function(o){ S.tx.offset=o; loadTx(); }));
+  updateBulkBar();
 }
 
-/* One row renderer for both modes. opts:
- *   edit      — checkbox + inline single-field editors (the icon opens the full modal)
+// How a row reads: which way the money ran, its sign and its tint. The category type
+// says the usual direction, and a NEGATIVE amount reverses it: a refund is a negative
+// Expense, so it pays money back and reads "+". Spending is plain text, never red.
+function txView(t){
+  var type=String(t.Type||''), isXfer=txIsXfer(t);
+  var dir=isXfer?0:(type==='Expense'?-1:(type==='Income'?1:0))*(Number(t.Amount)<0?-1:1);
+  var cur=t.Currency||'PHP', isForeign=cur!=='PHP', amtPhp=t['Amount (PHP)'];
+  var seg=((S.boot&&(S.boot.categories||{})[t.Category])||{}).Segment;
+  var tint=isXfer?'accent':(dir>0?'pos':({Essentials:'ess',Rewards:'rew',Growth:'gro'})[seg]||'');
+  // Foreign-currency tx: the NATIVE amount in its own symbol, the peso figure beside it.
+  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(Math.abs(amtPhp));
+  return {isXfer:isXfer, dir:dir, isForeign:isForeign, amtPhp:amtPhp, seg:seg, tint:tint,
+          amt:(dir<0?'−':(dir>0?'+':''))+mainAmt, amtCls:isXfer?'xfer':(dir>0?'pos':(dir<0?'neg':''))};
+}
+// A category/account/date that adds itself as a filter token when clicked.
+function tokLink(html,k,v){
+  var s=el('span','tok-link',html); s.title='Filter by this';
+  s.onclick=function(e){ e.stopPropagation(); setTxFilter(k,S.tx.filters[k]===v?'':v); };
+  return s;
+}
+function selectClick(r,t){
+  return function(e){
+    if(e.target.closest('.ed,.t1-edit,.amt-edit,.ic-edit,input,.combo,.inline-edit')) return;
+    var on=!S.tx.sel[t.ID]; toggleSel(t.ID,on); r.classList.toggle('sel',on);
+    var chk=r.querySelector('.tx-check'); if(chk) chk.checked=on;
+  };
+}
+
+/* One list row for Activity (phone, iPad) and the Summary's Recent tile. opts:
+ *   edit      — Select mode: checkbox + inline single-field editors (the icon opens the modal)
  *   pending   — in-flight write: spinner glyph, nothing interactive
- *   clickable — browsing mode: the whole row opens the modal
- *   hideDate  — the list already groups rows under date headers                       */
+ *   clickable — browsing: the whole row opens the modal
+ *   hideDate  — the list already groups rows under date headers
+ *   tokens    — the category and account are filter links (Activity only)        */
 function txRow(t,opts){
   opts=opts||{};
-  var edit=!!opts.edit, pending=!!opts.pending, clickable=!!opts.clickable;
-  var type=String(t.Type||'');
-  var isXfer=type==='Transfer'||(t.ToAccount&&String(t.ToAccount).trim());
-  // Which way the money actually ran. The category type says the usual direction, and a
-  // NEGATIVE amount reverses it: a refund is a negative Expense, so it pays money back
-  // and reads "+" and green. Deriving the sign from the type alone printed "- -₱95".
-  var dir=(type==='Expense'?-1:(type==='Income'?1:0))*(Number(t.Amount)<0?-1:1);
-  var icCls=isXfer?'xfer':(dir<0?'out':(dir>0?'in':''));
-  var icCh=isXfer?'⇄':(dir<0?'−':(dir>0?'+':'•'));
-  var amtPhp=t['Amount (PHP)'];
-  var cur=t.Currency||'PHP';
-  var isForeign=cur!=='PHP';
-  // Foreign-currency tx: show the NATIVE amount in its own symbol; keep the PHP
-  // equivalent in the meta line so nothing is lost. Magnitudes both — `sign` carries it.
-  var mainAmt=isForeign?moneyCur(Math.abs(Number(t.Amount)),cur):money(Math.abs(amtPhp));
-  var sign=dir<0?'-':(dir>0?'+':'');
-  var amtCls=dir<0?'neg':(dir>0?'pos':'');
-  var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
-
-  var r=el('div','litem'+(edit?' edit':'')+(clickable&&!edit?' click':'')+
+  var edit=!!opts.edit, pending=!!opts.pending, clickable=!!opts.clickable, v=txView(t);
+  var r=el('div','litem tx'+(edit?' edit':'')+(clickable&&!edit?' click':'')+
                         (edit&&S.tx.sel[t.ID]?' sel':'')+(pending?' pending':''));
-  // in-flight write: nothing on the row is editable until the server has agreed
   if(pending&&edit) r.style.pointerEvents='none';
-
   if(edit){
     var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.tx.sel[t.ID];
+    chk.setAttribute('aria-label','Select');
     chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID, chk.checked); r.classList.toggle('sel', chk.checked); };
     r.appendChild(chk);
+    r.onclick=selectClick(r,t);
   }
-  // a pending row swaps its type glyph for a spinner so it clearly reads as "loading"
+  var title=t.Description||t.Category||'';
   var ic=pending?el('div','ic','<span class="mini-spin"></span>')
-                :el('div','ic '+(edit?'ic-edit ':'')+icCls, icCh);
+                :el('div','ic tx-ic'+(v.tint?' s-'+v.tint:'')+(edit?' ic-edit':''), v.isXfer?'⇄':esc(title.charAt(0).toUpperCase()||'•'));
   if(edit&&!pending){ ic.title='Open details'; ic.onclick=function(e){ e.stopPropagation(); openTxModal(t); }; }
   r.appendChild(ic);
 
-  var grow=el('div','grow');
+  var grow=el('div','grow'), fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
   if(edit){
     // description — inline editable; empty = no description, and the ".t1-edit:empty"
     // CSS supplies the "+ note" affordance rather than a placeholder string
     var t1=el('div','t1 t1-edit', esc(t.Description||''));
     t1.title='Edit description';
-    t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(v){ commitInline(t,'Description',v); }); };
+    t1.onclick=function(){ inlineInput(t1,'text', t.Description||'', function(val){ commitInline(t,'Description',val); }); };
     grow.appendChild(t1);
     var sub=el('div','t2');
+    sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
+      inlineCombo(host, catsForShape(v.isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
+    }));
+    sub.appendChild(document.createTextNode(' · '));
     sub.appendChild(editableSpan(dotHTML(fromC)+esc(t.Account||'(account)'), function(host){
       inlineCombo(host, acctOptions(), t.Account, function(val){ commitInline(t,'Account',val); });
     }));
-    if(isXfer) sub.appendChild(document.createTextNode(' → '+(t.ToAccount||'')));
-    sub.appendChild(document.createTextNode(' · '));
-    sub.appendChild(editableSpan(esc(t.Category||'(category)'), function(host){
-      inlineCombo(host, catsForShape(isXfer), t.Category, function(val){ commitInline(t,'Category',val); });
-    }));
-    if(isForeign) sub.appendChild(document.createTextNode(' · '+money(Math.abs(amtPhp))));
+    if(v.isXfer) sub.appendChild(document.createTextNode(' → '+(t.ToAccount||'')));
+    if(v.isForeign) sub.appendChild(document.createTextNode(' · '+money(Math.abs(v.amtPhp))));
     grow.appendChild(sub);
   } else {
-    // Description is optional: with none, the Category headlines the row and drops out
-    // of the sub line rather than printing twice under a "(no description)" placeholder.
-    var noDesc=!t.Description;
-    var line=dotHTML(fromC)+esc(t.Account||'')+(isXfer?(' → '+dotHTML(toC)+esc(t.ToAccount||'')):'')+
-             (noDesc?'':' · '+esc(t.Category||''));
-    grow.innerHTML='<div class="t1">'+esc(noDesc?(t.Category||''):t.Description)+'</div>'+
-      '<div class="t2">'+line+(opts.hideDate?'':' · '+esc(fmtDate(t.Date)))+'</div>';
+    grow.appendChild(el('div','t1',esc(title)));
+    var s2=el('div','t2'), tok=!!opts.tokens;
+    function part(html,k,val){ s2.appendChild(tok?tokLink(html,k,val):el('span',null,html)); }
+    // With no description the category is the title, so it leaves the sub line.
+    if(t.Description&&t.Category){ part(esc(t.Category),'category',t.Category); s2.appendChild(document.createTextNode(' · ')); }
+    part(dotHTML(fromC)+esc(t.Account||''),'account',t.Account);
+    if(v.isXfer){ s2.appendChild(document.createTextNode(' → ')); part(dotHTML(toC)+esc(t.ToAccount||''),'account',t.ToAccount); }
+    if(!opts.hideDate) s2.appendChild(document.createTextNode(' · '+fmtDate(t.Date)));
+    grow.appendChild(s2);
   }
   r.appendChild(grow);
 
-  // amount — inline editable in edit mode (edits the native magnitude; sign derives from Type)
-  var amt=el('div','amt '+(edit?'amt-edit ':'')+amtCls,
-    sign+mainAmt+(isForeign&&!edit?'<span class="amt-sub">'+money(Math.abs(amtPhp))+'</span>':''));
+  // amount — inline editable in Select mode (edits the native magnitude; sign derives from Type)
+  var amt=el('div','amt '+(edit?'amt-edit ':'')+v.amtCls,
+    v.amt+(v.isForeign&&!edit?'<span class="amt-sub">'+money(Math.abs(v.amtPhp))+'</span>':''));
   if(edit){
     amt.title='Edit amount';
-    amt.onclick=function(){ inlineInput(amt,'number', Number(t.Amount), function(v){ commitInline(t,'Amount',v); }); };
+    amt.onclick=function(e){ e.stopPropagation(); inlineInput(amt,'number', Number(t.Amount), function(val){ commitInline(t,'Amount',val); }); };
   }
   r.appendChild(amt);
-
-  if(fromC){ r.style.borderLeft='3px solid '+fromC; r.style.paddingLeft='9px'; }
-  if(clickable&&!edit) r.onclick=function(){ openTxModal(t); };
+  if(clickable&&!edit) r.onclick=function(){ if(swClose()) return; openTxModal(t); };
   return r;
+}
+
+/* One table row (1200px and wider). Browsing: the row opens the modal, and the date,
+ * category and account cells add a filter token. Select mode: checkbox + the same
+ * inline single-field editors as the list. */
+function txTableRow(t,opts){
+  var edit=!!opts.edit, pending=!!opts.pending, v=txView(t), dt=parseDate(t.Date);
+  var r=el('div','tx-tr'+(edit?' edit':' click')+(edit&&S.tx.sel[t.ID]?' sel':'')+(pending?' pending':''));
+  if(pending) r.style.pointerEvents='none';
+  function cell(cls,html){ var c=el('span','tx-td'+(cls?' '+cls:''),html||''); r.appendChild(c); return c; }
+  if(edit){
+    var cb=cell('');
+    var chk=el('input','tx-check'); chk.type='checkbox'; chk.checked=!!S.tx.sel[t.ID]; chk.setAttribute('aria-label','Select');
+    chk.onclick=function(e){ e.stopPropagation(); toggleSel(t.ID,chk.checked); r.classList.toggle('sel',chk.checked); };
+    cb.appendChild(chk);
+    r.onclick=selectClick(r,t);
+  }
+  var dc=cell('dim'), dl=dt?shortDate(dt):'';
+  if(edit) dc.textContent=dl; else dc.appendChild(tokLink(esc(dl),'date',isoDate(t.Date)));
+  var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
+  var dsc=cell('');
+  var catH='<span class="cat-dot" style="background:'+(v.seg?SEG_COLOR[v.seg]||'var(--dim)':'var(--dim)')+'"></span>'+esc(t.Category||'');
+  var cc=cell(''), ac=cell('');
+  var acH=dotHTML(fromC)+esc(t.Account||'')+(v.isXfer?' → '+dotHTML(toC)+esc(t.ToAccount||''):'');
+  var am=cell('r amt '+v.amtCls, v.amt+(v.isForeign?'<span class="amt-sub">'+money(Math.abs(v.amtPhp))+'</span>':''));
+  if(edit){
+    var d1=el('span','t1-edit',esc(t.Description||'')); d1.title='Edit description'; dsc.appendChild(d1);
+    d1.onclick=function(e){ e.stopPropagation(); dsc.classList.add('editing'); inlineInput(d1,'text',t.Description||'',function(val){ commitInline(t,'Description',val); }); };
+    cc.appendChild(editableSpan(catH,function(host){ cc.classList.add('editing'); inlineCombo(host,catsForShape(v.isXfer),t.Category,function(val){ commitInline(t,'Category',val); }); }));
+    ac.appendChild(editableSpan(acH,function(host){ ac.classList.add('editing'); inlineCombo(host,acctOptions(),t.Account,function(val){ commitInline(t,'Account',val); }); }));
+    am.classList.add('amt-edit'); am.title='Edit amount';
+    am.onclick=function(e){ e.stopPropagation(); am.classList.add('editing'); inlineInput(am,'number',Number(t.Amount),function(val){ commitInline(t,'Amount',val); }); };
+  } else {
+    dsc.textContent=t.Description||'';
+    if(!t.Description) dsc.classList.add('dim');
+    cc.appendChild(tokLink(catH,'category',t.Category));
+    ac.appendChild(tokLink(dotHTML(fromC)+esc(t.Account||''),'account',t.Account));
+    if(v.isXfer){ ac.appendChild(document.createTextNode(' → ')); ac.appendChild(tokLink(dotHTML(toC)+esc(t.ToAccount||''),'account',t.ToAccount)); }
+    r.onclick=function(){ openTxModal(t); };
+  }
+  return r;
+}
+
+/* —— swipe: left shows Delete, right selects the row (touch only; a tap opens the
+ * modal, which also has Delete, and Select mode has both) —— */
+var swOpen=null;   // the one row whose Delete is showing
+var SW=76;         // the width of the Delete button
+function swRest(w){ w.lastChild.style.transform=''; setTimeout(function(){ if(swOpen!==w) w.classList.remove('sw-on'); },320); }
+function swClose(){
+  if(!swOpen) return false;
+  var w=swOpen; swOpen=null; swRest(w); return true;
+}
+function swipeWrap(row,t){
+  var w=el('div','swipe'), acts=el('div','swipe-acts');
+  var sb=el('div','sw-sel',icon('check')), db=el('button','sw-del','Delete');
+  db.type='button';
+  db.onclick=function(){ swClose(); confirmDelete(t); };
+  acts.appendChild(sb); acts.appendChild(db); w.appendChild(acts); w.appendChild(row);
+  var x0=null, y0=0, dx=0, base=0, drag=false;
+  row.addEventListener('touchstart',function(e){
+    var p=e.touches[0]; x0=p.clientX; y0=p.clientY; dx=0; drag=false; base=swOpen===w?-SW:0;
+    if(swOpen&&swOpen!==w) swClose();
+  },{passive:true});
+  row.addEventListener('touchmove',function(e){
+    if(x0==null) return;
+    var p=e.touches[0]; dx=p.clientX-x0;
+    if(!drag){
+      if(Math.abs(dx)<10) return;
+      if(Math.abs(p.clientY-y0)>Math.abs(dx)){ x0=null; return; }   // a scroll, not a swipe
+      drag=true; row.style.transition='none'; w.classList.add('sw-on');
+    }
+    var x=Math.max(-SW,Math.min(SW,base+dx));
+    w.classList.toggle('sw-right',x>0);
+    row.style.transform='translateX('+x+'px)';
+  },{passive:true});
+  row.addEventListener('touchend',function(){
+    if(x0==null||!drag){ x0=null; return; }
+    x0=null; row.style.transition='';
+    if(base+dx>60){   // right: enter Select mode with this row picked
+      swOpen=null; S.tx.edit=true; S.tx.sel={}; S.tx.sel[t.ID]=true; renderTransactions(); return;
+    }
+    var open=base+dx<-60;
+    swOpen=open?w:null;
+    if(open) row.style.transform='translateX(-'+SW+'px)'; else swRest(w);
+  });
+  return w;
 }
 
 // Parse a Date or "yyyy-MM-dd" string. ISO date strings are read as a LOCAL date
@@ -1569,112 +2103,151 @@ function parseDate(d){
   var dt=new Date(d); return isNaN(dt.getTime())?null:dt;
 }
 // Intuitive display format, e.g. "June 6, 2026".
+// "19 Sep", with the year only when it is not this one. Day first, as everywhere.
+function shortDate(dt){ return dt.getDate()+' '+MONTHS[dt.getMonth()]+(dt.getFullYear()!==new Date().getFullYear()?' '+dt.getFullYear():''); }
 function fmtDate(d){
   if(!d) return '';
   var dt=parseDate(d);
   if(!dt||isNaN(dt.getTime())) return String(d);
-  return MONTHS_FULL[dt.getMonth()]+' '+dt.getDate()+', '+dt.getFullYear();
+  return dt.getDate()+' '+MONTHS_FULL[dt.getMonth()]+' '+dt.getFullYear();   // day first, like every other date in the app
 }
 
 /* ════════════════════════════════════════════════════════════════════════
  *  ACCOUNTS
  * ════════════════════════════════════════════════════════════════════════ */
+function isRecv(a){ return /receivable/i.test(a.subtype||''); }
+function signedPhp(n,big){ return n==null?'—':(n<0?'−':'')+money(Math.abs(n),big); }
+// The initial tile. An account's own colour is only ever this tile or a dot
+// (DESIGN.md), drawn as a tint so a pale colour still reads in both themes.
+function acctTile(label,c){
+  var s=c?' style="background:color-mix(in srgb,'+c+' 22%,transparent);color:color-mix(in srgb,'+c+' 70%,var(--text))"':'';
+  return '<span class="a-ic"'+s+'>'+label+'</span>';
+}
+function rateText(a){
+  if(!a.interestRate) return '';
+  return (Math.round(a.interestRate*10000)/100).toFixed(2)+'% a year'+
+    (a.interestFrequency&&a.interestFrequency!=='None'?' · '+a.interestFrequency.toLowerCase()+' interest':'');
+}
+function acctRow(a){
+  var r=el('button','a-row'); r.type='button';
+  var sub=esc(rateText(a)||a.subtype||''), subCls='', meter='';
+  if(a.currency&&a.currency!=='PHP') sub+=(sub?' · ':'')+esc(a.currency);
+  if(isRecv(a)) sub=a.netWorthPhp<0?'You owe them · shortens runway':'Not counted in runway';
+  if(a.isLiability&&a.creditLimit>0){
+    var u=(a.balancePhp||0)/a.creditLimit, full=a.availableCredit!=null&&a.availableCredit<=0;
+    meter=bar6([[u,'var(--'+(full?'warn':'accent')+')']]).outerHTML;
+    sub=full?'Limit reached':money(a.availableCredit,true)+' available of '+money(a.creditLimit,true);
+    if(full) subCls=' warn';
+  }
+  var foreign=a.currency&&a.currency!=='PHP';
+  r.innerHTML=acctTile(esc(String(a.name).charAt(0).toUpperCase()),isHex6(a.color)?a.color:'')+
+    '<span class="a-mid"><span class="a-t">'+esc(a.name)+'</span>'+meter+'<span class="a-s'+subCls+'">'+sub+'</span></span>'+
+    '<span class="a-v"><span class="'+((a.netWorthPhp||0)<0?'neg':'')+'">'+signedPhp(a.netWorthPhp)+'</span>'+
+    (foreign?'<small>'+moneyCur(a.balanceNative,a.currency)+'</small>':'')+'</span>'+icon('chevron');
+  r.onclick=function(){ openAccountModal(a); };
+  return r;
+}
+// A titled group: the label outside the card on a phone, inside it from 768px.
+function acctGroup(title,right,rows,cls){
+  var g=el('section','a-grp'+(cls?' '+cls:''));
+  g.appendChild(el('div','a-gh','<span>'+esc(title)+'</span><span>'+right+'</span>'));
+  var l=el('div','a-list'); rows.forEach(function(n){ l.appendChild(n); });
+  g.appendChild(l); return g;
+}
+
 function renderAccounts(){
   if(!S.cache['accounts']) loading('accounts');
   return cachedCall('accounts', function(et){return gs('api_getAccounts',null,et);}, function(res){
     var accs=res.accounts||[];
-    var w=el('div','screen cols');
-    w.appendChild(el('div','screen-title','Accounts'));
-
+    var cash=[],credit=[],recv=[],shares=[];
+    accs.forEach(function(a){ (a.isShares?shares:a.isLiability?credit:isRecv(a)?recv:cash).push(a); });
+    function sum(l,f){ return l.reduce(function(s,a){ return s+(f?f(a):(a.netWorthPhp||0)); },0); }
     // Same split as netWorthTotals() in api.js: a NEGATIVE receivable is money the
-    // owner owes, so it counts as a liability, not an asset worth less. Tiles show
-    // liabilities positive, so a negative net worth adds its absolute value here.
-    var assets=0,liab=0;
-    accs.forEach(function(a){
-      var nw=a.netWorthPhp||0;
-      if(a.isLiability) liab+=(a.balancePhp||0);
-      else if(nw<0 && /receivable/i.test(a.subtype||'')) liab-=nw;
-      else assets+=nw;
-    });
-    var top=el('div','grid grid-2');
-    top.appendChild(tile('Total assets', money(assets,true), accs.length+' accounts tracked'));
-    top.appendChild(tile('Total liabilities', money(liab,true), 'credit lines and money owed back'));
-    w.appendChild(top);
-    // The runway card lands here, under both tiles, once loadInvestments fills it.
-    var rwh=el('div'); rwh.id='runwayCard';
-    w.appendChild(rwh);
+    // owner owes, so it is a liability, not an asset worth less.
+    var lent=sum(recv,function(a){ return Math.max(0,a.netWorthPhp||0); }), owe=sum(recv)-lent;
+    var cashT=sum(cash), invT=sum(shares), assets=cashT+invT+lent, liab=sum(credit)+owe;
+    var nLent=recv.filter(function(a){ return a.netWorthPhp>0; }).length;
 
-    // group by type. Share-priced accounts are left out: the Holdings card lists
-    // every one of them, with weight and gain, and its rows open the same modal.
-    var groups={};
-    accs.forEach(function(a){ if(a.isShares) return; var t=a.type||'Other';(groups[t]=groups[t]||[]).push(a);});
-    Object.keys(groups).sort().forEach(function(t){
-      var card=el('div','card');
-      var sum=0; groups[t].forEach(function(a){ sum+=(a.balancePhp||0); });
-      var h=el('div','row-between'); h.style.marginBottom='12px';
-      var ttl=el('div','card-h',esc(t)+' <span style="opacity:.55">· '+groups[t].length+'</span>'); ttl.style.margin='0'; h.appendChild(ttl);
-      h.appendChild(el('div','dim mono',money(sum)));
-      card.appendChild(h);
-      var l=el('div','list');
-      groups[t].forEach(function(a){ l.appendChild(accountRow(a)); });
-      card.appendChild(l); w.appendChild(card);
-    });
+    var w=el('div','screen');
+    var head=el('div','screen-head'); head.appendChild(el('div','screen-title','Accounts')); w.appendChild(head);
+    w.appendChild(el('div','screen-sub',accs.length+' accounts'+(nLent?' · '+nLent+' owe you':'')));
 
-    // Holdings: the share accounts above, re-cut by portfolio weight. Filled by a
-    // separate cachedCall — the 'accounts' payload is pre-seeded from getBootstrap
-    // and shared with the edit-mode rail, so its shape must not change.
-    // Recurring & installments — from the Budgets screen (merged into the Dashboard
-    // in v2.14.0). It belongs beside the liabilities: an installment IS one. Read off
-    // getBootstrap, which already carries the rows, so the screen gains no fetch; a
-    // cold load paints it on the boot re-render.
-    var rec=((S.boot&&S.boot.recurring)||[]);
-    if(rec.length){
-      var rcard=el('div','card');
-      rcard.appendChild(el('div','card-h','Recurring & installments'));
-      var rl=el('div','list');
-      rec.forEach(function(o){
-        var amt=o.Amount, ml=o['Months Left'];
-        var r=el('div','litem');
-        r.innerHTML='<div class="ic">⟳</div><div class="grow"><div class="t1">'+esc(o.Description||'')+'</div>'+
-          '<div class="t2">'+esc(o.Group||'')+(ml!=null&&ml!==''?(' · '+esc(ml)+' mo left'):'')+'</div></div>'+
-          '<div class="amt">'+(amt!=null&&amt!==''?money(amt):'—')+'</div>';
-        rl.appendChild(r);
-      });
-      rcard.appendChild(rl); w.appendChild(rcard);
+    var tot=el('div','a-tot');
+    function cell(label,fig,cls,foot,spec){
+      var t=sumTile('',label,null,spec); t.appendChild(el('div','fig'+(cls?' '+cls:''),fig));
+      t.appendChild(el('div','tile-foot',foot)); tot.appendChild(t);
     }
+    cell('Assets',money(assets,true),'','Cash '+money(cashT,true)+' · Invested '+money(invT,true)+(lent?' · Owed '+money(lent,true):''));
+    cell(twoLabels('Liabilities','Owe'),signedPhp(liab,true),liab<0?'neg':'',
+      credit.length+' credit line'+(credit.length===1?'':'s')+(owe?' · '+money(-owe,true)+' you owe':''));
+    cell(twoLabels('Net worth','Net'),signedPhp(assets+liab,true),'','Assets − liabilities',{title:'What you own minus what you owe',
+      text:'Every account at today\'s balance, prices and exchange rate. The same figure as Summary.',
+      rows:[['Assets',money(assets,true)],['− Liabilities',money(-liab,true)],['= Net worth',signedPhp(assets+liab,true),true]],
+      note:'Money you lent counts as an asset. Money you owe through a receivable counts as a liability.'});
+    w.appendChild(tot);
 
-    var dbt=el('div'); dbt.id='debtsCard';
-    w.appendChild(dbt);
-
-    var inv=el('div'); inv.id='invCards';
-    w.appendChild(inv);
-    if(S.boot) w.appendChild(widgetCard());
+    var body=el('div','a-body'), L=el('div','a-col'), R=el('div','a-col');
+    body.appendChild(L); body.appendChild(R); w.appendChild(body);
+    L.appendChild(acctGroup('Cash and banks',money(cashT,true),cash.map(acctRow)));
+    if(credit.length) L.appendChild(acctGroup('Credit','<span class="neg">'+signedPhp(sum(credit),true)+'</span>',credit.map(acctRow)));
+    if(shares.length){
+      var ir=el('button','a-row'); ir.type='button';
+      ir.innerHTML=acctTile(icon('investments'),'var(--gro)')+'<span class="a-mid"><span class="a-t">Holdings</span>'+
+        '<span class="a-s">'+shares.length+' positions · average cost and gain</span></span>'+
+        '<span class="a-v">'+money(invT,true)+'</span>'+icon('chevron');
+      ir.onclick=function(){ go('investments'); };
+      L.appendChild(acctGroup('Investments',money(invT,true),[ir]));
+    }
+    var rt=sum(recv)>=0&&!owe?'Owed to you':(lent?'Owed to you and by you':'You owe');
+    if(recv.length) R.appendChild(acctGroup(rt,signedPhp(sum(recv),true),recv.map(acctRow)));
+    var dbt=el('div'); dbt.id='debtsCard'; R.appendChild(dbt);
+    var rc=recurringGroup(); if(rc) R.appendChild(rc);
     paint(w);
-    loadInvestments();
     loadDebts();
   }).catch(showErr);
 }
 
-/* Home-screen widget: which 3 accounts the iOS balance widget shows (meta
- * widget_accounts, read by getWidget). Seeded from getBootstrap, so no fetch. */
-function widgetCard(){
-  var c=el('div','card');
-  c.appendChild(el('div','card-h','Home-screen widget · balances'));
-  var cur=S.boot.widgetAccounts||[], opts=[{value:'',label:'(none)'}].concat(acctOptions());
-  var combos=[0,1,2].map(function(i){
-    var f=el('div','field','<label>Account '+(i+1)+'</label>');
-    var k=comboEl(opts, cur[i]||'', {placeholder:'(none)'});
-    f.appendChild(k); c.appendChild(f); return k;
+// Recurring and installments, off getBootstrap (no fetch). Sorted by group; an
+// installment says how many months are left.
+function recurringGroup(){
+  var rec=((S.boot&&S.boot.recurring)||[]).slice();
+  if(!rec.length) return null;
+  var fx=(S.boot&&S.boot.fxUsdPhp)||0, total=0;
+  rec.sort(function(a,b){ return (a.Group||'~').localeCompare(b.Group||'~'); });
+  var rows=rec.map(function(o){
+    var cur=o.Currency||'PHP', amt=o.Amount, ml=o['Months Left'];
+    if(amt!==''&&amt!=null) total+=cur==='PHP'?amt:(cur==='USD'?amt*fx:0);
+    var r=el('div','a-row r-row');
+    r.innerHTML='<span class="a-mid"><span class="a-t">'+esc(o.Description||'')+'</span></span>'+
+      '<span class="a-s">'+(ml!==''&&ml!=null?esc(ml)+' months left':esc(o.Group||'Monthly'))+'</span>'+
+      '<span class="a-v">'+(amt!==''&&amt!=null?(cur==='PHP'?money(amt,true):moneyCur(amt,cur)):'—')+'</span>';
+    return r;
   });
-  var save=el('button','btn sm primary','Save');
-  save.onclick=function(){
-    save.disabled=true;
-    gs('api_setWidgetAccounts',{names:combos.map(function(k){return k.value;}).filter(Boolean)})
-      .then(function(res){ S.boot.widgetAccounts=res.widgetAccounts; toast('Widget accounts saved','ok'); })
-      .catch(function(e){ toast(e.message||String(e),'err'); }).then(function(){ save.disabled=false; });
-  };
-  c.appendChild(save);
-  return c;
+  return acctGroup('Recurring and installments',money(total,true)+' a month',rows);
+}
+
+/* The iOS balance widget's accounts (meta widget_accounts, read by getWidget),
+ * seeded from getBootstrap. On the Admin screen: it is setup, not a reading. A tap saves at once. */
+function widgetPicker(accs){
+  var g=acctGroup('iPhone balance widget','Pick up to 3',[],'a-wid');
+  var box=el('div','a-chips'); $('.a-list',g).appendChild(box);
+  function draw(){
+    var cur=S.boot.widgetAccounts||[];
+    box.innerHTML='';
+    accs.forEach(function(a){
+      var on=cur.indexOf(a.name)>=0, c=el('button','chip'+(on?' on':''),esc(a.name)+(on?icon('check'):''));
+      c.type='button'; c.setAttribute('aria-pressed',on);
+      c.onclick=function(){
+        if(!on&&cur.length>=3){ toast('Pick up to 3. Remove one first.'); return; }
+        var prev=cur, next=on?cur.filter(function(n){return n!==a.name;}):cur.concat([a.name]);
+        S.boot.widgetAccounts=next; draw();
+        gs('api_setWidgetAccounts',{names:next}).then(function(res){ S.boot.widgetAccounts=res.widgetAccounts; saveCache(); draw(); })
+          .catch(function(e){ S.boot.widgetAccounts=prev; draw(); toast(e.message||String(e),'err'); });
+      };
+      box.appendChild(c);
+    });
+  }
+  draw(); return g;
 }
 
 /* Open debts per receivable — the itemised balance behind each IOU account.
@@ -1695,242 +2268,166 @@ function loadDebts(){
     var host=$('#debtsCard'); if(!host) return;
     host.innerHTML='';
     var people=(res.accounts||[]).filter(function(p){return (p.items||[]).length;});
-    if(!people.length) return;
 
-    var card=el('div','card');
-    var h=el('div','row-between'); h.style.marginBottom='12px';
-    var n=people.reduce(function(s,p){return s+p.items.length;},0);
-    var ttl=el('div','card-h','Debts &amp; IOUs <span style="opacity:.55">· '+n+'</span>'); ttl.style.margin='0';
-    h.appendChild(ttl);
-    card.appendChild(h);
-
-    people.forEach(function(p,i){
+    // One group per person, the same grouped rows as the rest of Accounts.
+    people.forEach(function(p){
       var owed=p.balance>=0;
-      var ph=el('div','row-between');
-      ph.style.cssText='margin:'+(i?'16px':'2px')+' 0 6px;font-size:12px';
-      ph.innerHTML='<span style="font-weight:650">'+esc(p.account)+'</span>'+
-        '<span class="dim">'+(owed?'owes you ':'you owe ')+
-        '<span class="mono '+(owed?'pos':'neg')+'" style="font-weight:650">'+money(Math.abs(p.balance))+'</span></span>';
-      card.appendChild(ph);
-
-      var l=el('div','list');
-      p.items.forEach(function(it){
-        // A part-paid debt is the one worth a bar: it is the only way to see a long
-        // instalment burning down. paid/amount, not open/amount — the bar fills up.
-        var paid=Math.abs(it.amount)-Math.abs(it.open);
-        var r=el('div','litem');
-        // Short date and a bare "of <original>": this line has to survive a 375px
-        // phone beside the amount, and the bar under it already says how far along
-        // the debt is — spelling out "paid" only pushed the total off the edge.
-        // The year only when it is not this one — the usual convention, and here it
-        // is also what keeps the line inside a 375px phone next to the amount.
-        var d=it.date&&parseDate(it.date);
-        var when=d?(MONTHS[d.getMonth()]+' '+d.getDate()+
-          (d.getFullYear()===new Date().getFullYear()?'':', '+d.getFullYear())):'opening balance';
-        // Direction per ITEM, not per account: a spend off the tab (they bought the
-        // owner something) is its own item running against the balance, and the
-        // account's sign drew it as one more thing they owe.
-        var theirs=it.amount>=0;
-        r.innerHTML='<div class="ic '+(theirs?'in':'out')+'">'+(theirs?'←':'→')+'</div>'+
-          '<div class="grow"><div class="t1">'+esc(it.description||'(no description)')+'</div>'+
-          '<div class="t2">'+(theirs===owed?'':(theirs?'owes you · ':'you owe · '))+esc(when)+
-            (paid>0?(' · '+Math.round(100*paid/Math.abs(it.amount))+'% of '+money(Math.abs(it.amount),true)):'')+'</div></div>'+
-          '<div class="amt mono '+(theirs?'pos':'neg')+'">'+money(Math.abs(it.open))+'</div>';
-        if(paid>0){
-          var b=el('div','bar thin');
-          b.innerHTML='<div class="bar-fill" style="width:'+Math.min(100,Math.round(100*paid/Math.abs(it.amount)))+'%"></div>';
-          $('.grow',r).appendChild(b);
-        }
-        l.appendChild(r);
-      });
-      card.appendChild(l);
+      host.appendChild(acctGroup('Open debts with '+p.account,(owed?'Owes you ':'You owe ')+'<span class="'+(owed?'pos':'neg')+'">'+money(Math.abs(p.balance))+'</span>',
+        p.items.map(function(it){
+          // A part-paid debt gets a meter: the only way to see an instalment burn down.
+          var paid=Math.abs(it.amount)-Math.abs(it.open), frac=paid>0?paid/Math.abs(it.amount):0;
+          // Short date, the year only when it is not this one: the line must fit a phone.
+          var d=it.date&&parseDate(it.date);
+          var when=d?shortDate(d):'Opening balance';
+          // Direction per ITEM, not per account: a spend off the tab runs against the balance.
+          var theirs=it.amount>=0;
+          var r=el('div','a-row');
+          r.innerHTML='<span class="a-mid"><span class="a-t">'+esc(it.description||'No description')+'</span>'+
+            (frac?bar6([[frac,'var(--accent)']]).outerHTML:'')+
+            '<span class="a-s">'+(theirs===owed?'':(theirs?'Owes you · ':'You owe · '))+esc(when)+
+            (frac?' · '+Math.round(100*frac)+'% paid of '+money(Math.abs(it.amount),true):'')+'</span></span>'+
+            '<span class="a-v"><span class="'+(theirs?'pos':'neg')+'">'+money(Math.abs(it.open))+'</span></span>';
+          return r;
+        })));
     });
-    host.appendChild(card);
   }).catch(showErr);
 }
 
-/* Investment positions as a card on Accounts (read-only). */
-function loadInvestments(){
+/* ════════════════════════════════════════════════════════════════════════
+ *  INVESTMENTS (v3 Phase 5): invested with gain, the quarterly pulse,
+ *  allocation, and the holdings table. One getInvestments payload — the same
+ *  cache key Summary's runway tile reads.
+ * ════════════════════════════════════════════════════════════════════════ */
+var INV_COLORS=['var(--gro)','var(--accent)','var(--ess)','var(--rew)','var(--pos)','var(--warn)'];
+// Colour per holding: its account colour, else a token slot by NAME (not rank),
+// so a ticker keeps its colour across the pulse, allocation and table.
+function invColors(pos){
+  var names=pos.map(function(p){return p.name;}).sort(), m={};
+  names.forEach(function(n,i){ m[n]=acctColor(n)||INV_COLORS[i%INV_COLORS.length]; });
+  return m;
+}
+function gainSpec(inv){
+  return {title:'Gain uses average cost',
+    text:'Value today minus what the shares cost, at the peso rate on each buy day.',
+    rows:[['Value today',money(inv.totalValuePhp,true)],['− Cost',money(inv.totalCostPhp,true)],
+          ['= Gain',signedMoney(inv.totalGainPhp),true]],
+    note:'A sale takes cost out in proportion, so the average cost never moves on a sale. Gain includes currency moves.'};
+}
+function qLabel(k){ var m=/^(\d{4})-(Q\d)$/.exec(k); return m?(m[2]+' '+m[1]):k; }
+
+function renderInvestments(){
+  if(!S.cache['investments']) loading('accounts');
   return cachedCall('investments', function(et){return gs('api_getInvestments',null,et);}, function(inv){
-    var host=$('#invCards'); if(!host) return;
-    host.innerHTML='';
-    var rwh=$('#runwayCard'); if(rwh) rwh.innerHTML='';
-    var positions=inv.positions||[];
-    if(!positions.length) return;
+    var pos=inv.positions||[], col=invColors(pos);
+    var w=el('div','screen');
+    var head=el('div','screen-head'); head.appendChild(el('div','screen-title','Investments')); w.appendChild(head);
+    var asOf=pos.reduce(function(m,p){ return p.pricedAt&&p.pricedAt>m?p.pricedAt:m; },'');
+    w.appendChild(el('div','screen-sub',asOf?'Prices as of '+esc(fmtDate(asOf)):'No prices yet'));
+    if(!pos.length){ w.appendChild(el('div','tile','<div class="tile-foot">No holdings yet.</div>')); paint(w); return; }
+    var g=el('div','sum inv'); w.appendChild(g);
 
-    var card=el('div','card');
-    var h=el('div','row-between'); h.style.marginBottom='12px';
-    var ttl=el('div','card-h','Holdings <span style="opacity:.55">· '+positions.length+'</span>'); ttl.style.margin='0';
-    var tot=usdOf(inv.totalValuePhp);
-    h.appendChild(ttl); h.appendChild(el('div','dim mono',money(inv.totalValuePhp)+(tot?' · '+tot:'')));
-    card.appendChild(h);
-    // Unrealized gain against historical cost: what the buy legs cost in pesos on the
-    // day they were paid, versus what the positions are worth now. It carries market
-    // AND currency movement, which is right for a peso-denominated owner.
-    if(inv.totalCostPhp){
-      var gsev=inv.totalGainPhp>=0?'pos':'neg';
-      var gr=el('div','row-between'); gr.style.cssText='margin:-6px 0 10px;font-size:12px';
-      gr.innerHTML='<span class="dim">cost '+money(inv.totalCostPhp,true)+'</span>'+
-        '<span class="'+gsev+'" style="font-weight:600">'+signedMoney(inv.totalGainPhp)+
-        ' · '+signedPct(100*inv.totalGainPhp/inv.totalCostPhp)+'</span>';
-      card.appendChild(gr);
-    }
-
-    // Color follows the entity: the account's own color when set, else a stable
-    // slot from the validated fallback palette (assigned by name, not by rank).
-    var fallback=['#3987e5','#199e70','#c98500','#9085e9','#e66767','#d55181','#d95926','#eb6834'];
-    var holdOrder=positions.map(function(p){return p.name;});
-    var names=holdOrder.slice().sort();
-    function posColor(p){ return acctColor(p.name)||fallback[names.indexOf(p.name)%fallback.length]; }
-    // one stacked allocation bar (part-to-whole), 2px surface gaps between fills
-    var stack=el('div'); stack.style.cssText='display:flex;gap:2px;height:14px;margin:2px 0 16px';
-    positions.forEach(function(p){
-      var seg=el('div'); seg.title=p.name+' · '+pct(p.weightPct);
-      seg.style.cssText='flex:'+Math.max(p.weightPct||0,.5)+';background:'+posColor(p)+';border-radius:4px;min-width:5px';
-      stack.appendChild(seg);
-    });
-    card.appendChild(stack);
-
-    // The Assets card no longer lists share accounts, so these rows carry its tap:
-    // the account modal, off the 'accounts' payload the screen already painted from.
-    var accByName={};
-    ((S.cache.accounts&&S.cache.accounts.data.accounts)||[]).forEach(function(a){ accByName[a.name]=a; });
-    var l=el('div','list');
-    positions.forEach(function(p){
-      var acc=accByName[p.name];
-      var r=el('div','litem'+(acc?' click':''));
-      if(acc) r.onclick=function(){ openAccountModal(acc); };
-      var q=p.quantity!=null?(num(p.quantity)+' · '):'';
-      var pc=posColor(p);
-      // Average cost is the entry price a sale does NOT move (average-cost method), so
-      // it stays comparable to the live quote. The gain beside the value is peso gain
-      // against historical cost; it is text as well as color.
-      var cost=p.avgCostNative!=null?(' · avg '+moneyCur(p.avgCostNative,p.costCurrency)):'';
-      var gain=p.gainPhp==null?'':('<span class="amt-sub '+(p.gainPhp>=0?'pos':'neg')+'">'+
-        signedMoney(p.gainPhp)+(p.gainPct==null?'':' · '+signedPct(p.gainPct))+'</span>');
-      r.innerHTML='<div class="ic" style="color:'+pc+';background:'+pc+'22">▲</div>'+
-        '<div class="grow"><div class="t1">'+esc(p.name)+'</div>'+
-        '<div class="t2">'+esc(p.subtype||'')+' · '+q+pct(p.weightPct)+' of portfolio'+esc(cost)+'</div></div>'+
-        '<div class="amt">'+money(p.valuePhp)+
-        (gain||(usdOf(p.valuePhp)?'<span class="amt-sub">'+usdOf(p.valuePhp)+'</span>':''))+'</div>';
-      l.appendChild(r);
-    });
-    card.appendChild(l); host.appendChild(card);
-
-    // Quarterly pulse: buys per quarter (transfers into the GROWTH ticker accounts,
-    // derived server-side — no category discipline needed; an EF park like IB01 is a
-    // share account but never a pulse buy, the runway card measures it). One bar per
-    // quarter on a COMMON scale (width = share of the biggest quarter), segments
-    // colored per ticker with the SAME posColor as Holdings, so identity carries
-    // across the two cards. Identity is never color-alone: the detail line names
-    // each ticker with its amount. Current quarter with no buys is an empty
-    // dashed track — the absence is the message.
-    var pl=inv.pulse;
-    if(pl){
-      var qc=el('div','card');
-      qc.appendChild(el('div','card-h','Quarterly pulse'));
-      var qs=pl.quarters||[];
-      var maxT=Math.max.apply(null,[1].concat(qs.map(function(q){return q.totalUsd||0;})));
-      var qhost=el('div'); qhost.style.cssText='display:flex;flex-direction:column;gap:14px';
-      function qlabel(k){ var m=/^(\d{4})-(Q\d)$/.exec(k); return m?(m[2]+' '+m[1]):k; }
-      function qrow(label,right){
-        var w=el('div');
-        w.innerHTML='<div class="row-between"><div style="font-weight:600">'+esc(label)+'</div>'+
-          '<div class="mono" style="font-weight:700">'+right+'</div></div>';
-        return w;
-      }
-      var track='height:14px;border-radius:4px;margin-top:6px;border:1px dashed var(--warn);opacity:.6';
-      if(!qs.length||qs[0].quarter!==pl.currentQuarter){
-        var w0=qrow(qlabel(pl.currentQuarter),'<span class="warn" style="font-size:12px;font-weight:600">not invested yet</span>');
-        var tr=el('div'); tr.style.cssText=track;
-        w0.appendChild(tr);
-        qhost.appendChild(w0);
-      }
-      qs.forEach(function(q){
-        // merge buys per ticker (a quarter can buy the same one twice). Sells are held
-        // apart: they already NET the quarter's total server-side, and a bar drawn from
-        // a mixed sum would size a segment by money that left again.
-        var order=[],agg={},sells=[];
-        q.buys.forEach(function(b){
-          if(b.side==='sell'){ sells.push(b); return; }
-          if(!agg[b.symbol]){agg[b.symbol]={symbol:b.symbol,currency:b.currency,amount:0,quantity:0};order.push(b.symbol);}
-          agg[b.symbol].amount+=b.amount||0; agg[b.symbol].quantity+=b.quantity||0;
-        });
-        // Holdings order, so a ticker sits in the same place on both cards.
-        function rank(s){ var i=holdOrder.indexOf(s); return i<0?holdOrder.length:i; }
-        order.sort(function(a,b){ return rank(a)-rank(b); });
-        var w=qrow(qlabel(q.quarter),moneyCur(q.totalUsd,'USD'));
-        // A quarter whose only activity was a sale has still parked nothing, so it gets
-        // the same dashed empty track as a quarter with no activity at all: the bar
-        // measures money going IN, and there is none to size it with.
-        var bar=el('div');
-        if(!order.length){ bar.style.cssText=track; }
-        else bar.style.cssText='display:flex;gap:2px;height:14px;margin-top:6px;width:'+
-          Math.max(6,Math.round(100*(q.totalUsd||0)/maxT))+'%';
-        order.forEach(function(sym){
-          var b=agg[sym], seg=el('div');
-          seg.title=sym+' · '+moneyCur(b.amount,b.currency)+' · '+num(b.quantity)+' sh';
-          seg.style.cssText='flex:'+Math.max(b.amount,1)+';background:'+posColor({name:sym})+';border-radius:4px;min-width:5px';
-          bar.appendChild(seg);
-        });
-        w.appendChild(bar);
-        var det=order.map(function(sym){return esc(sym)+' '+moneyCur(agg[sym].amount,agg[sym].currency);}).join(' · ');
-        var dl=el('div','',det);
-        dl.style.cssText='font-size:12px;color:var(--text-faint);margin-top:4px';
-        w.appendChild(dl);
-        if(sells.length){
-          var sl=el('div','neg','sold · '+sells.map(function(b){
-            return b.symbol+' '+moneyCur(b.amount,b.currency)+' ('+num(b.quantity)+' sh)';}).join(' · '));
-          sl.style.cssText='font-size:12px;margin-top:2px';
-          w.appendChild(sl);
-        }
-        qhost.appendChild(w);
-      });
-      qc.appendChild(qhost); host.appendChild(qc);
-    }
-
-    // Emergency runway: the whole cash-like pool (Liquid + EF − credit − money lent) vs the
-    // 4-months-of-expenses rule — EF is commingled, so the pool IS the fund.
-    // Stat-tile shape: peso pool as the value (the "how much EF do I have"
-    // answer), months-of-runway as the pill, a severity meter against the target
-    // (fill + same-ramp track, like the budget meters). The months figure and the
-    // support line restate the state, so color is never the only channel.
-    var rw=inv.runway;
-    if(rw&&rw.efPhp!=null){
-      var rc=el('div','card');
-      var rh=el('div','row-between'); rh.style.marginBottom='2px';
-      var rt=el('div','card-h','Emergency runway'); rt.style.margin='0';
-      rh.appendChild(rt);
-      if(rw.targetPhp!=null) rh.appendChild(el('div','dim','target '+money(rw.targetPhp,true)));
-      rc.appendChild(rh);
-      var sev=rw.months==null?'':(rw.months>=rw.targetMonths?'pos':(rw.months>=rw.targetMonths/2?'warn':'neg'));
-      var vr=el('div','row-between');
-      vr.innerHTML='<div class="stat-value" style="font-size:26px">'+money(rw.efPhp,true)+'</div>'+
-        (rw.months!=null?('<span class="pill '+sev+'">'+rw.months+' / '+rw.targetMonths+' mo</span>'):'');
-      rc.appendChild(vr);
-      if(rw.targetPhp){
-        var m=el('div','meter '+(sev==='neg'?'over':(sev==='warn'?'warn':'')));
-        m.innerHTML='<div class="meter-fill" style="width:'+Math.min(100,Math.round(100*rw.efPhp/rw.targetPhp))+'%"></div>';
-        rc.appendChild(m);
-      }
-      var sub=el('div','dim','Liquid accounts + IB01 − credit − money lent'+
-        (rw.avgMonthlyExpensePhp?' · avg spend '+money(rw.avgMonthlyExpensePhp,true)+'/mo':''));
-      sub.style.cssText='font-size:12px;margin-top:8px';
-      rc.appendChild(sub);
-      if(rwh) rwh.appendChild(rc);
-    }
-
-    // targets reference
-    var tc=el('div','card');
-    tc.appendChild(el('div','card-h','Strategy targets (reference)'));
-    var seg=inv.segmentTargets||{}, core=inv.coreTargets||{};
-    var html='<div class="dim" style="font-size:13px">Core allocation: ';
-    html+=Object.keys(core).map(function(k){return esc(core[k])+' '+esc(k)+'%';}).join(' · ');
-    html+='</div><div class="dim" style="font-size:13px;margin-top:6px">Segments: ';
-    html+=Object.keys(seg).map(function(k){return esc(k)+' '+esc(seg[k])+'%';}).join(' · ');
-    html+='</div>';
-    tc.innerHTML+=html; host.appendChild(tc);
+    var t=sumTile('t-inv','Invested',null,gainSpec(inv)), gn=inv.totalGainPhp||0;
+    t.appendChild(el('div','fig',money(inv.totalValuePhp,true)));
+    if(inv.totalCostPhp) t.appendChild(el('div','inv-gain '+(gn>=0?'pos':'neg'),(gn>=0?'▲ ':'▼ ')+money(Math.abs(gn),true)+
+      ' · '+pct(Math.abs(100*gn/inv.totalCostPhp))+(gn>=0?' over':' under')+' cost'));
+    var usd=usdOf(inv.totalValuePhp); if(usd) t.appendChild(el('div','tile-foot',usd));
+    g.appendChild(t);
+    if(inv.pulse) g.appendChild(pulseTile(inv.pulse,pos,col));
+    g.appendChild(allocTile(inv,pos,col));
+    g.appendChild(holdingsTile(inv,pos,col));
+    paint(w);
   }).catch(showErr);
+}
+
+/* Buys per quarter into the GROWTH tickers (server-side, by account subtype; an EF
+ * park like IB01 is left out). One bar per quarter on a common scale, split by
+ * ticker. The bar measures money going IN, so a sale is a red line under it, and a
+ * quarter with no buys is a dashed empty track. */
+function pulseTile(pl,pos,col){
+  var qs=pl.quarters||[], cur=qs[0]&&qs[0].quarter===pl.currentQuarter?qs[0]:null;
+  var rank=pos.map(function(p){return p.name;});
+  function agg(q){
+    var order=[],m={},sells=[];
+    q.buys.forEach(function(b){
+      if(b.side==='sell'){ sells.push(b); return; }
+      if(!m[b.symbol]){ m[b.symbol]={symbol:b.symbol,currency:b.currency,amount:0,quantity:0}; order.push(b.symbol); }
+      m[b.symbol].amount+=b.amount||0; m[b.symbol].quantity+=b.quantity||0;
+    });
+    order.sort(function(a,b){ return rank.indexOf(a)-rank.indexOf(b); });
+    return {buys:order.map(function(s){return m[s];}),sells:sells};
+  }
+  var spec=function(){
+    var rows=[];
+    if(cur){ var a=agg(cur);
+      a.buys.forEach(function(b){ rows.push([b.symbol,moneyCur(b.amount,b.currency)]); });
+      a.sells.forEach(function(b){ rows.push(['− '+b.symbol+' sold',moneyCur(b.amount,b.currency)]); }); }
+    rows.push(['= '+qLabel(pl.currentQuarter),moneyCur(cur?cur.totalUsd:0,'USD'),true]);
+    return {title:'Did you invest this quarter?',text:'Money moved into growth holdings each quarter, in US dollars. A sale in the quarter comes off.',
+      rows:rows,note:'Buys come from transfers into the ticker accounts, not from categories.'};
+  };
+  var t=sumTile('t-pulse','Quarterly pulse','<b>'+qLabel(pl.currentQuarter)+'</b> · '+moneyCur(cur?cur.totalUsd:0,'USD'),spec);
+  var maxT=Math.max.apply(null,[1].concat(qs.map(function(q){return q.totalUsd||0;})));
+  var list=el('div','pq-list');
+  function quarter(label,right){ var q=el('div','pq'); q.appendChild(el('div','pq-h','<span>'+esc(label)+'</span><b>'+right+'</b>')); list.appendChild(q); return q; }
+  if(!cur) quarter(qLabel(pl.currentQuarter),'<span class="warn">Not invested yet</span>').appendChild(el('div','pq-bar empty'));
+  qs.forEach(function(q){
+    var a=agg(q), w=quarter(qLabel(q.quarter),moneyCur(q.totalUsd,'USD')), bar=el('div','pq-bar');
+    if(!a.buys.length) bar.classList.add('empty');
+    else bar.style.width=Math.max(6,Math.round(100*(q.totalUsd||0)/maxT))+'%';
+    a.buys.forEach(function(b){ var i=el('i'); i.style.flex=Math.max(b.amount,1); i.style.background=col[b.symbol]||'var(--gro)';
+      i.title=b.symbol+' · '+moneyCur(b.amount,b.currency)+' · '+num(b.quantity)+' shares'; bar.appendChild(i); });
+    w.appendChild(bar);
+    if(a.buys.length) w.appendChild(el('div','pq-d',a.buys.map(function(b){ return esc(b.symbol)+' '+moneyCur(b.amount,b.currency); }).join(' · ')));
+    if(a.sells.length) w.appendChild(el('div','pq-d neg','Sold '+a.sells.map(function(b){
+      return esc(b.symbol)+' '+moneyCur(b.amount,b.currency)+' ('+num(b.quantity)+' shares)'; }).join(' · ')));
+  });
+  t.appendChild(list);
+  var ex=pl.excluded||[];
+  t.appendChild(el('div','tile-foot','Growth buys only.'+(ex.length?' '+esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.':'')));
+  return t;
+}
+
+function allocTile(inv,pos,col){
+  var t=sumTile('t-alloc','Allocation');
+  var bar=el('div','alloc'), rows=el('div','alloc-rows');
+  pos.forEach(function(p){
+    var i=el('i'); i.style.flex=Math.max(p.weightPct||0,.5); i.style.background=col[p.name]; i.title=p.name+' · '+pct(p.weightPct); bar.appendChild(i);
+    var r=el('div','alloc-row','<i></i><span>'+esc(p.name)+(/^EF$/i.test(p.subtype||'')?' <span class="dim">· emergency fund</span>':'')+
+      '</span><b>'+pct(p.weightPct)+'</b>');
+    r.firstChild.style.background=col[p.name]; rows.appendChild(r);
+  });
+  t.appendChild(bar); t.appendChild(rows);
+  // Strategy targets: reference figures from getInvestments, not computed.
+  var core=inv.coreTargets||{}, seg=inv.segmentTargets||{};
+  t.appendChild(el('div','tile-foot','Target: '+Object.keys(core).reverse().map(function(k){ return esc(core[k])+' '+esc(k)+'%'; }).join(' · ')+
+    '<br>Segments: '+Object.keys(seg).map(function(k){ return esc(k)+' '+esc(seg[k])+'%'; }).join(' · ')));
+  return t;
+}
+
+/* Average cost is the entry price a sale does NOT move, so it compares with the
+ * live quote. Gain is peso gain against historical cost. A row opens the account. */
+function holdingsTile(inv,pos,col){
+  var t=el('section','tile t-hold');
+  var hd=el('div','h-row h-head','<span class="h-name">Holding</span><span>Shares</span><span>Average cost</span><span>Price</span><span>Value</span>');
+  var gh=el('span','h-gh','Gain'); gh.appendChild(tip(gainSpec(inv))); hd.appendChild(gh);
+  t.appendChild(hd);
+  var byName={};
+  ((S.cache.accounts&&S.cache.accounts.data.accounts)||[]).forEach(function(a){ byName[a.name]=a; });
+  pos.forEach(function(p){
+    var acc=byName[p.name], r=el(acc?'button':'div','h-row');
+    if(acc){ r.type='button'; r.onclick=function(){ openAccountModal(acc); }; }
+    var ac=p.avgCostNative!=null?moneyCur(p.avgCostNative,p.costCurrency):'—';
+    var pr=p.price!=null?moneyCur(p.price,p.priceCurrency):'—';
+    var gain=p.gainPhp==null?'—':signedMoney(p.gainPhp)+(p.gainPct==null?'':' · '+pct(Math.abs(p.gainPct)));
+    r.innerHTML='<span class="h-name">'+acctTile(esc(String(p.name).slice(0,4)),col[p.name])+
+      '<span class="h-n"><b>'+esc(p.name)+'</b><span>'+esc(p.subtype||'')+
+      '</span><span class="h-m">'+num(p.quantity)+' shares · avg '+ac+'</span></span></span>'+
+      '<span class="h-sh">'+num(p.quantity)+'</span><span class="h-ac">'+ac+'</span><span class="h-pr">'+pr+'</span>'+
+      '<span class="h-val">'+money(p.valuePhp,true)+'</span>'+
+      '<span class="h-gain '+(p.gainPhp==null?'':p.gainPhp>=0?'pos':'neg')+'">'+gain+'</span>';
+    t.appendChild(r);
+  });
+  return t;
 }
 
 /* Native amount is the headline (shares qty / USD), PHP equivalent underneath —
@@ -1940,37 +2437,6 @@ function acctMain(a){
   if(a.currency&&a.currency!=='PHP') return moneyCur(a.balanceNative,a.currency);
   return money(a.balancePhp);
 }
-function acctAmtHtml(a){
-  var foreign=a.isShares||(a.currency&&a.currency!=='PHP');
-  // Shares carry no currency of their own (the headline is a quantity), so the sub
-  // line carries both: what it is worth here, and what it is worth in USD.
-  var usd=a.isShares?usdOf(a.balancePhp):'';
-  return '<div class="amt '+(a.isLiability?'neg':'')+'">'+acctMain(a)+
-    (foreign?'<span class="amt-sub">'+money(a.balancePhp)+(usd?' · '+usd:'')+'</span>':'')+'</div>';
-}
-
-function accountRow(a){
-  var r=el('div','litem click');
-  var meta=esc(a.subtype||'');
-  var credit = a.creditLimit?(' · '+money(a.availableCredit)+' avail'):'';
-  r.innerHTML='<div class="ic">'+(a.isShares?'▲':(a.isLiability?'▼':'■'))+'</div>'+
-    '<div class="grow"><div class="t1">'+esc(a.name)+'</div><div class="t2">'+meta+credit+'</div></div>'+
-    acctAmtHtml(a);
-  if(a.color && /^#[0-9a-fA-F]{6}$/.test(a.color)){
-    var ic=$('.ic',r); ic.style.color=a.color; ic.style.background=a.color+'22';
-    r.style.borderLeft='3px solid '+a.color; r.style.paddingLeft='9px';
-  }
-  // credit utilization at a glance for credit accounts
-  if(a.isLiability && a.creditLimit>0){
-    var u=Math.min(100,Math.round(100*(a.balancePhp||0)/a.creditLimit));
-    var b=el('div','bar thin');
-    b.innerHTML='<div class="bar-fill '+(u>=90?'over':(u>=60?'warn':''))+'" style="width:'+u+'%"></div>';
-    $('.grow',r).appendChild(b);
-  }
-  r.onclick=function(){ openAccountModal(a); };
-  return r;
-}
-
 /* ════════════════════════════════════════════════════════════════════════
  *  TAX / BIR (Ledger)
  * ════════════════════════════════════════════════════════════════════════ */
@@ -1991,65 +2457,100 @@ function renderTax(){
     });
 
     var w=el('div','screen');
-    var head=el('div','screen-head');
-    head.appendChild(el('div','screen-title','Tax · BIR Ledger'));
+    var head=el('div','screen-head','<div class="screen-title">Tax</div>');
     var acts=el('div','btn-row');
-    // BIR files per year and the payload is now one year wide, so the year is a control,
-    // not a scroll. Native <select> for the same reason quarterSelect is one: a dozen
-    // fixed options. `years` comes from the server; the current year is always offered
-    // even before it has its first payslip.
+    // BIR files per year and the payload is one year wide, so the year is a control.
     acts.appendChild(ledgerYearSelect(res.year, res.years));
-    var addBtn=el('button','btn sm primary','+ Add row');
+    var addBtn=el('button','btn sm primary','Add row'); addBtn.type='button';
     addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
     acts.appendChild(addBtn);
     head.appendChild(acts);
     w.appendChild(head);
-    w.appendChild(el('div','screen-sub','8% gross-income regime tracker · tap a cell to edit ('+'ƒ'+' = formula, read-only) · '+
-      // The BSP reference rate is hand-typed per payslip, so link its source here.
-      // target=_blank keeps the SPA's state when you go check the rate.
-      '<a class="tx-link" target="_blank" rel="noopener" href="https://www.bsp.gov.ph/statistics/external/day99_data.aspx">BSP daily PHP/USD rate ›</a>'));
+    w.appendChild(el('div','screen-sub','Foreign salary for BIR, 8% of gross income · '+esc(res.year)));
 
-    if(!cols.length){ w.appendChild(el('div','empty','Ledger is empty.')); }
+    var qg=el('div','tax-q');
+    taxQuarters(rows,String(res.year),isoDate(new Date())).forEach(function(q){ qg.appendChild(taxTile(q)); });
+    w.appendChild(qg);
+    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedBanner(res.unlinked,res.txIdCol));
+
+    if(!rows.length){ w.appendChild(el('div','tile','<div class="tile-foot">No salaries in the ledger for '+esc(res.year)+'.</div>')); }
     else {
-      var card=el('div','card'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
-      var thead=el('thead'), htr=el('tr');
-      cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(derived[c]?' <span class="faint">ƒ</span>':''))); });
-      htr.appendChild(el('th')); // delete column
-      thead.appendChild(htr); t.appendChild(thead);
-
+      var card=el('section','tile tax-tbl'), wrap=el('div','tbl-wrap'), t=el('table','tbl');
+      var htr=el('tr');
+      cols.forEach(function(c){
+        var th=el('th',LEDGER_NUM[c]?'num':null,esc(LEDGER_LABEL[c]||c));
+        if(/rate/i.test(c)) th.appendChild(tip(BSP_TIP));
+        htr.appendChild(th);
+      });
+      htr.appendChild(el('th'));
+      var thead=el('thead'); thead.appendChild(htr); t.appendChild(thead);
       var tb=el('tbody'), ctx={cols:cols, derived:derived, txIdCol:res.txIdCol};
       rows.forEach(function(r){ tb.appendChild(ledgerRowTr(r, ctx)); });
       t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
     }
-    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedSalaryCard(res.unlinked,res.txIdCol));
     paint(w);
   }).catch(showErr);
 }
 
-/* Salary transactions no ledger row references yet. Adding one writes ONLY the link
- * column — every figure on the row is a sheet formula off that ID, so there is
- * nothing else to type but the BSP rate. */
-function unlinkedSalaryCard(list, txIdCol){
-  var card=el('div','card');
-  card.appendChild(el('div','card-h','Salary not in the ledger ('+list.length+')'));
-  var l=el('div','list');
-  list.forEach(function(t){
-    var r=el('div','litem');
-    r.innerHTML='<div class="grow"><div class="t1">'+esc(t.Description||'Salary')+'</div>'+
-                '<div class="t2">'+esc(fmtDate(t.Date))+' · '+esc(t.Account||'')+'</div></div>'+
-                '<div class="amt">'+esc(moneyCur(t.Amount,t.Currency))+'</div>';
-    var add=el('button','btn sm primary','+ Add');
-    add.onclick=function(){
-      add.disabled=true; add.textContent='Adding…';
-      var obj={}; obj[txIdCol]=t.ID;
-      gs('api_appendLedgerRow',obj).then(function(){
-        toast('Added to ledger','ok'); dropCache(); renderTax();
-      }).catch(function(e){ add.disabled=false; add.textContent='+ Add'; toast(e.message||e,'err'); });
-    };
-    r.appendChild(add); l.appendChild(r);
+var BSP_TIP={title:'Why you type this rate',
+  text:"BIR wants the central bank's reference rate on the day the money arrived. The app's live rate is a different number, so it cannot fill this in for you.",
+  rows:[['PHP','USD × BSP rate'],['8% tax','PHP × 8%',true]],
+  note:'Use the PHP per USD rate for the day the money arrived.',
+  link:['https://www.bsp.gov.ph/statistics/external/day99_data.aspx','Open the BSP daily rates']};
+
+/* The four BIR quarters of one year, from the ledger rows (pure, tested). A quarter
+ * is filed when every salary in it has a Filed quarter. Q1–Q3 are due on the 15th
+ * of the second month after; Q4 goes on the annual return, due 15 April. */
+function taxQuarters(rows, year, today){
+  var qs=[1,2,3,4].map(function(i){ return {q:i,n:0,filed:0,php:0,tax:0}; });
+  rows.forEach(function(r){
+    var d=String(r['Date Received']||'');
+    if(d.slice(0,4)!==year||!/^\d{4}-\d\d/.test(d)) return;
+    var o=qs[Math.floor((+d.slice(5,7)-1)/3)];
+    o.n++; if(r['Filed?']) o.filed++;
+    o.php+=Number(r['Total Income'])||0; o.tax+=Number(r['8% Tax'])||0;
   });
-  card.appendChild(l);
-  return card;
+  var p2=function(n){ return (n<10?'0':'')+n; };
+  qs.forEach(function(o){
+    var start=year+'-'+p2(o.q*3-2)+'-01', end=o.q<4?year+'-'+p2(o.q*3+1)+'-01':(+year+1)+'-01-01';
+    o.due=o.q<4?year+'-'+['05','08','11'][o.q-1]+'-15':(+year+1)+'-04-15';
+    o.current=today>=start&&today<end;
+    o.opens=start;
+    o.state=today<start?'future':(o.n&&o.filed===o.n)?'filed':o.n?'due':'empty';
+  });
+  return qs;
+}
+function dayMonth(iso,short){ var m=MONTHS_FULL[+iso.slice(5,7)-1]; return (+iso.slice(8,10))+' '+(short?m.slice(0,3):m); }
+function taxTile(q){
+  var badge={filed:['pos','Filed'],due:['warn','Due '+dayMonth(q.due,true)]}[q.state];
+  var sal=q.n+' salar'+(q.n===1?'y':'ies');
+  var spec=q.n?{title:'Q'+q.q+' tax',text:'Each salary at its BSP rate, then 8% of the total.',
+    rows:[['Income, '+sal,money(q.php,true)],['= Tax at 8%',money(q.tax,true),true]],
+    note:q.q===4?'Q4 goes on the annual return.':'Filed means every salary in the quarter has a Filed quarter.'}:null;
+  var t=sumTile('tax-t'+(q.state==='due'?' ring':''),'Q'+q.q+(q.current?' so far':''),
+    badge?'<span class="pill '+badge[0]+'">'+badge[1]+'</span>':null,spec);
+  t.appendChild(el('div','fig',q.state==='future'?'—':money(q.php,true)));
+  t.appendChild(el('div','tile-foot',q.state==='future'?'Opens '+dayMonth(q.opens):q.n?'Tax '+money(q.tax,true)+' · '+sal:'No salaries'));
+  return t;
+}
+
+/* Salary transactions no ledger row points at yet. Adding one writes ONLY the link;
+ * every figure on the row derives from it, so the BSP rate is all that is left to type. */
+function unlinkedBanner(list, txIdCol){
+  var n=list.length, b=el('section','tax-warn');
+  var one=function(t){ return esc(moneyCur(t.Amount,t.Currency))+' on '+esc(dayMonth(String(t.Date).slice(0,10))); };
+  b.innerHTML=icon('info')+'<span class="grow"><b>'+n+' salar'+(n===1?'y is':'ies are')+' not in the tax ledger.</b> '+
+    (n===1?esc(list[0].Description||'Salary')+', '+one(list[0])+'.':list.map(one).join(' · '))+'</span>';
+  var add=el('button','btn sm','Add to ledger'); add.type='button';
+  add.onclick=function(){
+    add.disabled=true; add.textContent='Adding…';
+    list.reduce(function(p,t){ return p.then(function(){ var o={}; o[txIdCol]=t.ID; return gs('api_appendLedgerRow',o); }); },Promise.resolve())
+      .then(function(){ toast(n===1?'Added to the ledger':n+' added to the ledger','ok'); })
+      .catch(function(e){ toast(e.message||e,'err'); })
+      .then(function(){ dropCache(); renderTax(); });
+  };
+  b.appendChild(add);
+  return b;
 }
 
 /* Reading order for the Tax table — the sheet's own column order is the owner's
@@ -2096,12 +2597,17 @@ function quarterSelect(val, onPick){
  * hands dates back as yyyy-MM-dd, the same value <input type="date"> produces, and
  * Sheets parses that ISO string straight into a real date on setValue. */
 function isDateCol(c){ return /date/i.test(c); }
-/* Ledger amounts read as money (2dp); the BSP reference rate keeps its precision.
- * Display only — the inline editor still gets the raw cell value. */
+/* Display only — the inline editor still gets the raw cell value. The rate keeps
+ * its precision; Wise Amount is the payslip in dollars. */
+var LEDGER_LABEL={'Date Received':'Received','Reporting Period':'Month','Filed?':'Filed in','Wise Amount':'USD',
+  'BSP Reference Rate':'BSP rate','Total Income':'PHP','8% Tax':'8% tax','Transaction ID':'Transaction'};
+var LEDGER_NUM={'Wise Amount':1,'BSP Reference Rate':1,'Total Income':1,'8% Tax':1};
 function ledgerText(col,val){
-  if(typeof val==='number' && !/rate/i.test(col))
-    return val.toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
-  return val==null?'':String(val);
+  if(val==null||val==='') return '';
+  if(typeof val==='number') return col==='Wise Amount'?moneyCur(val,'USD'):/rate/i.test(col)?String(val):money(val);
+  if(col==='Date Received'&&/^\d{4}-\d\d-\d\d$/.test(val)) return shortDate(parseDate(val));
+  if(col==='Reporting Period') return monthLabel(val);
+  return String(val);
 }
 /* A Transaction ID that opens that transaction's edit modal. */
 function txLinkEl(id){
@@ -2120,17 +2626,21 @@ function ledgerRowTr(r, ctx){
     // The link column opens the transaction instead of editing the ID; an empty
     // one stays editable so a legacy row can still be linked by hand.
     if(c===ctx.txIdCol && val!=null && val!==''){ td.appendChild(txLinkEl(String(val))); }
-    else if(ctx.derived[c]){ td.className='dim'; td.textContent=ledgerText(c,val); }
+    else if(ctx.derived[c]){ td.textContent=ledgerText(c,val); if(LEDGER_NUM[c]) td.className='num'; if(/^⚠/.test(String(val))){ td.className='warn'; td.textContent='Transaction deleted'; } }
     else if(isFiledCol(c)){
-      td.appendChild(quarterSelect(val, function(v){ ledgerSaveCell(tr, r, ctx, c, v); }));
+      var q=quarterSelect(val, function(v){ ledgerSaveCell(tr, r, ctx, c, v); });
+      q.classList.add('q-pill'); if(val) q.classList.add('on');
+      td.appendChild(q);
     }
     else {
-      td.className='ed-cell'; td.title='Tap to edit'; td.textContent=ledgerText(c,val);
+      // A typed cell looks like a field, so it reads as the one thing to fill in.
+      td.className='ed-cell'+(LEDGER_NUM[c]?' num':''); td.title='Tap to edit';
+      td.innerHTML='<span class="typed'+(val===''||val==null?' empty':'')+'">'+esc(ledgerText(c,val)||'Type')+'</span>';
       td.onclick=function(){ ledgerCellEdit(td, tr, r, ctx, c); };
     }
     tr.appendChild(td);
   });
-  var dtd=el('td'), del=el('button','icon-btn','✕'); del.title='Delete row';
+  var dtd=el('td'), del=el('button','icon-btn',icon('close')); del.type='button'; del.title='Delete row'; del.setAttribute('aria-label','Delete row');
   del.onclick=function(){ ledgerDeleteRow(r.__row); };
   dtd.appendChild(del); tr.appendChild(dtd);
   return tr;
@@ -2153,6 +2663,7 @@ function ledgerSaveCell(tr, r, ctx, header, value){
 function ledgerCellEdit(td, tr, r, ctx, header){
   var curVal=r[header];
   var input=el('input','ledger-edit-input'); input.type='text';
+  if(LEDGER_NUM[header]) input.inputMode='decimal';
   if(curVal!=null) input.value=String(curVal);
   td.classList.add('editing'); td.textContent=''; td.appendChild(input); input.focus(); input.select();
   var done=false;
@@ -2189,7 +2700,7 @@ function openLedgerAdd(cols, derived){
       closeModal(); toast('Row added','ok'); dropCache(); renderTax();
     }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
   };
-  openModal(modalShell('Add ledger row', body, [save]));
+  openModal(modalShell('Add a row to the tax ledger', body, [save]));
 }
 
 function ledgerDeleteRow(row){
@@ -2201,79 +2712,88 @@ function ledgerDeleteRow(row){
     }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Delete this ledger row?', el('div','dim','This permanently removes the row from the Ledger sheet.'), [no,yes]));
+  openModal(modalShell('Delete this ledger row?', el('div','dim','The row leaves the tax ledger. The salary transaction stays.'), [no,yes]));
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- *  EXCHANGE — fair USD↔PHP swap with the other person. Both of you would
- *  otherwise pay a Wise fee — you cashing out USD→PHP, they buying USD with
- *  PHP→USD — and the two routes carry DIFFERENT fees, so we take each as the
- *  actual amount Wise quotes (your fee in USD, theirs in PHP). Wise deducts its
- *  fee from the SOURCE, then converts the remainder at mid-market, so your floor
- *  = (usd − feeYou)×mid and their ceiling = mid + feeBro (the `bro`/`Bro` names
- *  are historical — they mean "the other person"). Trading direct avoids both fees;
- *  the slider splits that pot. At the mid-market rate each of you simply keeps
- *  your own avoided fee (only the 50/50 point when the two fees are equal).
- *  Defaults reproduce a sample Wise quote ($3.68 out, ₱154.83 in; tunable).
+ *  SWAP (screen key `exchange`, v3 Phase 6) — a fair USD↔PHP rate with a
+ *  friend. Both of you would otherwise pay Wise, and the two routes carry
+ *  DIFFERENT fees, so each is the amount Wise quotes (yours in $, theirs in ₱).
+ *  swapCalc holds the maths. At the mid-market rate each of you keeps your own
+ *  avoided fee. Defaults are a sample Wise quote ($3.68 out, ₱154.83 in).
  * ════════════════════════════════════════════════════════════════════════ */
 function renderExchange(){
   if(needBoot('table', renderExchange)) return;
   var w=el('div','screen');
-  w.appendChild(el('div','screen-title','Swap · Fair USD↔PHP'));
-  w.appendChild(el('div','screen-sub','Skip Wise fees, split the savings with the other person'));
-
-  var rate0 = (S.boot.fxUsdPhp!=null && S.boot.fxUsdPhp>0) ? Number(S.boot.fxUsdPhp).toFixed(4) : '';
-  var card=el('div','card');
-  card.innerHTML=
-    '<div class="field-row">'+
-      '<div class="field"><label>Dollars I\'m giving ($)</label><input id="exAmt" type="number" min="0" step="any" value="1000"></div>'+
-      '<div class="field"><label>Mid-market rate (₱ per $1)</label><input id="exRate" type="number" min="0" step="any" value="'+rate0+'">'+
-        '<div class="hint">Live rate, editable</div></div>'+
-    '</div>'+
-    '<div class="field-row">'+
-      '<div class="field"><label>Your Wise fee — USD→PHP ($)</label><input id="exFeeYou" type="number" min="0" step="any" value="3.68"></div>'+
-      '<div class="field"><label>Their Wise fee — PHP→USD (₱)</label><input id="exFeeBro" type="number" min="0" step="any" value="154.83"></div>'+
-    '</div>'+
-    '<div class="field"><label>Your share of the saved fee: <span id="exSplitLbl">50%</span></label>'+
-      '<input id="exSplit" type="range" min="0" max="100" step="5" value="50" style="width:100%;accent-color:var(--accent)"></div>';
-  w.appendChild(card);
-  w.appendChild(el('div','',null)).id='exOut';
-  paint(w);
-
-  ['exAmt','exRate','exFeeYou','exFeeBro','exSplit'].forEach(function(id){
-    $('#'+id).addEventListener('input', exCalc);
+  w.appendChild(el('div','screen-head','<div class="screen-title">Swap</div>'));
+  w.appendChild(el('div','screen-sub','A fair USD ↔ PHP rate with a friend'));
+  var rate0=(S.boot.fxUsdPhp>0)?Number(S.boot.fxUsdPhp).toFixed(4):'';
+  var g=el('div','sw'), inCard=el('section','tile sw-in'), out=el('div','sw-out');
+  [['exAmt','Dollars you give','USD','1000'],['exRate','Mid-market rate','Live · tap to change',rate0],
+   ['exFeeYou','Your Wise fee','USD → PHP, in $','3.68'],['exFeeBro','Their Wise fee','PHP → USD, in ₱','154.83']].forEach(function(f){
+    var l=el('label','sw-f','<span><span class="sw-k">'+f[1]+'</span><span class="sw-s">'+f[2]+'</span></span>');
+    var i=inputEl('text',f[3]); i.id=f[0]; i.inputMode='decimal'; i.autocomplete='off'; l.appendChild(i); inCard.appendChild(l);
   });
+  var sp=el('div','sw-split','<div class="sw-sh"><span>Your share of the saving</span><b id="exSplitLbl">50%</b></div>'+
+    '<input id="exSplit" type="range" min="0" max="100" step="5" value="50" aria-label="Your share of the saving">');
+  inCard.appendChild(sp);
+  g.appendChild(inCard); g.appendChild(out); w.appendChild(g);
+  paint(w);
+  ['exAmt','exRate','exFeeYou','exFeeBro','exSplit'].forEach(function(id){ $('#'+id).addEventListener('input', exCalc); });
   exCalc();
 }
 
+/* The pure part of the swap (tested in test.js). Wise takes its fee from the SOURCE
+ * and converts the rest at mid, so your floor = (usd − feeYou) × mid and their
+ * ceiling = usd × mid + feeThem. Trading direct saves both fees; `split` is your
+ * share of that pot. */
+function swapCalc(usd, mid, feeYouUsd, feeThemPhp, split){
+  var floor=(usd-feeYouUsd)*mid, ceil=usd*mid+feeThemPhp, pot=ceil-floor, deal=floor+split/100*pot;
+  return {floor:floor, ceil:ceil, pot:pot, deal:deal, rate:deal/usd, youSave:deal-floor, theySave:ceil-deal};
+}
+function exNum(id){ return parseFloat(String($('#'+id).value).replace(/[,\s$₱]/g,''))||0; }
+
 function exCalc(){
-  var usd=parseFloat($('#exAmt').value)||0, rate=parseFloat($('#exRate').value)||0;
-  var feeYouUsd=parseFloat($('#exFeeYou').value)||0, feeBroPhp=parseFloat($('#exFeeBro').value)||0;
-  var split=parseFloat($('#exSplit').value)||0;
+  var usd=exNum('exAmt'), mid=exNum('exRate'), fy=exNum('exFeeYou'), ft=exNum('exFeeBro'), split=exNum('exSplit');
   $('#exSplitLbl').textContent=split+'%';
-  var out=$('#exOut');
-  if(!(usd>0)||!(rate>0)){ out.innerHTML='<div class="empty">Enter an amount and a rate.</div>'; return; }
+  $('#exSplit').style.setProperty('--v',split+'%');
+  var out=$('.sw-out');
+  if(!(usd>0)||!(mid>0)){ out.innerHTML='<div class="tile"><div class="tile-foot">Type the dollars and a rate.</div></div>'; return; }
+  var c=swapCalc(usd,mid,fy,ft,split), span=c.ceil-c.floor;
+  var at=function(v){ return span>0?Math.max(0,Math.min(100,100*(v-c.floor)/span)):50; };
+  var r2=function(n){ return '₱'+num(Math.round(n/usd*100)/100); };
+  out.innerHTML='';
+  var h=sumTile('sw-hero','They send you',null,{title:'How the fair rate is set',
+    text:'Each of you would pay Wise a fee. Trading direct saves both fees, and the slider splits that saving.',
+    rows:[['Wise pays you',money(c.floor)],['Wise costs them',money(c.ceil)],['Saving (both fees)',money(c.pot)],
+          ['Your share',split+'%'],['= They send you',money(c.deal),true]],
+    note:'Wise takes its fee from the money it converts, then uses the mid-market rate.'});
+  h.insertAdjacentHTML('beforeend','<div class="fig-row"><span class="fig-hero">'+money(c.deal)+'</span><span class="fig-sub">for '+moneyCur(usd,'USD')+'</span></div>'+
+    '<div class="sw-rate">Fair rate '+r2(c.deal)+' per $1</div>'+
+    '<div class="sw-range"><span class="sw-lo">Wise pays you '+r2(c.floor)+'</span><span class="sw-hi">Wise costs them '+r2(c.ceil)+'</span>'+
+      '<div class="sw-bar"><i class="sw-mid" style="left:'+at(usd*mid)+'%"></i><b style="left:'+at(c.deal)+'%"></b></div>'+
+      '<span class="sw-fair" style="left:'+at(c.deal)+'%">Fair '+r2(c.deal)+'</span></div>'+
+    '<div class="tile-foot">Any rate inside the bar beats Wise for you both. The white mark is the mid-market rate, '+r2(usd*mid)+'.</div>');
+  out.appendChild(h);
+  var pair=el('div','sw-pair');
+  [['You save',c.youSave,'Your '+split+'% of '+money(c.pot)],['They save',c.theySave,'Their '+(100-split)+'% of '+money(c.pot)]].forEach(function(s){
+    var t=sumTile('','' +s[0]); t.appendChild(el('div','fig pos',money(s[1]))); t.appendChild(el('div','tile-foot',s[2])); pair.appendChild(t);
+  });
+  out.appendChild(pair);
+  var rec=el('button','btn primary sw-rec','Record this swap'); rec.type='button';
+  rec.onclick=function(){ openTransferModal(swapDraft(usd,c.deal)); };
+  out.appendChild(rec);
+}
 
-  var midPhp = usd*rate;
-  // Wise deducts its fee from the SOURCE, then converts the remainder at mid.
-  var wiseNetPhp = midPhp - feeYouUsd*rate;           // ₱ you'd receive cashing out USD→PHP (your floor)
-  var broWiseCostPhp = midPhp + feeBroPhp;            // ₱ they'd send to net the USD via PHP→USD (their ceiling)
-  var potPhp = broWiseCostPhp - wiseNetPhp;           // total saved by trading direct = both avoided fees
-  var dealPhp = wiseNetPhp + split/100*potPhp;        // fair deal: your `split` of the whole pot
-
-  function stat(label,val,sub){return '<div class="stat"><div class="stat-label">'+esc(label)+
-    '</div><div class="stat-value">'+val+'</div>'+(sub?'<div class="stat-sub">'+sub+'</div>':'')+'</div>';}
-
-  out.innerHTML=
-    '<div class="stat hero" style="margin-bottom:14px"><div class="stat-label">They send you</div>'+
-      '<div class="stat-value">'+money(dealPhp)+' <span style="font-size:14px;color:var(--text-dim)">for '+moneyCur(usd,'USD')+'</span></div>'+
-      '<div class="stat-sub" style="font-size:15px;font-weight:650;color:var(--text);margin-top:8px">Fair rate ₱'+num(dealPhp/usd)+' per $1</div></div>'+
-    '<div class="grid grid-2">'+
-      stat('You save vs Wise', '<span class="pos">'+money(dealPhp-wiseNetPhp)+'</span>', 'your '+split+'% of '+money(potPhp)) +
-      stat('They save vs Wise', '<span class="pos">'+money(broWiseCostPhp-dealPhp)+'</span>', 'their '+(100-split)+'% of '+money(potPhp)) +
-    '</div>'+
-    '<div class="hint" style="margin-top:10px">Any rate from '+num(wiseNetPhp/usd)+' to '+num(broWiseCostPhp/usd)+
-      ' beats Wise for you both; at mid-market ('+num(rate)+') you each keep your own avoided fee.</div>';
+/* The transfer the swap books: USD out of a dollar account, pesos into a peso one.
+ * ToAmount/Amount is then the fair rate, and the implied-rate rule stamps it. */
+function swapDraft(usd, php){
+  var accs=(S.boot.accounts||[]).filter(function(a){ return !a.isShares&&!a.isLiability&&!isRecv(a); });
+  var big=function(l){ return l.sort(function(a,b){ return (b.balancePhp||0)-(a.balancePhp||0); })[0]; };
+  var from=big(accs.filter(function(a){ return a.currency==='USD'; }));
+  var last=prefGet('lastAcct'), to=accs.filter(function(a){ return a.name===last&&(a.currency||'PHP')==='PHP'; })[0]||
+    big(accs.filter(function(a){ return (a.currency||'PHP')==='PHP'; }));
+  return {Date:newTxDate(), Amount:Math.round(usd*100)/100, ToAmount:Math.round(php*100)/100, Account:from?from.name:'', ToAccount:to?to.name:'', Description:'USD swap'};
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -2303,85 +2823,92 @@ function adminTable(){ return S.admin.table||'accounts'; }
    the ✓ CSV button below pays for the full table only when you actually ask for it. */
 var ADMIN_PAGE = 50;
 
+// Picker labels. The server owns WHICH tables exist (listTable.tables); a table
+// missing here shows its own name.
+var ADMIN_LABEL={accounts:'Accounts',categories:'Categories',account_types:'Account types',budgets:'Budgets',
+  recurring:'Recurring',ledger:'Tax ledger',prices:'Prices',nw_snapshots:'Net worth history',meta:'Settings',
+  transactions:'Transactions',email_quotes:'Email quotes'};
+function adminLabel(t){ return ADMIN_LABEL[t]||t; }
+
 function renderAdmin(){
   var t=adminTable(), off=S.admin.offset||0;
   var key='table|'+t+'|'+off;
   if(!S.cache[key]) loading('table');
   return cachedCall(key, function(et){ return gs('api_listTable',{table:t,limit:ADMIN_PAGE,offset:off},et); }, function(res){
     var w=el('div','screen');
-    var head=el('div','screen-head');
-    head.appendChild(el('div','screen-title','Admin · '+t));
+    w.appendChild(el('div','screen-head','<div class="screen-title">Admin</div>'));
+    w.appendChild(el('div','screen-sub','Edit the tables behind the app'));
+
+    var bar=el('div','adm-bar'), pick=el('div','seg adm-seg');
+    (res.tables||[]).forEach(function(name){
+      var b=el('button',name===t?'on':'',esc(adminLabel(name))); b.type='button'; b.setAttribute('aria-pressed',name===t);
+      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
+      pick.appendChild(b);
+    });
+    bar.appendChild(pick);
     var actions=el('div','btn-row');
-    if((res.addable||[]).length){
-      var add=el('button','btn sm primary','+ Add row');
-      add.onclick=function(){ adminAddRow(res); };
-      actions.appendChild(add);
-    }
-    var csv=el('button','btn sm','↓ CSV');
+    var csv=el('button','btn sm','Export CSV'); csv.type='button';
     // The visible page is 50 rows; a backup file of 50 rows would be a lie. Pull every
-    // page first (listTable caps a request at 1000), so the file is the whole table —
-    // which the old limit:500 grid never was either.
+    // page first (listTable caps a request at 1000), so the file is the whole table.
     csv.onclick=function(){
       csv.disabled=true; csv.textContent='Exporting…';
       adminFetchAll(t).then(function(all){ downloadCsv(t+'.csv', res.cols, all); })
         .catch(function(e){ toast(e.message||e,'err'); })
-        .then(function(){ csv.disabled=false; csv.textContent='↓ CSV'; });
+        .then(function(){ csv.disabled=false; csv.textContent='Export CSV'; });
     };
     actions.appendChild(csv);
-    head.appendChild(actions);
-    w.appendChild(head);
-    w.appendChild(el('div','screen-sub','The tables behind the app. '+res.total+' row'+(res.total===1?'':'s')+
-      ' · tap an editable cell to change it'+((res.editable||[]).length?'':' (this table is read-only)')));
+    if((res.addable||[]).length){
+      var add=el('button','btn sm primary','Add row'); add.type='button';
+      add.onclick=function(){ adminAddRow(res); };
+      actions.appendChild(add);
+    }
+    bar.appendChild(actions);
+    w.appendChild(bar);
+    requestAnimationFrame(function(){ var on=$('.adm-seg .on'); if(on) on.scrollIntoView({block:'nearest',inline:'nearest'}); });
 
-    var picker=el('div','btn-row'); picker.style.marginBottom='14px';
-    (res.tables||[]).forEach(function(name){
-      var b=el('button','btn sm'+(name===t?' primary':''),esc(name));
-      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
-      picker.appendChild(b);
-    });
-    w.appendChild(picker);
-
-    if(!res.rows.length){ w.appendChild(el('div','empty','No rows.')); paint(w); return; }
     var editable={}; (res.editable||[]).forEach(function(c){ editable[c]=true; });
     var money={}; (res.money||[]).forEach(function(c){ money[c]=true; });
-
-    var card=el('div','card'), wrap=el('div','tbl-wrap'), tbl=el('table','tbl');
-    var htr=el('tr');
-    res.cols.forEach(function(c){ htr.appendChild(el('th',null,esc(c)+(money[c]?' <span class="faint">₱</span>':''))); });
-    htr.appendChild(el('th'));
-    var thead=el('thead'); thead.appendChild(htr); tbl.appendChild(thead);
-
-    var tb=el('tbody');
-    res.rows.forEach(function(row){ tb.appendChild(adminRowTr(row,res,editable)); });
-    tbl.appendChild(tb); wrap.appendChild(tbl); card.appendChild(wrap); w.appendChild(card);
-    if(res.total>ADMIN_PAGE){
-      var pg=el('div','row-between'); pg.style.marginTop='12px';
-      var prev=el('button','btn sm','← Prev'); prev.disabled=off<=0;
-      prev.onclick=function(){ S.admin.offset=Math.max(0,off-ADMIN_PAGE); render(); };
-      var next=el('button','btn sm','Next →'); next.disabled=off+ADMIN_PAGE>=res.total;
-      next.onclick=function(){ S.admin.offset=off+ADMIN_PAGE; render(); };
-      var info=el('div','dim','Showing '+(off+1)+'–'+Math.min(off+ADMIN_PAGE,res.total)+' of '+res.total);
-      info.style.fontSize='12px';
-      pg.appendChild(prev); pg.appendChild(info); pg.appendChild(next);
-      w.appendChild(pg);
+    var ro=!(res.editable||[]).length;
+    var card=el('section','tile adm-tbl');
+    if(!res.rows.length){ card.appendChild(el('div','tile-foot','No rows.')); }
+    else {
+      var wrap=el('div','tbl-wrap'), tbl=el('table','tbl'), htr=el('tr');
+      // A locked column is one the grid cannot edit on a table that is otherwise
+      // editable: the key other tables point at, or a derived field.
+      res.cols.forEach(function(c){
+        var th=el('th',money[c]?'num':null,esc(c)+(money[c]?' <span class="dim">₱</span>':''));
+        if(!ro&&!editable[c]){ th.insertAdjacentHTML('beforeend',icon('lock')); th.title='Locked'; }
+        htr.appendChild(th);
+      });
+      htr.appendChild(el('th'));
+      var thead=el('thead'); thead.appendChild(htr); tbl.appendChild(thead);
+      var tb=el('tbody');
+      res.rows.forEach(function(row){ tb.appendChild(adminRowTr(row,res,editable,money)); });
+      tbl.appendChild(tb); wrap.appendChild(tbl); card.appendChild(wrap);
     }
+    var foot=el('div','adm-foot');
+    foot.appendChild(el('span',null,ro?'This table is read-only.':'Click a cell to edit it. Locked columns are keys other tables point at, or derived.'));
+    foot.appendChild(pagerEl(off,ADMIN_PAGE,res.total,function(o){ S.admin.offset=o; render(); }));
+    card.appendChild(foot);
+    w.appendChild(card);
+    if(S.boot) w.appendChild(widgetPicker(S.boot.accounts||[]));
     paint(w);
   }).catch(showErr);
 }
 
-function adminRowTr(row,res,editable){
+function adminRowTr(row,res,editable,money){
   var tr=el('tr');
   res.cols.forEach(function(c){
-    var td=el('td',null,esc(row[c]==null?'':row[c]));
+    var td=el('td',money&&money[c]?'num':null,esc(row[c]==null?'':row[c]));
     if(editable[c]){
       td.classList.add('ed-cell');
-      td.onclick=function(){ adminCellEdit(td,tr,row,res,editable,c); };
-    }
+      td.onclick=function(){ adminCellEdit(td,tr,row,res,editable,c,money); };
+    } else if((res.editable||[]).length) td.classList.add('dim');
     tr.appendChild(td);
   });
   var del=el('td');
-  if(res.deletable!==false){                            // read-only tables (nodelete) show no ✕
-    var b=el('button','btn sm ghost','✕'); b.title='Delete row';
+  if(res.deletable!==false){                            // read-only tables (nodelete) show no delete
+    var b=el('button','icon-btn',icon('close')); b.type='button'; b.title='Delete row'; b.setAttribute('aria-label','Delete row');
     b.onclick=function(e){ e.stopPropagation(); adminDeleteRow(res,row[res.pk]); };
     del.appendChild(b);
   }
@@ -2391,13 +2918,13 @@ function adminRowTr(row,res,editable){
 
 /* Same swap-the-td-for-an-input editor the Tax screen uses, against the generic
  * updateTableCell handler instead of a ledger-specific one. */
-function adminCellEdit(td,tr,row,res,editable,col){
+function adminCellEdit(td,tr,row,res,editable,col,money){
   var cur=row[col];
   var inp=el('input','ledger-edit-input'); inp.type='text';
   if(cur!=null) inp.value=String(cur);
   td.classList.add('editing'); td.textContent=''; td.appendChild(inp); inp.focus(); inp.select();
   var done=false;
-  function restore(){ tr.parentNode.replaceChild(adminRowTr(row,res,editable),tr); }
+  function restore(){ tr.parentNode.replaceChild(adminRowTr(row,res,editable,money),tr); }
   function commit(){
     if(done) return; done=true;
     var v=inp.value;
@@ -2428,7 +2955,7 @@ function adminAddRow(res){
       closeModal(); toast('Row added','ok'); dropCache(); render();
     }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
   };
-  openModal(modalShell('Add row · '+res.table, body, [save]));
+  openModal(modalShell('Add a row to '+adminLabel(res.table), body, [save]));
 }
 
 function adminDeleteRow(res,pk){
@@ -2440,7 +2967,7 @@ function adminDeleteRow(res,pk){
     }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Delete '+res.table+' row '+pk+'?',
+  openModal(modalShell('Delete row '+pk+' from '+adminLabel(res.table)+'?',
     el('div','dim','This removes the row permanently. D1 Time Travel can restore the database for 7 days.'), [no,yes]));
 }
 
@@ -2467,6 +2994,16 @@ function downloadCsv(name, cols, rows){
   var url=URL.createObjectURL(new Blob([out],{type:'text/csv'}));
   var a=el('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
   a.remove(); setTimeout(function(){ URL.revokeObjectURL(url); },1000);
+}
+
+/* One pager for Activity and Admin: "1–50 of 312", then Previous and Next. */
+function pagerEl(off,size,total,go){
+  var pg=el('div','pager');
+  pg.appendChild(el('span',null,total?(off+1)+'–'+Math.min(off+size,total)+' of '+total:'No rows'));
+  if(total>size) [['Previous',Math.max(0,off-size),off<=0],['Next',off+size,off+size>=total]].forEach(function(p){
+    var b=el('button','link-btn',p[0]); b.type='button'; b.disabled=p[2]; b.onclick=function(){ go(p[1]); }; pg.appendChild(b);
+  });
+  return pg;
 }
 
 /* —— inline single-field edit (Category / Account / Description / Amount) —— */
@@ -2506,7 +3043,7 @@ function commitInline(t, field, val){
   var patch={ID:t.ID};
   if(field==='Amount'){
     var n=parseFloat(val);
-    if(isNaN(n)){ toast('Enter a valid amount','err'); renderTxList(); return; }
+    if(isNaN(n)){ toast('Enter an amount','err'); renderTxList(); return; }
     if(n===Number(t.Amount)){ renderTxList(); return; }            // no-op
     patch.Amount=n;
   } else {
@@ -2530,18 +3067,21 @@ function selCount(){ return Object.keys(S.tx.sel).length; }
 function bulkSelectedIds(){ return Object.keys(S.tx.sel); }
 function clearSel(){ S.tx.sel={}; }
 
+// The floating bulk bar: "N selected · net", then the actions, Delete last.
 function updateBulkBar(){
   var bar=$('#bulkBar'); if(!bar) return;
   var n=selCount();
-  if(!n){ bar.hidden=true; bar.innerHTML=''; return; }
-  bar.hidden=false; bar.innerHTML='';
-  bar.appendChild(el('span','bulk-count',n+' selected'));
-  function add(label,cls,fn){ var b=el('button','btn sm '+(cls||''),label); b.onclick=fn; bar.appendChild(b); }
-  add('Recategorize','',openBulkRecat);
-  add('Reassign','',openBulkReassign);
-  add('Set date','',openBulkDate);
-  add('Delete','danger',openBulkDelete);
-  add('Clear','ghost',function(){ clearSel(); renderTxList(); });
+  bar.hidden=!n; bar.innerHTML=''; if(!n) return;
+  // A transfer nets to 0, so it shows as its own "moved" figure instead.
+  var net=0, moved=0;
+  (S.tx.rows||[]).forEach(function(t){ if(!S.tx.sel[t.ID]) return; if(txIsXfer(t)) moved+=Math.abs(Number(t['Amount (PHP)'])||0); else net+=txNet(t); });
+  bar.appendChild(el('span','bulk-count',n+' selected'+(Math.round(net)?' · '+fmtNet(net):'')+(Math.round(moved)?' · '+money(moved,true)+' moved':'')));
+  function add(label,cls,fn){ var b=el('button',cls,label); b.type='button'; b.onclick=fn; bar.appendChild(b); return b; }
+  add('Category','',openBulkRecat);
+  add('Account','',openBulkReassign);
+  add('Date','',openBulkDate);
+  add('Delete','del',openBulkDelete);
+  add(icon('close'),'x',function(){ clearSel(); renderTxList(); }).setAttribute('aria-label','Clear the selection');
 }
 
 function bulkApply(patch){
@@ -2587,7 +3127,7 @@ function openBulkDate(){
   openModal(modalShell('Set date on '+selCount()+' transactions', fieldEl('New date',d), [save]));
 }
 function openBulkDelete(){
-  var body=el('div','dim','Delete '+selCount()+' transactions permanently? This cannot be undone.');
+  var body=el('div','dim','You cannot undo this.');
   var yes=el('button','btn danger','Delete '+selCount());
   yes.onclick=function(){
     // Optimistic: the rows stay on screen as loading until the backend confirms.
@@ -2600,7 +3140,7 @@ function openBulkDelete(){
     }).catch(function(e){ done(); toast(e.message||e,'err'); renderTxList(); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Confirm bulk delete', body, [no,yes]));
+  openModal(modalShell('Delete '+selCount()+' transactions?', body, [no,yes]));
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -2613,9 +3153,11 @@ function fitModal(){
   if(!vv||!root||root.hidden) return;
   root.style.top=vv.offsetTop+'px'; root.style.height=vv.height+'px';
 }
-function openModal(node){
+// opts.sheet: a bottom sheet on a phone (app.css), a centred card from 768px.
+function openModal(node, opts){
   var root=$('#modalRoot'); var card=$('#modalCard');
   closeModal.onClose=null;
+  root.classList.toggle('as-sheet', !!(opts&&opts.sheet));
   card.innerHTML=''; card.appendChild(node); root.hidden=false;
   if(window.visualViewport){ visualViewport.addEventListener('resize',fitModal); visualViewport.addEventListener('scroll',fitModal); fitModal(); }
   $('.modal-backdrop',root).onclick=closeModal;
@@ -2644,7 +3186,7 @@ function closeModal(){
 function modalShell(title,bodyNode,footerNodes){
   var c=el('div');
   var h=el('div','modal-h'); h.innerHTML='<h3>'+esc(title)+'</h3>';
-  var x=el('button','icon-btn','✕'); x.onclick=closeModal; h.appendChild(x);
+  var x=el('button','icon-btn',icon('close')); x.setAttribute('aria-label','Close'); x.onclick=closeModal; h.appendChild(x);
   var b=el('div','modal-b'); b.appendChild(bodyNode);
   var f=el('div','modal-f'); (footerNodes||[]).forEach(function(n){f.appendChild(n);});
   c.appendChild(h); c.appendChild(b); c.appendChild(f);
@@ -2659,21 +3201,6 @@ function fieldEl(label,inputNode,hint){
   return f;
 }
 function inputEl(type,value,ph){var i=el('input');i.type=type||'text';if(value!=null)i.value=value;if(ph)i.placeholder=ph;return i;}
-
-/* —— reporting-period override (shared by the tx + transfer modals) ————————
- * Blank = the usual case: Month derives from Date. Setting it books the row into a
- * different month for every month-keyed report (cash flow, budgets, filters) while
- * Date keeps the real cash movement — for salary that lands a day or two early.
- */
-function periodEl(t){
-  return comboEl([{value:'',label:'(from date)'}].concat(monthOptions()), (t&&t.Period)||'');
-}
-function periodRowEl(fDate,fPeriod){
-  var row=el('div','field-row');
-  row.appendChild(fieldEl('Date', fDate));
-  row.appendChild(fieldEl('Reports in', fPeriod, "blank = the date's own month"));
-  return row;
-}
 
 /* —— fuzzy combobox (searchable replacement for <select>) ——————————————————
  * comboEl(options, value, opts) returns a wrapper element that exposes a `.value`
@@ -2762,7 +3289,6 @@ function comboEl(options,value,opts){
  * (and autofocusing) means a new entry is usually just category + amount. */
 function prefGet(k){ try{ return localStorage.getItem('ft.'+k)||''; }catch(e){ return ''; } }
 function prefSet(k,v){ try{ if(v) localStorage.setItem('ft.'+k,String(v)); }catch(e){} }
-function focusCombo(c){ var i=c&&c.querySelector('.combo-input'); if(i){ i.focus(); i.select(); } }
 // Amount for a form field: absolute value, blank when there's nothing usable
 // (a carried-over draft may hold '' or a half-typed number).
 /* The field shows the amount AS STORED, sign and all. It used to show the magnitude,
@@ -2771,7 +3297,7 @@ function focusCombo(c){ var i=c&&c.querySelector('.combo-input'); if(i){ i.focus
 function amtField(v){ return (v===''||v==null||isNaN(v))?'':v; }
 
 /* —— transaction ⇄ transfer switcher (new rows only) ——————————————————————
- * The FAB is the only add path on most screens, so a transfer shouldn't mean a detour
+ * The add field is the only add path on most screens, so a transfer shouldn't mean a detour
  * to the Transactions screen: this swaps the modal in place, carrying the shared fields.
  * Edits are excluded — an existing row's shape is fixed. */
 function typeToggleEl(mode,onSwitch){
@@ -2803,7 +3329,7 @@ function commitTx(o){
   if(o.isEdit){
     var patch=Object.assign({ID:o.t.ID},o.payload);
     S.tx.pendingEdits[o.t.ID]=patch;
-    closeModal(); toast('Updated','ok'); repaintTxList();
+    closeEditor(); toast('Updated','ok'); repaintTxList();
     gs('api_updateTransaction', patch)
       .then(function(){ delete S.tx.pendingEdits[o.t.ID]; afterMutation(); })
       .catch(function(e){ delete S.tx.pendingEdits[o.t.ID]; repaintTxList();
@@ -2811,7 +3337,7 @@ function commitTx(o){
         o.reopen(Object.assign({},o.t,o.payload)); });
     return;
   }
-  closeModal(); toast(o.addedMsg,'ok');
+  closeEditor(); toast(o.addedMsg,'ok');
   var tmp=pushPendingAdd(o.payload);
   gs(o.create, o.payload)
     .then(function(r){ if(r && r.status==='queued') return;
@@ -2823,12 +3349,158 @@ function commitTx(o){
       toast(o.failMsg+' — reopening: '+(e.message||e),'err'); o.reopen(o.payload); });
 }
 
-/* Modal footer: Save on the right, Delete pushed to the far left when editing. */
-function modalFoot(save, isEdit, t){
-  if(!isEdit) return [save];
-  var del=el('button','btn danger','Delete'); del.style.marginRight='auto';
-  del.onclick=function(){ confirmDelete(t); };
-  return [del, save];
+/* ════ The transaction editor: a full-screen page on a phone, a form sheet from 768px ════
+ * One page stack in #edRoot: the form, plus a picker page pushed over it for Category,
+ * Account and Reports in. The old modal resized itself to the visual viewport while iOS
+ * scrolled to the focused field, and the two fought (the modal jumped). Here nothing moves
+ * for the keyboard: --kb (its height) only pads the bottom, and the text fields sit at the
+ * top of the form, above where the keyboard lands. */
+var ED={root:null, pages:[], t:0};
+function edRoot(){
+  if(ED.root) return ED.root;
+  var r=el('div','ed-root'); r.hidden=true;
+  r.innerHTML='<div class="ed-backdrop"></div><div class="ed-card"></div>';
+  r.firstChild.onclick=closeEditor;
+  document.body.appendChild(r);
+  if(window.visualViewport){
+    var fit=function(){ var vv=visualViewport; r.style.setProperty('--kb',Math.max(0,Math.round(innerHeight-vv.height-vv.offsetTop))+'px'); };
+    visualViewport.addEventListener('resize',fit); fit();
+  }
+  return ED.root=r;
+}
+function edOpen(){ return !!(ED.root&&!ED.root.hidden&&ED.pages.length); }
+// Show a form page. Already open (the Transaction ⇄ Transfer switch): swap in place.
+function openEditor(page){
+  var r=edRoot(), card=r.lastChild, fresh=!edOpen();
+  clearTimeout(ED.t);
+  card.innerHTML=''; card.appendChild(page); ED.pages=[page];
+  if(fresh){ r.classList.remove('in','out'); r.hidden=false; void card.offsetWidth; r.classList.add('in'); }
+}
+function closeEditor(){
+  var r=ED.root; if(!edOpen()) return;
+  if(document.activeElement&&r.contains(document.activeElement)) document.activeElement.blur();
+  ED.pages=[]; r.classList.add('out');
+  ED.t=setTimeout(function(){ r.hidden=true; r.classList.remove('in','out'); r.lastChild.innerHTML=''; },300);
+}
+function pushPage(p){ p.classList.add('push'); ED.root.lastChild.appendChild(p); ED.pages.push(p); }
+function popPage(){
+  if(ED.pages.length<2) return closeEditor();
+  var p=ED.pages.pop(); p.classList.add('pop');
+  setTimeout(function(){ p.remove(); },300);
+}
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Escape'||!edOpen()||!$('#modalRoot').hidden) return;
+  e.preventDefault(); popPage();
+});
+
+// A page: [left] title [right] in a bar, then the scroller (page.body).
+function edPage(title,left,right){
+  var p=el('div','ed-page'), bar=el('div','ed-bar'), sc=el('div','ed-scroll');
+  bar.appendChild(left||el('span')); bar.appendChild(el('div','ed-title',esc(title))); bar.appendChild(right||el('span'));
+  p.appendChild(bar); p.appendChild(sc); p.body=sc; return p;
+}
+function barBtn(label,cls,fn){ var b=el('button','ed-bb'+(cls?' '+cls:''),label); b.type='button'; b.onclick=fn; return b; }
+function edGroup(parent,foot){
+  var g=el('div','ed-group'); parent.appendChild(g);
+  if(foot) parent.appendChild(el('div','ed-foot',esc(foot)));
+  return g;
+}
+// A <label> row, so a tap anywhere on it focuses the field.
+function edRow(g,label,ctrl){
+  var r=el('label','ed-row'); r.appendChild(el('span','ed-lab',esc(label))); r.appendChild(ctrl); g.appendChild(r); return r;
+}
+function edInput(g,label,value,o){
+  o=o||{};
+  var i=el('input','ed-in'+(o.cls?' '+o.cls:'')); i.type='text'; i.value=value==null?'':value;
+  i.placeholder=o.ph||''; i.autocomplete='off'; i.enterKeyHint='done';
+  if(o.num){ i.inputMode='decimal'; i.setAttribute('autocorrect','off'); i.spellcheck=false; }
+  edRow(g,label,i); return i;
+}
+function edNum(i){ var v=String(i.value).replace(/[,\s₱]/g,''); return v===''?NaN:Number(v); }
+function edDot(c){ return c?'<span class="acct-dot" style="background:'+esc(c)+'"></span>':''; }
+function edItems(options){
+  return options.map(function(o){ return typeof o==='object'?{value:String(o.value),label:String(o.label),color:o.color}:{value:String(o),label:String(o)}; });
+}
+// A row that shows its value and pushes a picker page. Exposes .value and .onpick.
+function edPickRow(g,label,options,value,ph){
+  var items=edItems(options), cur='';
+  var b=el('button','ed-row ed-link'); b.type='button';
+  b.appendChild(el('span','ed-lab',esc(label)));
+  var v=el('span','ed-val'); b.appendChild(v); b.insertAdjacentHTML('beforeend',icon('chevron'));
+  function set(x){
+    var it=items.filter(function(i){ return i.value===String(x==null?'':x); })[0];
+    cur=it?it.value:'';
+    v.innerHTML=it?edDot(it.color)+'<span class="ed-txt">'+esc(it.label)+'</span>':'<span class="ed-ph">'+esc(ph||'Choose')+'</span>';
+  }
+  b.onclick=function(){ openPicker(label,items,cur,function(x){ set(x); if(b.onpick) b.onpick(); }); };
+  Object.defineProperty(b,'value',{get:function(){ return cur; },set:set,configurable:true});
+  set(value); g.appendChild(b); return b;
+}
+// The picker page: a search field (long lists only), then every option, the current one ticked.
+function openPicker(title,items,cur,done){
+  var page=edPage(title,barBtn(icon('chevron')+'Back','back',popPage));
+  var q=el('input','ed-search'); q.type='search'; q.placeholder='Search'; q.autocomplete='off'; q.enterKeyHint='done';
+  var list=el('div','ed-group ed-list');
+  var anyC=items.some(function(i){ return i.color; });   // then every row keeps the dot's space, so the names line up
+  function pick(v){ done(v); popPage(); }
+  function draw(){
+    var s=q.value.trim(), f=!s?items:items.map(function(it){ return {it:it,sc:fuzzyScore(s,it.label)}; })
+      .filter(function(x){ return x.sc>=0; }).sort(function(a,b){ return b.sc-a.sc; }).map(function(x){ return x.it; });
+    list.innerHTML='';
+    if(!f.length) list.appendChild(el('div','ed-row ed-empty','No match'));
+    f.forEach(function(it){
+      var on=it.value===cur, r=el('button','ed-row ed-opt'+(on?' on':''),(anyC?edDot(it.color||'transparent'):'')+'<span class="ed-txt">'+esc(it.label)+'</span>'+(on?icon('check'):''));
+      r.type='button'; r.onclick=function(){ pick(it.value); }; list.appendChild(r);
+    });
+    return f;
+  }
+  q.oninput=draw;
+  q.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); var f=draw(); if(f[0]) pick(f[0].value); } };
+  if(items.length>8) page.body.appendChild(q);
+  page.body.appendChild(list); draw();
+  if(edOpen()) pushPage(page); else openEditor(page);   // the add field's chips open one alone
+  var on=list.querySelector('.on'), sc=page.body;
+  if(on) sc.scrollTop=on.getBoundingClientRect().top-sc.getBoundingClientRect().top-sc.clientHeight/2;
+  if(items.length>8&&matchMedia('(pointer:fine)').matches) q.focus();   // a phone keeps the keyboard down
+}
+// The amount row: a ± key (a refund is a negative expense; the decimal pad has no minus)
+// and the account's currency after the figure.
+function edAmount(g,label,value,sign){
+  var r=el('label','ed-row ed-amt'); r.appendChild(el('span','ed-lab',esc(label)));
+  var i=el('input','ed-in'); i.type='text'; i.inputMode='decimal'; i.autocomplete='off'; i.enterKeyHint='done';
+  i.placeholder='0.00'; i.value=value==null?'':value; i.spellcheck=false; i.setAttribute('autocorrect','off');
+  if(sign){
+    var pm=el('button','ed-pm','±'); pm.type='button'; pm.setAttribute('aria-label','Flip the sign (a refund is negative)');
+    pm.onclick=function(e){ e.preventDefault(); var v=String(i.value).trim(); i.value=v.charAt(0)==='-'?v.slice(1):'-'+v; };
+    r.appendChild(pm);
+  }
+  r.appendChild(i); var c=el('span','ed-cur'); r.appendChild(c); g.appendChild(r);
+  i.cur=function(code){ c.textContent=code||''; };
+  return i;
+}
+// The rows that are rarely touched sit behind "More" unless one of them holds a value.
+function edMore(parent,open,build){
+  var g=edGroup(parent);
+  if(open){ build(g); return; }
+  var b=el('button','ed-row ed-link ed-morebtn','<span class="ed-lab">More options</span>'+icon('chevron')); b.type='button';
+  b.onclick=function(){ b.remove(); build(g); };
+  g.appendChild(b);
+}
+// Enter saves on a keyboard; on a touch screen it only puts the keyboard away.
+function edEnter(page,save){
+  page.addEventListener('keydown',function(e){
+    if(e.key!=='Enter'||!e.target.classList.contains('ed-in')) return;
+    e.preventDefault();
+    if(matchMedia('(pointer:fine)').matches) save(); else e.target.blur();
+  });
+}
+function edDelete(page,t){
+  var g=edGroup(page.body), d=el('button','ed-row ed-del','Delete transaction'); d.type='button';
+  d.onclick=function(){ confirmDelete(t); }; g.appendChild(d);
+}
+function periodItems(){ return [{value:'',label:"The date's month"}].concat(monthOptions()); }
+function catItems(cats){
+  return cats.map(function(c){ var s=((S.boot.categories||{})[c]||{}).Segment; return {value:c,label:c,color:SEG_COLOR[s]}; });
 }
 
 /* —— add / edit a normal transaction —— */
@@ -2848,50 +3520,50 @@ function openTxModal(t){
   var wantAcc=(S.screen==='transactions'&&S.tx.filters.account)||prefGet('lastAcct');
   var defAcc=isEdit ? '' : (accs.some(function(a){return (a.value||a)===wantAcc;})?wantAcc:'');
 
-  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate());
-  var fPeriod=periodEl(t);
-  var fCat=comboEl(cats, t?t.Category:'', {placeholder:'Select category'});
-  var fAcc=comboEl(accs, (t&&t.Account)||defAcc, {placeholder:'Select account'});
-  var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
-  var fDesc=inputEl('text', t?t.Description:'', 'Description');
-  var fFx=inputEl('number', t&&t.ExchangeRate?t.ExchangeRate:'', 'auto'); fFx.step='0.0001';
+  var save=barBtn(isEdit?'Save':'Add','primary',function(){ doSave(); });
+  var page=edPage(isEdit?'Edit transaction':'Add transaction',barBtn('Cancel','',closeEditor),save), b=page.body;
+  var draft={};   // what the Transaction ⇄ Transfer switch carries over
+  // Category is dropped on purpose: transfer categories are a disjoint set.
+  if(!isEdit) b.appendChild(typeToggleEl('tx',function(){ openTransferModal(draft()); }));
+  var g1=edGroup(b);
+  var fAmt=edAmount(g1,'Amount',t?amtField(t.Amount):'',true);
+  var fDesc=edInput(g1,'Description',t?t.Description:'',{ph:'Optional'});
+  var g2=edGroup(b);
+  var fCat=edPickRow(g2,'Category',catItems(cats),t?t.Category:'','Choose');
+  var fAcc=edPickRow(g2,'Account',accs,(t&&t.Account)||defAcc,'Choose');
+  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate()); fDate.className='ed-in ed-date';
+  edRow(g2,'Date',fDate);
+  var fPeriod, fFx;
+  edMore(b,!!(t&&(t.Period||t.ExchangeRate)),function(g){
+    fPeriod=edPickRow(g,'Reports in',periodItems(),(t&&t.Period)||'');
+    fFx=edInput(g,'Exchange rate',t&&t.ExchangeRate?t.ExchangeRate:'',{num:true,ph:'Auto'});
+    b.insertBefore(el('div','ed-foot','Reports in books the row into another month. Exchange rate is PHP per 1 unit; blank = auto.'),g.nextSibling);
+  });
+  if(isEdit) edDelete(page,t);
   // A stamped rate belongs to the old account's currency — reassigning to a different
   // currency makes it meaningless, so clear the field back to "auto" (issue #7).
   var origCur=t?(t.Currency||'PHP'):'PHP';
-  fAcc.onchange=function(){ if(acctCurrency(fAcc.value)!==origCur) fFx.value=''; };
+  fAcc.onpick=function(){ fAmt.cur(acctCurrency(fAcc.value)); if(fFx&&acctCurrency(fAcc.value)!==origCur) fFx.value=''; };
+  fAmt.cur(fAcc.value?acctCurrency(fAcc.value):'');
+  draft=function(){ return {Date:fDate.value,Period:fPeriod?fPeriod.value:(t&&t.Period)||'',Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''}; };
 
-  var body=el('div');
-  // Category is dropped on purpose: transfer categories are a disjoint set.
-  if(!isEdit) body.appendChild(typeToggleEl('tx',function(){
-    openTransferModal({Date:fDate.value,Period:fPeriod.value,Account:fAcc.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
-  }));
-  body.appendChild(periodRowEl(fDate, fPeriod));
-  body.appendChild(fieldEl('Category', fCat));
-  body.appendChild(fieldEl('Account', fAcc));
-  var rowAmt=el('div','field-row');
-  rowAmt.appendChild(fieldEl('Amount', fAmt));
-  rowAmt.appendChild(fieldEl('Exchange rate', fFx, 'PHP per 1 unit; blank = auto'));
-  body.appendChild(rowAmt);
-  body.appendChild(fieldEl('Description', fDesc));
-
-  var save=el('button','btn primary', isEdit?'Save':'Add');
-  save.onclick=function(){
+  function doSave(){
     var payload={
       Date:fDate.value, Category:fCat.value, Account:fAcc.value,
-      Amount:parseFloat(fAmt.value), Description:fDesc.value
+      Amount:edNum(fAmt), Description:fDesc.value
     };
-    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
-    if(fFx.value) payload.ExchangeRate=parseFloat(fFx.value);
-    else if(isEdit) payload.ExchangeRate=''; // cleared field on edit → re-resolve/clear the stamp (issue #7)
-    if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Fill category, account, amount','err');return;}
+    var period=fPeriod?fPeriod.value:(t&&t.Period)||'';
+    if(period||isEdit) payload.Period=period; // on edit, '' clears the override
+    if(fFx&&fFx.value) payload.ExchangeRate=edNum(fFx);
+    else if(isEdit) payload.ExchangeRate=''; // cleared (or never set) on edit → re-resolve/clear the stamp (issue #7)
+    if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Pick a category and an account, and type an amount','err');return;}
     prefSet('lastAcct',payload.Account);   // the next add defaults to this account
     commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransaction',
               addedMsg:'Added', failMsg:'Add failed', reopen:openTxModal});
-  };
-  openModal(modalShell(isEdit?'Edit transaction':'Add transaction', body, modalFoot(save, isEdit, t)));
-  // Jump straight into Category so you can type/filter without a click — but only when
-  // it's empty, which also skips the reopen-after-failure path (that one keeps its value).
-  if(!isEdit&&!fCat.value) focusCombo(fCat);
+  }
+  edEnter(page,doSave);
+  openEditor(page);
+  if(!isEdit&&!fAmt.value&&matchMedia('(pointer:fine)').matches) fAmt.focus();
 }
 
 /* —— transfer —— */
@@ -2902,63 +3574,63 @@ function openTransferModal(t){
     return String((S.boot.categories[c]||{}).Type)==='Transfer';
   }).sort();
   var accs=acctOptions();
-
-  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate());
-  var fPeriod=periodEl(t);
   var defCat=xferCats.indexOf('Transfer: Internal')>=0?'Transfer: Internal':'';
-  var fCat=comboEl(xferCats.length?xferCats:['(no transfer category)'], (t&&t.Category)||defCat, {placeholder:'Select category'});
-  var fFrom=comboEl(accs, t?t.Account:'', {placeholder:'From account'});
-  var fTo=comboEl(accs, t?t.ToAccount:'', {placeholder:'To account'});
-  var fAmt=inputEl('number', t?amtField(t.Amount):'', '0.00'); fAmt.step='0.01';
+
+  var save=barBtn(isEdit?'Save':'Add','primary',function(){ doSave(); });
+  var page=edPage(isEdit?'Edit transfer':'Add transfer',barBtn('Cancel','',closeEditor),save), b=page.body;
+  var draft;
+  if(!isEdit) b.appendChild(typeToggleEl('xfer',function(){ openTxModal(draft()); }));
+  var g1=edGroup(b);
+  var fAmt=edAmount(g1,'Amount',t?amtField(t.Amount):'',false);
+  var fDesc=edInput(g1,'Description',t?t.Description:'',{ph:'Optional'});
+  var g2=edGroup(b);
+  var fFrom=edPickRow(g2,'From',accs,t?t.Account:'','Choose');
+  var fTo=edPickRow(g2,'To',accs,t?t.ToAccount:'','Choose');
+  var fCat=edPickRow(g2,'Category',catItems(xferCats),(t&&t.Category)||defCat,'Choose');
+  var fDate=inputEl('date', t?isoDate(t.Date):newTxDate()); fDate.className='ed-in ed-date';
+  edRow(g2,'Date',fDate);
   // Prefilled only when it's a real cross-currency override — mirroring Amount back into
   // the field would re-send a stale ToAmount on an amount edit (server mirrors when blank).
-  var fToAmt=inputEl('number', (t&&Number(t.ToAmount)!==Number(t.Amount))?amtField(t.ToAmount):'', 'same as amount'); fToAmt.step='0.01';
-  var fDesc=inputEl('text', t?t.Description:'', 'Description');
+  var toAmt=(t&&t.ToAmount!=null&&t.ToAmount!==''&&Number(t.ToAmount)!==Number(t.Amount))?amtField(t.ToAmount):'';
+  var fPeriod, fToAmt;
+  edMore(b,!!((t&&t.Period)||toAmt!==''),function(g){
+    fPeriod=edPickRow(g,'Reports in',periodItems(),(t&&t.Period)||'');
+    fToAmt=edInput(g,'To amount',toAmt,{num:true,ph:'Same as amount'});
+    b.insertBefore(el('div','ed-foot','Reports in books the row into another month. To amount is for a cross-currency transfer only.'),g.nextSibling);
+  });
+  if(isEdit) edDelete(page,t);
+  fFrom.onpick=function(){ fAmt.cur(acctCurrency(fFrom.value)); };
+  fAmt.cur(fFrom.value?acctCurrency(fFrom.value):'');
+  draft=function(){ return {Date:fDate.value,Period:fPeriod?fPeriod.value:(t&&t.Period)||'',Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''}; };
 
-  var body=el('div');
-  if(!isEdit) body.appendChild(typeToggleEl('xfer',function(){
-    openTxModal({Date:fDate.value,Period:fPeriod.value,Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''});
-  }));
-  body.appendChild(periodRowEl(fDate, fPeriod));
-  body.appendChild(fieldEl('Category', fCat));
-  var rowAcc=el('div','field-row');
-  rowAcc.appendChild(fieldEl('From', fFrom));
-  rowAcc.appendChild(fieldEl('To', fTo));
-  body.appendChild(rowAcc);
-  var rowAmt=el('div','field-row');
-  rowAmt.appendChild(fieldEl('Amount', fAmt));
-  rowAmt.appendChild(fieldEl('To amount', fToAmt, 'cross-currency only'));
-  body.appendChild(rowAmt);
-  body.appendChild(fieldEl('Description', fDesc));
-
-  var save=el('button','btn primary', isEdit?'Save':'Add transfer');
-  save.onclick=function(){
+  function doSave(){
     if(fFrom.value===fTo.value){toast('From and To must differ','err');return;}
-    var amount=parseFloat(fAmt.value);
+    var amount=edNum(fAmt);
     if(isNaN(amount)){toast('Enter an amount','err');return;}
     var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
-    if(fPeriod.value||isEdit) payload.Period=fPeriod.value; // on edit, '' clears the override
-    if(fToAmt.value) payload.ToAmount=parseFloat(fToAmt.value);
+    var period=fPeriod?fPeriod.value:(t&&t.Period)||'';
+    if(period||isEdit) payload.Period=period; // on edit, '' clears the override
+    if(fToAmt&&fToAmt.value) payload.ToAmount=edNum(fToAmt);
     // No prefSet here: 'lastAcct' defaults the tx modal's Account, and a transfer's
     // From is not that — it would make the next expense default to wherever you last
     // moved money out of.
     commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransfer',
               addedMsg:'Transfer added', failMsg:'Transfer failed', reopen:openTransferModal});
-  };
-  openModal(modalShell(isEdit?'Edit transfer':'Add transfer', body, modalFoot(save, isEdit, t)));
-  // Category is prefilled (default or carried over) → start at From; only focus Category if it's empty.
-  if(!isEdit) focusCombo(fCat.value?fFrom:fCat);
+  }
+  edEnter(page,doSave);
+  openEditor(page);
+  if(!isEdit&&!fAmt.value&&matchMedia('(pointer:fine)').matches) fAmt.focus();
 }
 
 function confirmDelete(t){
-  var body=el('div','dim','Delete this transaction permanently? This cannot be undone.');
+  var body=el('div','dim','You cannot undo this.');
   var yes=el('button','btn danger','Delete');
   yes.onclick=function(){
     // Optimistic: close instantly and show the row as "loading". It's removed from
     // the list only once the backend confirms; on failure it reverts to a normal row.
     S.tx.pendingDeletes[t.ID]=true;
-    closeModal();
+    closeModal(); closeEditor();
     repaintTxList();
     gs('api_deleteTransaction',{ID:t.ID}).then(function(){
       delete S.tx.pendingDeletes[t.ID]; toast('Deleted','ok'); afterMutation();
@@ -2967,8 +3639,8 @@ function confirmDelete(t){
       if(S.screen==='transactions') repaintTxList(); else render();
     });
   };
-  var no=el('button','btn','Cancel'); no.onclick=function(){ openTxModal(t); };
-  openModal(modalShell('Confirm delete', body, [no,yes]));
+  var no=el('button','btn','Cancel'); no.onclick=closeModal;   // the editor, if open, is still underneath
+  openModal(modalShell('Delete this transaction?', body, [no,yes]));
 }
 
 /* —— edit account —— */
@@ -2996,7 +3668,7 @@ function openAccountModal(a){
     s.onclick=function(){ fColor.value=c; colorSet=true; paintSwatches(); };
     swatchRow.appendChild(s);
   });
-  var noneBtn=el('button','swatch none','✕'); noneBtn.type='button'; noneBtn.title='No color';
+  var noneBtn=el('button','swatch none',icon('close')); noneBtn.type='button'; noneBtn.title='No color';
   noneBtn.onclick=function(){ colorSet=false; paintSwatches(); };
   swatchRow.appendChild(noneBtn);
   function paintSwatches(){
@@ -3034,7 +3706,7 @@ function openAccountModal(a){
     if(Object.keys(payload).length===1){toast('No changes','err');return;}
     save.disabled=true; save.textContent='Saving…';
     gs('api_updateAccount',payload).then(function(){
-      closeModal(); toast('Account updated','ok'); dropCache(); renderAccounts();
+      closeModal(); toast('Saved','ok'); dropCache(); renderAccounts();
     }).catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
   };
   openModal(modalShell(a.name, body, [save]));
@@ -3061,7 +3733,7 @@ function afterMutation(){
   // on screen stays put until the fresh server page lands, then swaps in place
   // (no spinner flash) — and a full render() would rebuild the filter/selection
   // DOM and flash skeletons on every write. Other screens fully re-render.
-  if(S.screen==='transactions'){ loadTx(null,true); if(S.tx.edit) loadTxAccts(); }
+  if(S.screen==='transactions'){ loadTx(null,true); if(txWide()) loadPaneAccts(); }
   else render();
 }
 

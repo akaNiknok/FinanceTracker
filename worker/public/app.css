@@ -1,468 +1,950 @@
-/* ── Inter, self-hosted ──────────────────────────────────────────────────────
- * The two woff2 files Google Fonts served, copied into /fonts and cached by the
- * service worker. Google cost ~146 KB on a cold install (12.4 KB of CSS with a
- * 1-DAY max-age, so it came back daily) across two extra origins, and the font
- * never worked offline. These are the SAME variable subsets (Inter v20, weight
- * axis 400-800) — 650 and 750 below are real weights on it, not rounded.
- * OFL 1.1, see fonts/OFL.txt. Regenerate by re-downloading, there is no build.
- *
- * latin-ext is 85 KB and the app pulls it for ONE glyph: PHP peso, U+20B1, which
- * sits in U+20AD-20C0 and is absent from the latin subset. Subsetting the pair
- * down to the glyphs actually used is the next rung if the install budget ever
- * matters more than having no toolchain.
- * unicode-range is kept verbatim from Google's CSS: it is what stops a phone
- * downloading latin-ext for a page that has no peso sign on it. */
-@font-face{font-family:'Inter';font-style:normal;font-weight:400 800;font-display:swap;
-  src:url(/fonts/inter-latin-ext.woff2) format('woff2');
-  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
-@font-face{font-family:'Inter';font-style:normal;font-weight:400 800;font-display:swap;
-  src:url(/fonts/inter-latin.woff2) format('woff2');
-  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
-
-/* ── Design tokens ───────────────────────────────────────────────────────────
- * Quiet dark fintech theme. Data is the only loud thing on the page: marks use
- * --chart-* (validated: ΔE 80+ adjacent, ≥3:1 on --surface), text stays in the
- * ink tokens, status colors are reserved for status. */
+/* ── Design tokens (DESIGN.md "Colour") ──────────────────────────────────────
+ * Light is the default. Dark comes from [data-theme=dark] (chosen) or from the
+ * system when the theme is Auto (no data-theme). index.html sets data-theme
+ * before first paint. The dark block is written twice on purpose: a custom
+ * property set cannot be shared between a selector and a media query. */
 :root{
-  --bg:#0d0f14; --surface:#151821; --surface-2:#1d212c; --surface-3:#262b38;
-  --border:#232834; --border-2:#343b4b;
-  --text:#e9ecf2; --text-dim:#9aa3b4; --text-faint:#6d768a;
-  --accent:#5b8cff; --accent-2:#84a8ff;
-  --pos:#3ecf8e; --neg:#ff7373; --warn:#ffb454;
-  --chart-spend:#d95757; --chart-income:#27ad75; --chart-neg:#d95757;
-  --chart-invested:#a78bfa;   /* violet: distinct from accent-blue liquid, income-green, spend-red */
-  --grid-line:#232834;
-  --shadow:0 8px 28px rgba(0,0,0,.32);
-  --shadow-sm:0 2px 10px rgba(0,0,0,.22);
-  --radius:16px; --radius-sm:11px;
-  --nav-w:216px;
-  --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  color-scheme:light;
+  --bg:#F2F2F7; --card:#FFFFFF; --card-2:#E4E4EA; --card-3:#D8D8DE;
+  --text:#1C1C1E; --dim:#6C6C70; --sep:#E5E5EA; --track:#E9E9EE;
+  --accent:#2463EB; --pos:#157A50; --neg:#C4382D; --warn:#B45309;
+  --ess:#0E7C86; --rew:#D97706; --gro:#7C5CFA;
+  --chart-in:#1F9D6B; --chart-out:#D95757; --tip:#1C1C1E;
+  --side:#ECECF0; --side-sel:#DCDCE3; --bar:rgba(249,249,251,.94);
+  --shadow:0 8px 28px rgba(0,0,0,.14); --shadow-sm:0 4px 18px rgba(0,0,0,.10);
+}
+:root[data-theme=dark]{
+  color-scheme:dark;
+  --bg:#000000; --card:#1C1C1E; --card-2:#2C2C2E; --card-3:#3A3A3C;
+  --text:#F5F5F7; --dim:#A1A1A6; --sep:#38383A; --track:#2C2C2E;
+  --accent:#0A84FF; --pos:#30D158; --neg:#FF453A; --warn:#FF9F0A;
+  --ess:#64D2FF; --rew:#FF9F0A; --gro:#BF5AF2;
+  --chart-in:#30D158; --chart-out:#FF453A; --tip:#3A3A3C;
+  --side:#111113; --side-sel:#2C2C2E; --bar:rgba(18,18,20,.94);
+  --shadow:0 8px 28px rgba(0,0,0,.6); --shadow-sm:0 4px 18px rgba(0,0,0,.6);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme=light]){
+    color-scheme:dark;
+    --bg:#000000; --card:#1C1C1E; --card-2:#2C2C2E; --card-3:#3A3A3C;
+    --text:#F5F5F7; --dim:#A1A1A6; --sep:#38383A; --track:#2C2C2E;
+    --accent:#0A84FF; --pos:#30D158; --neg:#FF453A; --warn:#FF9F0A;
+    --ess:#64D2FF; --rew:#FF9F0A; --gro:#BF5AF2;
+    --chart-in:#30D158; --chart-out:#FF453A; --tip:#3A3A3C;
+    --side:#111113; --side-sel:#2C2C2E; --bar:rgba(18,18,20,.94);
+    --shadow:0 8px 28px rgba(0,0,0,.6); --shadow-sm:0 4px 18px rgba(0,0,0,.6);
+  }
+}
+/* Theme-independent: the tints follow whichever --accent/--pos/… is live, and the
+ * rest never changes. On :root so the tints resolve against the html element's
+ * values, which is where the theme blocks above set them. */
+:root{
+  --accent-tint:color-mix(in srgb,var(--accent) 14%,transparent);
+  --pos-tint:color-mix(in srgb,var(--pos) 14%,transparent);
+  --neg-tint:color-mix(in srgb,var(--neg) 14%,transparent);
+  --warn-tint:color-mix(in srgb,var(--warn) 16%,transparent);
+  --ess-tint:color-mix(in srgb,var(--ess) 14%,transparent);
+  --rew-tint:color-mix(in srgb,var(--rew) 16%,transparent);
+  --gro-tint:color-mix(in srgb,var(--gro) 14%,transparent);
+  --radius:20px; --radius-sm:12px;
+  --nav-w:240px; --rail-w:76px;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
 /* App-shell scrolling: the document never scrolls, only .main does — otherwise iOS
- * rubber-band overscroll drags the sticky topbar/nav off the viewport edges. */
+ * rubber-band overscroll drags the nav off the viewport edges. */
 html,body{margin:0;padding:0;overflow:hidden;overscroll-behavior:none;
   background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.5}
+/* Theme switch cross-fades (DESIGN.md "Motion"); app.js adds the class for 200ms only,
+ * so no ordinary hover or render ever pays for it. */
+html.theme-fade *{transition:background-color .2s,color .2s,border-color .2s,fill .2s,stroke .2s!important}
 button{font-family:inherit;cursor:pointer}
 ::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:8px}
+::-webkit-scrollbar-thumb{background:var(--card-3);border-radius:8px}
 ::-webkit-scrollbar-track{background:transparent}
-::selection{background:rgba(91,140,255,.35)}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+::selection{background:var(--accent-tint)}
+/* Reduce Motion (DESIGN.md "Motion"): every move becomes a 150ms fade. The keyframes
+ * are redefined as opacity only, the loops stop, and nothing scales on press. */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.15s!important;animation-delay:0s!important;transition-duration:.15s!important}
+  @keyframes pop{from{opacity:0}} @keyframes sheetUp{from{opacity:0}} @keyframes fade{from{opacity:0}} @keyframes rowIn{from{opacity:0}}
+  @keyframes edIn{from{opacity:0}} @keyframes edOut{to{opacity:0}} @keyframes edFade{to{opacity:0}}
+  .mini-spin,.pending,.sync-dot,.skeleton{animation:none!important}
+  :active{transform:none!important}
+}
+.ico{width:24px;height:24px;flex:none;display:block}
 
 /* Not height:100% — on iOS standalone that stops short of the screen bottom. --app-h is
  * set by the shell-height script in index.html (which explains why dvh isn't enough);
- * everywhere else it equals the dvh fallback. */
-#app{height:100vh;height:var(--app-h,100dvh);display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 1fr auto;grid-template-areas:"topbar" "main" "nav"}
+ * everywhere else it equals the dvh fallback.
+ * Phone: main, then the docked add bar, then the tab bar. */
+/* The top edge. In the installed iOS app the page runs under the status bar, and iOS
+ * draws a soft blur over the inset AND a little below it (--edge). Fixed chrome must
+ * start below that, or it sits in the blur for good (seen on the add field, the app
+ * tile and the title). Scrolling content may pass under it, as in a native app. So:
+ * on a phone .main runs to the top and only its padding clears the blur at rest; from
+ * 768px the rail and the add field are fixed, so #app itself starts below it.
+ * --edge is the calibration knob: raise it if the blur reaches content at rest on a
+ * new iOS. It is 0 outside the installed iOS app, where no blur is drawn. */
+:root{--edge:0px}
+@media (display-mode:standalone){ @supports (-webkit-touch-callout:none){ :root{--edge:22px} } }
+#app{height:100vh;height:var(--app-h,100dvh);display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:1fr auto auto;grid-template-areas:"main" "add" "nav"}
 
-/* ── Top bar ─────────────────────────────────────────────────────────────── */
-/* iOS standalone is black-translucent + viewport-fit=cover, so the page starts at y=0
- * behind the status bar — the top inset is what keeps the bar's controls tappable. */
-.topbar{grid-area:topbar;display:flex;align-items:center;justify-content:space-between;
-  padding:calc(12px + env(safe-area-inset-top)) 16px 12px;background:rgba(13,15,20,.86);
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  border-bottom:1px solid var(--border);z-index:20}
-.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.2px}
-.brand-dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--pos));box-shadow:0 0 10px rgba(91,140,255,.55)}
-.brand-name{font-size:15.5px}
-.brand-ver{font-size:11px;font-weight:600;color:var(--text-faint);letter-spacing:0}
-.topbar-right{display:flex;align-items:center;gap:8px}
-.month-picker{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);
-  padding:8px 12px;font-size:13px;font-weight:600;outline:none;min-height:38px}
-.icon-btn{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);
-  width:38px;height:38px;font-size:17px;display:grid;place-items:center;transition:background .15s,transform .1s}
-.icon-btn:hover{background:var(--surface-3)}
-.icon-btn:active{transform:scale(.94)}
-.icon-btn.spin .ico{display:block;animation:spin 1.6s linear infinite}
+/* ── Add bar (phone: docked above the tab bar) ───────────────────────────── */
+.addbar{grid-area:add;padding:8px 12px;background:var(--bg);z-index:20}
+.add-field{display:flex;align-items:center;gap:8px;height:50px;padding:0 16px 0 6px;background:var(--card);
+  border:1px solid var(--sep);border-radius:25px;box-shadow:var(--shadow-sm);cursor:text}
+.add-field input{flex:1;min-width:0;border:0;outline:none;background:transparent;color:var(--text);font:inherit;font-size:17px}
+.add-field input::placeholder{color:var(--dim)}
+/* The quick-add panel (DESIGN.md "Add bar"): a full-screen page on a phone (qaFit sizes
+ * the bar to the visible viewport, so the field sits on the keyboard), a dropdown under
+ * the header field from 768px. */
+.addbar{position:relative}
+.qa{position:absolute;left:0;right:0;bottom:100%;display:flex;flex-direction:column;gap:12px;padding:12px 16px;
+  background:var(--bg);border-radius:16px 16px 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.12);
+  max-height:60vh;overflow-y:auto;overscroll-behavior:contain;animation:sheetUp .32s cubic-bezier(.2,.8,.2,1)}
+.qa:empty{display:none}
+.qa-bd{display:none;position:fixed;inset:0;z-index:19;background:rgba(0,0,0,.4)}
+.qa-on .qa-bd{display:block}
+.qa-card{display:flex;flex-direction:column;gap:10px;border-radius:14px}
+@media(pointer:fine){ .qa-card.sel{outline:2px solid var(--accent);outline-offset:4px} }   /* the ↑↓ ring; touch has no arrows */
+.qa-seg{margin:0}
+.qa-amt{text-align:center;font-size:40px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1.1}
+.qa-amt.out{color:var(--neg)} .qa-amt.in{color:var(--pos)} .qa-amt.xfer{color:var(--accent)}
+.qa-amt.ph{color:var(--dim);font-size:22px;font-weight:600;letter-spacing:0}
+.qa-desc{text-align:center;font-size:17px;color:var(--dim);margin-top:-8px}
+.qa .ed-group{margin:0}
+.qa-hint{text-align:center;font-size:12px;color:var(--dim)}
+.qa-jump .ico{width:18px;height:18px;color:var(--dim);margin:0;transform:none}
+.qa-jump.sel{background:var(--accent-tint)}
+.qa-lab{font-size:13px;font-weight:600;color:var(--dim);padding-left:4px;margin-bottom:-6px}
+.qa-chips{display:flex;gap:8px;overflow-x:auto;margin:0 -16px;padding:0 16px 2px;scrollbar-width:none}
+.qa-chip{flex:none;height:36px;padding:0 12px;border:1px solid var(--sep);border-radius:18px;background:var(--card);color:var(--text);font:inherit;font-size:14px;cursor:pointer;white-space:nowrap}
+.qa-chip b{font-variant-numeric:tabular-nums}
+.qa-chip:active{transform:scale(.97)}
+.qa-top{display:none}
+.qa-empty{padding-top:24px;font-size:15px}
+@media(max-width:767px){
+  .qa-on .addbar{position:fixed;left:0;right:0;top:0;height:var(--app-h,100dvh);z-index:30;display:flex;flex-direction:column;
+    background:var(--bg);padding:calc(env(safe-area-inset-top) + var(--edge)) 12px max(8px,env(safe-area-inset-bottom));animation:sheetUp .32s cubic-bezier(.2,.8,.2,1)}
+  .qa-on .qa-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;order:-2;margin:0 -4px}
+  .qa-on .qa{order:-1;position:static;flex:1;min-height:0;max-height:none;margin:0 -12px;padding:4px 16px 12px;
+    background:none;box-shadow:none;border-radius:0;animation:none}
+  .qa-on .qa-bd{display:none}
+  .qa-on .addbar.kb{padding-bottom:8px}   /* the keyboard covers the home bar */
+}
+.add-plus{width:38px;height:38px;border:0;border-radius:19px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none}
+.add-plus .ico{width:20px;height:20px;stroke-width:2.4}
+.add-plus:active{transform:scale(.94)}
+.add-kbd{display:none;font:inherit;font-size:12px;color:var(--dim);border:1px solid var(--sep);border-radius:6px;padding:1px 6px}
 
-/* ── Nav (bottom on mobile, sidebar on desktop) ──────────────────────────── */
-.nav{grid-area:nav;display:flex;justify-content:space-around;background:rgba(13,15,20,.92);
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  border-top:1px solid var(--border);z-index:20;padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
-.nav-item{background:none;border:none;color:var(--text-faint);display:flex;flex-direction:column;align-items:center;gap:3px;
-  padding:7px 6px;border-radius:12px;font-size:10.5px;font-weight:600;transition:color .15s,background .15s;flex:1;min-width:0;min-height:48px}
-.nav-item .nav-ico{font-size:18px;line-height:1}
+/* ── Nav: tab bar on a phone ─────────────────────────────────────────────── */
+.nav{grid-area:nav;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--bar);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid var(--sep);z-index:20;
+  padding:6px 12px max(6px,calc(env(safe-area-inset-bottom) - 14px))}   /* labels still clear the home bar */
+.nav-brand,.nav-group,.nav-foot{display:none}
+.nav-item{background:none;border:none;color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:4px 2px;font-size:10px;font-weight:600;min-width:0;min-height:48px;position:relative}
+.nav-item .ico{width:26px;height:26px}
 .nav-item .nav-label{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nav-item.active{color:var(--accent-2)}
+.nav-item.active{color:var(--accent)}
 .nav-item:active{transform:scale(.95)}
-.nav-item:hover{color:var(--text)}
-/* On phone only 4 primary tabs + More; secondary screens live in the sheet. */
+/* On a phone only 4 tabs; the secondary screens live in the More sheet. */
 .nav-item.secondary{display:none}
-.nav-item.nav-more{display:flex}
+/* More carries a dot when something is offline or waiting to sync: the sheet shows
+ * the words, the tab only says "look here". */
+.nav-more.alert::after{content:"";position:absolute;top:4px;left:calc(50% + 9px);width:8px;height:8px;border-radius:4px;background:var(--warn)}
 
-/* ── More sheet (mobile) ─────────────────────────────────────────────────── */
+/* Sync state + theme button: the sidebar/rail footer and the More sheet share these. */
+.sync{display:flex;align-items:center;gap:8px;background:none;border:0;color:var(--dim);font-size:12px;padding:8px 6px;min-height:44px;border-radius:10px;min-width:0}
+.sync:hover{color:var(--text)}
+.sync-dot{width:8px;height:8px;border-radius:4px;background:var(--pos);flex:none}
+.sync.offline .sync-dot{background:var(--dim)}
+.sync.queued .sync-dot{background:var(--warn)}
+.sync.busy .sync-dot{animation:pendPulse 1s ease-in-out infinite}
+.sync-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.theme-btn{width:44px;height:44px;border:0;border-radius:22px;background:var(--card);color:var(--text);display:grid;place-items:center;flex:none}
+.theme-btn .ico{width:20px;height:20px;stroke-width:2}
+.theme-btn:active{transform:scale(.94)}
+
+/* ── More sheet (phone) ──────────────────────────────────────────────────── */
 .sheet-root{position:fixed;inset:0;z-index:55}
 .sheet-root[hidden]{display:none}
-.sheet-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)}
-.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--surface);border:1px solid var(--border-2);border-bottom:none;
-  border-radius:20px 20px 0 0;padding:10px 14px calc(18px + env(safe-area-inset-bottom));box-shadow:var(--shadow);animation:sheetUp .22s ease}
-.sheet-grab{width:38px;height:4px;border-radius:2px;background:var(--border-2);margin:2px auto 12px}
+.sheet-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.4)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--card);
+  border-radius:20px 20px 0 0;padding:10px 16px calc(18px + env(safe-area-inset-bottom));box-shadow:var(--shadow);animation:sheetUp .32s cubic-bezier(.2,.8,.2,1)}
+.sheet-grab{width:38px;height:5px;border-radius:3px;background:var(--card-3);margin:2px auto 12px}
 .sheet-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.sheet-item{background:var(--surface-2);border:1px solid var(--border);border-radius:14px;color:var(--text-dim);
-  display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 4px;font-size:11.5px;font-weight:600;min-height:64px}
-.sheet-item .nav-ico{font-size:20px;line-height:1}
-.sheet-item.active{color:var(--accent-2);border-color:rgba(91,140,255,.45);background:rgba(91,140,255,.08)}
+.sheet-item{background:var(--card-2);border:0;border-radius:16px;color:var(--text);
+  display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 4px;font-size:12px;font-weight:600;min-height:72px}
+.sheet-item .ico{color:var(--accent)}
+.sheet-item.active{background:var(--accent-tint);color:var(--accent)}
 .sheet-item:active{transform:scale(.96)}
+.sheet-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;padding-top:8px;border-top:1px solid var(--sep)}
+.sheet-foot .theme-btn{background:var(--card-2)}
 @keyframes sheetUp{from{transform:translateY(30px);opacity:.4}to{transform:none;opacity:1}}
+
+/* ── Tooltip (ⓘ) — tip() in app.js ───────────────────────────────────────── */
+.tip-btn{display:inline-grid;place-items:center;width:28px;height:28px;margin:-6px -6px -6px 0;border:0;border-radius:14px;
+  background:none;color:var(--dim);vertical-align:middle;position:relative}
+.tip-btn::before{content:"";position:absolute;inset:-8px}   /* 44px target, 28px look */
+.tip-btn .ico{width:17px;height:17px}
+.tip-btn:hover,.tip-btn[aria-expanded=true]{color:var(--accent)}
+.tip{position:fixed;z-index:80;max-width:min(360px,calc(100vw - 24px));background:var(--tip);color:#F5F5F7;border-radius:14px;
+  padding:12px 14px;font-size:13px;line-height:1.45;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1);text-align:left;
+  font-weight:400;text-transform:none;letter-spacing:0}
+.tip[hidden]{display:none}
+.tip-t{font-weight:600;font-size:14px;margin-bottom:4px}
+.tip-p{color:rgba(245,245,247,.8)}
+.tip-rows{margin:8px 0 0;padding:8px 0 0;border-top:1px solid rgba(245,245,247,.18);display:grid;grid-template-columns:1fr auto;gap:3px 16px;font-variant-numeric:tabular-nums}
+.tip-rows .b{font-weight:700}
+.tip-note{margin-top:8px;color:rgba(245,245,247,.7);font-size:12px}
+.tip-a{display:inline-block;margin-top:8px;color:inherit;font-weight:600;font-size:13px;text-decoration:underline;text-underline-offset:2px}
+
+/* ── Small controls ──────────────────────────────────────────────────────── */
+.month-picker{background:var(--card-2);color:var(--text);border:1px solid var(--sep);border-radius:var(--radius-sm);
+  padding:8px 12px;font-size:13px;font-weight:600;outline:none;min-height:38px}
+.icon-btn{background:var(--card-2);color:var(--text);border:1px solid var(--sep);border-radius:var(--radius-sm);
+  width:38px;height:38px;font-size:17px;display:grid;place-items:center;transition:background .15s,transform .1s}
+.icon-btn:hover{background:var(--card-3)}
+.icon-btn:active{transform:scale(.94)}
+.icon-btn .ico{width:18px;height:18px}
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
 /* The app's only scroller. Content stays capped at 1080px via padding rather than
  * max-width+auto margins, so the scrollbar sits at the viewport edge, not mid-page. */
-.main{grid-area:main;padding:16px max(16px,(100% - 1080px)/2);width:100%;min-width:0;min-height:0;
+.main{grid-area:main;padding:calc(env(safe-area-inset-top) + max(16px,var(--edge))) max(16px,(100% - 1080px)/2) 16px;width:100%;min-width:0;min-height:0;
   overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .screen{animation:fade .25s ease}
-.screen-title{font-size:21px;font-weight:750;letter-spacing:-.2px;margin:2px 0 4px}
-.screen-sub{color:var(--text-dim);font-size:13px;margin:0 0 16px}
+/* DESIGN.md "Typography": a large title (34) on iPhone and iPad, a title (26) from 1200px. */
+.screen-title{font-size:34px;line-height:40px;font-weight:700;letter-spacing:-.5px;margin:2px 0 4px}
+.screen-sub{color:var(--dim);font-size:13px;margin:0 0 16px}
 
-/* ── Cards / grid ────────────────────────────────────────────────────────── */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px;box-shadow:var(--shadow-sm)}
-.card-h{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-faint);margin:0 0 14px}
-.card-h-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.range-picker{padding:4px 6px;font-size:11.5px;min-height:0;text-transform:none;letter-spacing:0}
-/* top-level hero tiles / KPI grids need the same rhythm as .card (which
- * carries its own margin-bottom) — otherwise they sit flush against neighbors */
-.screen>.stat,.screen>.grid,.hero-row>.stat{margin-bottom:14px}
-/* Two hero cards that pair up at desktop width and are invisible below it. */
-.hero-row{display:contents}
-.grid{display:grid;gap:12px}
-.grid-2{grid-template-columns:repeat(2,1fr)}
-.grid-3{grid-template-columns:repeat(3,1fr)}
-.grid-auto{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+/* ── Cards ──────────────────────────────────────────────────────────────── */
+.card{background:var(--card);border-radius:var(--radius);padding:18px;margin-bottom:16px}
 
-/* ── Stat tiles / hero ───────────────────────────────────────────────────── */
-.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:15px 17px;box-shadow:var(--shadow-sm);min-width:0}
-.stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--text-faint);font-weight:650}
-.stat-value{font-size:22px;font-weight:750;margin-top:5px;letter-spacing:-.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.stat-sub{font-size:12px;color:var(--text-dim);margin-top:3px}
-.stat-spark{margin-top:10px;display:block;width:120px;max-width:100%;height:28px}
-.hero{background:radial-gradient(130% 170% at 0% 0%,rgba(91,140,255,.16),transparent 55%),
-  linear-gradient(150deg,#1a2030,#151821 60%);border:1px solid var(--border-2)}
-.hero .stat-value{font-size:clamp(30px,7vw,42px);line-height:1.12;margin-top:7px}
-.delta{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:650;border-radius:999px;padding:2px 9px;white-space:nowrap;max-width:100%}
-.delta.up{background:rgba(62,207,142,.13);color:var(--pos)}
-.delta.down{background:rgba(255,115,115,.13);color:var(--neg)}
-.delta.flat{background:var(--surface-3);color:var(--text-dim)}
-
-/* Asset vs liability split bar (hero) — 2px surface gap between fills */
-.split-bar{display:flex;gap:2px;height:8px;margin:16px 0 8px}
-.split-bar>div{border-radius:4px;min-width:6px}
-.split-a{background:var(--chart-income)}
-.split-l{background:var(--chart-neg)}
-.split-r{background:var(--border)}   /* the unfilled remainder of a progress bar */
-.split-legend{display:flex;gap:18px;font-size:12.5px;color:var(--text-dim);flex-wrap:wrap}
-.split-legend b{color:var(--text);font-weight:650}
 .lg-key{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:baseline}
 
 /* ── Misc text ───────────────────────────────────────────────────────────── */
-.pos{color:var(--pos)} .neg{color:var(--neg)} .warn{color:var(--warn)} .dim{color:var(--text-dim)} .faint{color:var(--text-faint)}
-.mono{font-variant-numeric:tabular-nums}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .amt.xfer{color:var(--accent)} .warn{color:var(--warn)} .dim{color:var(--dim)}
+
 .row-between{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;background:var(--surface-3);color:var(--text-dim)}
-.pill.pos{background:rgba(62,207,142,.14);color:var(--pos)}
-.pill.neg{background:rgba(255,115,115,.14);color:var(--neg)}
-.pill.warn{background:rgba(255,180,84,.14);color:var(--warn)}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;background:var(--card-3);color:var(--dim)}
+.pill.pos{background:var(--pos-tint);color:var(--pos)}
+.pill.neg{background:var(--neg-tint);color:var(--neg)}
+.pill.warn{background:var(--warn-tint);color:var(--warn)}
 
 /* ── Charts (inline SVG) ─────────────────────────────────────────────────── */
-.chart-wrap{position:relative}
-.chart-svg{display:block;width:100%;height:auto;overflow:visible}
-.chart-svg text{font-family:var(--font);fill:var(--text-faint);font-size:10.5px}
-.chart-legend{display:flex;gap:16px;font-size:12px;color:var(--text-dim);align-items:center;flex-wrap:wrap;margin-bottom:12px}
-.chart-legend .lg{display:inline-flex;align-items:center;gap:6px}
-.chart-tip{position:absolute;pointer-events:none;background:var(--surface-3);border:1px solid var(--border-2);border-radius:9px;
-  padding:7px 10px;font-size:12px;line-height:1.5;box-shadow:var(--shadow);z-index:6;white-space:nowrap;transform:translate(-50%,calc(-100% - 8px))}
-.chart-tip b{font-weight:700}
-.chart-tip[hidden]{display:none}
+/* ── Summary tile grid (DESIGN.md "Layout"): 1 column on a phone with Free in and
+ * Runway paired, 2 on iPad, 4 on PC. A tile's span is fixed per breakpoint. ── */
+.sum{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.tile{background:var(--card);border-radius:20px;padding:16px 20px;min-width:0;display:flex;flex-direction:column;gap:6px;font-variant-numeric:tabular-nums}
+.tile-h{display:flex;align-items:center;gap:8px;min-height:24px}
+.tile-l{font-size:13px;font-weight:600;color:var(--dim);margin-right:auto}
+.tile-r{font-size:13px;color:var(--dim);text-align:right}
+.tile-r b{color:var(--text)}
+.tile-foot{font-size:12px;color:var(--dim)}
+.fig-hero{font-size:38px;line-height:44px;font-weight:700;letter-spacing:-1px}
+.fig{font-size:28px;font-weight:700;letter-spacing:-.5px}
+.fig-row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.fig-sub{font-size:15px;color:var(--dim)}
+.lg-short{display:none}
+.bar6{position:relative;display:flex;gap:2px;height:6px;border-radius:3px;background:var(--track);margin:4px 0 2px}
+.bar6>i{display:block;height:100%;border-radius:3px;min-width:0}
+.bar6>b{position:absolute;top:-3px;width:2px;height:12px;border-radius:1px;background:var(--text)}
+.t-lts .bar6{height:8px;border-radius:4px}
+.t-nw{padding-bottom:0;overflow:hidden}
+.t-nw.pad-b{padding-bottom:16px}
+.nw-bridge{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--dim)}
+.nw-chip{font-weight:700;padding:2px 8px;border-radius:8px}
+.nw-chip.pos{background:var(--pos-tint);color:var(--pos)}
+.nw-chip.neg{background:var(--neg-tint);color:var(--neg)}
+.nw-spark{display:block;width:calc(100% + 40px);height:56px;margin:auto -20px 0}
+.lts-day{font-size:15px;color:var(--dim)}
+.lts-day b{color:var(--text)}
+.seg-rows{display:flex;flex-direction:column;margin-top:2px}
+.seg-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;column-gap:10px;align-items:center;min-height:44px;border-top:1px solid var(--sep)}
+.seg-dot{width:10px;height:10px;border-radius:5px}
+.seg-name{font-size:16px}
+.seg-val{font-size:15px;font-weight:600;text-align:right}
+.seg-sub{display:none}
+.t-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.t-pair .tile{padding:14px 16px}
+.seg{display:flex;background:var(--card-2);border-radius:9px;padding:2px}
+.seg>button{border:0;border-radius:7px;padding:6px 14px;min-height:32px;background:none;color:var(--dim);font-size:13px;font-weight:600}
+.seg>button:active{transform:scale(.97)}
+.seg>button.on{background:var(--card);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.hist-plot{position:relative;touch-action:pan-y}
+.hist-lg{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:4px 0}
+.hist-lg b{color:var(--text);font-weight:600}
+.hist-lg .lg{display:inline-flex;align-items:center}
+.hist-svg{display:block;width:100%;height:auto}
+.hist-hit{position:absolute;inset:0;cursor:crosshair;outline:none;border-radius:8px}
+.hist-hit:focus-visible{box-shadow:0 0 0 2px var(--accent)}
+.hist-line{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--text);opacity:.5;pointer-events:none}
+.hist-tip{position:absolute;top:16px;z-index:6;pointer-events:none;background:var(--tip);color:#F5F5F7;border-radius:12px;padding:10px 12px;
+  box-shadow:var(--shadow);font-size:13px;white-space:nowrap}
+.hist-tip-t{font-weight:700;font-size:14px;margin-bottom:4px}
+.hist-tip-rows{display:grid;grid-template-columns:auto auto;gap:3px 16px}
+.hist-tip-rows b{text-align:right;font-weight:600}
+.hist-tip .est{opacity:.6;font-weight:400}
+[hidden].hist-line,[hidden].hist-tip{display:none}
+.hist-x{position:relative;height:18px;font-size:12px;color:var(--dim);margin-top:4px;white-space:nowrap}
+.hist-x span{position:absolute;top:0}
+.hist-x .on{color:var(--text);font-weight:600}
+.cat-bar{height:12px;border-radius:6px;margin:4px 0 8px;background:none}
+.cat-bar>i{border-radius:3px}
+.cat-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto auto;gap:10px;align-items:center;min-height:32px;font-size:14px;width:100%;
+  border:0;background:none;padding:0;color:inherit;font:inherit;text-align:left}
+button.cat-row{min-height:44px;cursor:pointer}
+.cat-name{display:flex;align-items:center;gap:4px;min-width:0;white-space:nowrap}
+.cat-name>span{overflow:hidden;text-overflow:ellipsis}
+.cat-name .ico{width:14px;height:14px;color:var(--dim);transition:transform .2s}
+.cat-row[aria-expanded=true] .ico{transform:rotate(180deg)}
+.cat-pct{color:var(--dim);font-size:13px;text-align:right;min-width:36px}
+.cat-val{font-weight:600;text-align:right;min-width:72px}
+.cat-sub{margin:0 0 4px 20px;padding-left:10px;border-left:1px solid var(--sep)}
+.cat-sub .cat-row{min-height:28px;font-size:13px}
+.cat-sub .cat-val{font-weight:400}
+.link-btn{border:0;background:none;color:var(--accent);font-size:13px;font-weight:600;min-height:32px;padding:0 4px}
+@media(max-width:767px){
+  .hide-phone{display:none}
+  .t-pair .lg-long{display:none} .t-pair .lg-short{display:inline}
+  .t-pair .fig{font-size:24px}
+  .t-pair .bar6{display:none}
+}
+@media(min-width:768px){
+  .sum{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .t-nw,.t-hist{grid-column:span 2}
+  .fig{font-size:30px}
+  .t-pair{display:flex;flex-direction:column;gap:16px}
+  .t-pair .tile{flex:1;padding:18px 20px}
+  .seg-row{grid-template-rows:auto auto;padding:6px 0}
+  .seg-sub{display:block;grid-column:3;font-size:12px;color:var(--dim);text-align:right}
+  .seg-row .seg-dot{grid-row:span 2}
+  .seg-name{grid-row:span 2}
+}
+@media(min-width:1200px){
+  .sum{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .t-nw,.t-lts,.t-cats,.t-recent{grid-column:span 2}
+  .t-hist{grid-column:span 3}
+  .t-pair{order:1}
+  .t-cats,.t-recent{order:2}
+  .fig-hero{font-size:40px;line-height:46px}
+}
 
-/* Donut (expenses by category) — ring + legend; legend carries the numbers,
- * so identity is never color-alone. Stacks under the ring on a phone. */
-.donut-wrap{display:flex;gap:22px;align-items:center;flex-wrap:wrap}
-.donut-ring{position:relative;width:224px;flex:0 0 224px;margin:0 auto}
-.donut{display:block;width:100%;height:auto}
-.donut-mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none}
-.donut-mid-l{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-faint)}
-.donut-mid-v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
-.donut-legend{flex:1 1 240px;min-width:0}
-.dl-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto 38px;gap:10px;align-items:center;padding:5px 0;font-size:13px}
-.dl-row .lg-key{margin:0}
-.dl-name{color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dl-val{font-variant-numeric:tabular-nums;color:var(--text)}
-.dl-pct{font-variant-numeric:tabular-nums;color:var(--text-faint);text-align:right}
-/* "Other" drill-down: a native <details>, so keyboard and screen readers work
-   without JS. Own marker (the default triangle sits outside the row grid). */
-.dl-drill>summary{list-style:none;cursor:pointer;border-radius:8px}
-.dl-drill>summary::-webkit-details-marker{display:none}
-.dl-drill>summary:hover{background:var(--surface-2)}
-.dl-drill>summary .dl-name::after{content:' ▸';color:var(--text-faint)}
-.dl-drill[open]>summary .dl-name::after{content:' ▾'}
-.dl-sub{padding-left:19px;font-size:12.5px}
-.dl-sub .lg-key{opacity:.5}
 
-/* ── Meters (budgets / utilization): track = lighter step of the same ramp ── */
-.meter{position:relative;height:10px;border-radius:6px;background:rgba(91,140,255,.15);margin-top:9px}
-.meter.warn{background:rgba(255,180,84,.14)}
-.meter.over{background:rgba(255,115,115,.14)}
-.meter-fill{position:absolute;left:0;top:0;bottom:0;border-radius:6px;background:var(--accent);transition:width .4s ease;min-width:2px}
-.meter.warn .meter-fill{background:var(--warn)}
-.meter.over .meter-fill{background:var(--chart-neg)}
-.meter.thin{height:6px;margin-top:7px}
-/* pace notch: where spending "should" be, given how much of the period elapsed */
-.meter-pace{position:absolute;top:-4px;bottom:-4px;width:2px;border-radius:1px;background:var(--text-dim);opacity:.9}
-.meter-pace::after{content:"";position:absolute;left:-3px;top:-4px;border:4px solid transparent;border-top-color:var(--text-dim)}
+/* ── Accounts (v3 Phase 5): totals, then grouped lists. A phone shows each group's
+ * label above its card and the totals as one card; from 768px a group is a tile
+ * with its label inside, in two columns. ── */
+.a-tot{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--card);border-radius:20px;padding:14px 0;margin-bottom:12px}
+.a-tot .tile{background:none;border-radius:0;padding:0 8px;gap:0;align-items:center;text-align:center}
+.a-tot .tile+.tile{border-left:1px solid var(--sep)}
+.a-tot .tile-h{min-height:0;justify-content:center}
+.a-tot .tile-l{font-size:12px;font-weight:400;margin:0}
+.a-tot .tip-btn{display:none}
+.a-tot .fig{font-size:17px;letter-spacing:0;white-space:nowrap}
+.a-tot .tile-foot{display:none}
+.a-body,.a-col{display:flex;flex-direction:column;gap:12px}
+.a-grp{display:flex;flex-direction:column;gap:6px}
+.a-gh{display:flex;justify-content:space-between;gap:10px;padding:6px 4px 0;font-size:13px;font-weight:600;color:var(--dim)}
+.a-list{background:var(--card);border-radius:16px;overflow:hidden}
+.a-row{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:8px 16px;border:0;border-top:1px solid var(--sep);
+  background:none;color:inherit;font:inherit;text-align:left;font-variant-numeric:tabular-nums}
+.a-row:first-child{border-top:0}
+button.a-row{cursor:pointer}
+button.a-row:active{background:var(--card-2)}
+@media(hover:hover){button.a-row:hover{background:var(--card-2)}}
+.a-ic{width:32px;height:32px;border-radius:9px;flex:none;display:grid;place-items:center;font-weight:700;font-size:14px;background:var(--card-2);color:var(--dim)}
+.a-ic .ico{width:18px;height:18px}
+.a-mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.a-t{font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a-s{font-size:13px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a-s.warn{color:var(--warn)}
+.a-mid .bar6{margin:3px 0}
+.a-v{display:flex;flex-direction:column;align-items:flex-end;font-size:17px;font-weight:600;white-space:nowrap}
+.a-v small{font-size:12px;font-weight:400;color:var(--dim)}
+.a-row>.ico{width:14px;height:14px;color:var(--dim);flex:none;stroke-width:2.4;transform:rotate(-90deg)}   /* the sprite chevron points down */
+.r-row{min-height:44px}
+.r-row .a-s{flex:none}
+.a-chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px}
+.a-chips .chip{height:36px;font-size:14px;font-weight:600}
+#debtsCard{display:contents}
+@media(min-width:768px){
+  .a-tot{background:none;padding:0;gap:16px;margin-bottom:16px}
+  .a-tot .tile{background:var(--card);border-radius:20px;padding:16px 20px;align-items:stretch;text-align:left;gap:2px}
+  .a-tot .tile+.tile{border-left:0}
+  .a-tot .tile-h{justify-content:flex-start}
+  .a-tot .tile-l{font-size:13px;font-weight:600;margin-right:auto}
+  .a-tot .tip-btn{display:inline-grid}
+  .a-tot .fig{font-size:28px;letter-spacing:-.5px}
+  .a-tot .tile-foot{display:block}
+  .a-tot .lg-long{display:inline} .a-tot .lg-short{display:none}
+  .a-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  .a-col{gap:16px}
+  .a-grp{background:var(--card);border-radius:20px;padding:14px 20px 6px;gap:0}
+  .a-gh{padding:0 0 6px}
+  .a-gh>span:last-child{color:var(--text)}
+  .a-list{background:none;border-radius:0;overflow:visible}
+  .a-row,.a-row:first-child{padding:8px 0;min-height:50px;border-top:1px solid var(--sep)}
+  .r-row{min-height:40px}
+  .a-t,.a-v{font-size:15px}
+  .a-s{font-size:12px}
+  .a-ic{width:30px;height:30px;font-size:13px}
+  .a-chips{padding:10px 0 12px}
+}
+@media(max-width:767px){ .a-tot .lg-long{display:none} .a-tot .lg-short{display:inline} }
 
-/* legacy thin bar (credit utilization etc.) */
-.bar{height:8px;border-radius:6px;background:var(--surface-3);overflow:hidden;margin-top:8px}
-.bar.thin{height:5px;margin-top:6px}
-.bar-fill{height:100%;border-radius:6px;background:var(--accent);transition:width .4s ease}
-.bar-fill.over{background:var(--chart-neg)}
-.bar-fill.warn{background:var(--warn)}
+/* ── Investments (v3 Phase 5): the .sum grid. Holdings is a table from 768px and
+ * a list on a phone. ── */
+.inv{grid-auto-flow:dense}
+.inv-gain{font-size:13px;font-weight:600}
+.pq-list{display:flex;flex-direction:column;gap:12px;margin-top:2px}
+.pq{display:flex;flex-direction:column;gap:4px}
+.pq-h{display:flex;justify-content:space-between;gap:10px;font-size:14px}
+.pq-h b{font-weight:600}
+.pq-bar{display:flex;gap:2px;height:10px}
+.pq-bar>i{display:block;border-radius:5px;min-width:5px}
+.pq-bar.empty{border:1px dashed var(--warn);border-radius:5px;opacity:.6}
+.pq-d{font-size:12px;color:var(--dim)}
+.pq-d.neg{color:var(--neg)}
+.alloc{display:flex;gap:2px;height:12px;border-radius:6px;overflow:hidden;margin:4px 0}
+.alloc>i{display:block;min-width:4px}
+.alloc-rows{display:flex;flex-direction:column;font-size:14px}
+.alloc-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:8px;align-items:center;min-height:28px}
+.alloc-row>i{width:8px;height:8px;border-radius:2px}
+.alloc-row b{font-weight:600}
+.t-hold{padding:0;gap:0}
+.h-row{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(5,minmax(0,1fr));gap:8px;align-items:center;width:100%;min-height:60px;
+  padding:6px 20px;border:0;border-top:1px solid var(--sep);background:none;color:inherit;font:inherit;text-align:right;font-variant-numeric:tabular-nums}
+.h-row:first-child{border-top:0}
+button.h-row{cursor:pointer}
+button.h-row:active{background:var(--card-2)}
+.t-hold>button.h-row:last-child{border-radius:0 0 20px 20px}
+@media(hover:hover){button.h-row:hover{background:var(--card-2)}}
+.h-head{min-height:44px;font-size:12px;font-weight:600;color:var(--dim)}
+.h-gh{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px}
+.h-gh .tip-btn{margin:-6px -6px -6px 0}
+.h-name{display:flex;align-items:center;gap:12px;min-width:0;text-align:left}
+.h-name .a-ic{width:36px;height:36px;border-radius:10px;font-size:11px}
+.h-n{display:flex;flex-direction:column;min-width:0}
+.h-n b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.h-n span{font-size:12px;color:var(--dim)}
+.h-m{display:none}
+.h-val,.h-gain{font-weight:600}
+@media(max-width:767px){
+  .h-head{display:none}
+  .h-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n v" "n g";row-gap:0;padding:10px 16px}
+  .h-name{grid-area:n} .h-val{grid-area:v} .h-gain{grid-area:g;font-size:13px}
+  .h-sh,.h-ac,.h-pr{display:none}
+  .h-n .h-m{display:block}
+  .t-hold>button.h-row:first-of-type{border-top:0}
+}
+@media(min-width:768px){ .t-pulse,.t-hold{grid-column:span 2} }
+@media(min-width:1200px){ .t-hold{grid-column:span 4} }
+
+/* ── Swap (v3 Phase 6): inputs as a grouped list, then the result tiles. Side by
+ * side from 1200px. ── */
+.sw{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
+.sw-in{padding:0;gap:0;overflow:hidden}
+.sw-f{display:flex;align-items:center;gap:12px;min-height:56px;padding:0 20px;border-top:1px solid var(--sep)}
+.sw-f:first-child{border-top:0}
+.sw-f>span{flex:1;display:flex;flex-direction:column;min-width:0}
+.sw-k{font-size:15px} .sw-s{font-size:12px;color:var(--dim)}
+.sw-f input{width:130px;text-align:right;border:0;outline:none;background:none;color:var(--text);font:inherit;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.sw-f:focus-within{box-shadow:inset 3px 0 0 var(--accent)}
+.sw-split{padding:14px 20px 16px;border-top:1px solid var(--sep)}
+.sw-sh{display:flex;justify-content:space-between;font-size:15px;margin-bottom:6px}
+.sw-split input{width:100%;height:28px;margin:0;-webkit-appearance:none;appearance:none;background:none}
+.sw-split input::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent) var(--v,50%),var(--track) var(--v,50%))}
+.sw-split input::-moz-range-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent) var(--v,50%),var(--track) var(--v,50%))}
+.sw-split input::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;margin-top:-12px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sw-split input::-moz-range-thumb{width:28px;height:28px;border:0;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.sw-out{display:flex;flex-direction:column;gap:12px;min-width:0}
+.sw-rate{font-size:17px;font-weight:600}
+.sw-range{position:relative;height:66px;margin-top:10px;font-size:12px;color:var(--dim)}
+.sw-lo,.sw-hi{position:absolute;top:0} .sw-lo{left:0} .sw-hi{right:0}
+.sw-bar{position:absolute;left:0;right:0;top:24px;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--pos),var(--accent))}
+.sw-bar b{position:absolute;top:-8px;width:3px;height:28px;margin-left:-1.5px;border-radius:2px;background:var(--text)}
+.sw-mid{position:absolute;top:0;width:2px;height:12px;margin-left:-1px;background:#fff;opacity:.85}
+.sw-fair{position:absolute;top:46px;transform:translateX(-50%);font-weight:600;color:var(--text);white-space:nowrap}
+.sw-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.sw-pair .fig{font-size:24px}
+.btn.sw-rec{align-self:flex-start;min-height:44px;border-radius:22px;padding:0 18px;font-size:15px}
+@media(min-width:768px){ .sw,.sw-out,.sw-pair{gap:16px} .sw-pair .fig{font-size:26px} }
+@media(min-width:1200px){ .sw{grid-template-columns:420px minmax(0,1fr)} }
+
+/* ── Tax (v3 Phase 6): quarter tiles, the unlinked-salary banner, the table. ── */
+.tax-q{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.tax-q .fig{font-size:24px}
+.tax-q .tile-l,.tax-q .pill{white-space:nowrap}
+.tax-q .tile-h{gap:6px;flex-wrap:wrap;align-content:flex-start;min-height:50px}
+/* The badge takes its own line: "Q3 so far · Due 15 Nov · ⓘ" is wider than a phone's half-tile. */
+.tax-q .tile-r{order:2;flex-basis:100%;text-align:left}
+.tile.ring{box-shadow:0 0 0 2px var(--warn)}
+.tax-warn{display:flex;align-items:center;gap:12px;background:var(--warn-tint);border-radius:16px;padding:12px 16px;margin-bottom:12px;font-size:14px}
+.tax-warn>.ico{width:20px;height:20px;color:var(--warn);flex:none}
+.tax-warn .grow{flex:1;min-width:0}
+.tax-warn .btn{background:var(--warn);border-color:var(--warn);color:#fff;border-radius:999px;flex:none}
+.tax-tbl{padding:4px 8px}
+.tax-tbl .tbl-wrap{max-height:none}
+table.tbl th.num,table.tbl td.num{text-align:right}
+table.tbl th .tip-btn{vertical-align:middle;margin-left:2px}
+.typed{display:inline-block;min-width:70px;padding:4px 8px;border-radius:8px;background:var(--card-2)}
+.typed.empty{color:var(--dim)}
+table.tbl td.ed-cell:hover .typed{box-shadow:inset 0 0 0 1px var(--accent)}
+.q-select.q-pill{border:0;border-radius:999px;height:28px;padding:0 10px;font-size:13px;font-weight:600;color:var(--dim)}
+.q-select.q-pill.on{background:var(--pos-tint);color:var(--pos)}
+@media(min-width:768px){ .tax-q{gap:16px;margin-bottom:16px} .tax-warn{margin-bottom:16px} .tax-q .fig{font-size:26px} }
+@media(min-width:1200px){ .tax-q{grid-template-columns:repeat(4,minmax(0,1fr))} }
+table.tbl .icon-btn{background:none;color:var(--dim);width:32px;height:32px}
+table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
+
+/* ── Admin (v3 Phase 6): the table picker is a segmented control that scrolls
+ * sideways when it does not fit. ── */
+.adm-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.adm-seg{overflow-x:auto;scrollbar-width:none;max-width:100%;flex:0 1 auto}
+.adm-seg::-webkit-scrollbar{display:none}
+.adm-seg>button{white-space:nowrap;flex:none}
+.adm-tbl{padding:4px 8px 0}
+.adm-tbl+.a-wid{margin-top:24px}
+.adm-tbl .tbl-wrap{max-height:none}
+.adm-tbl th .ico{display:inline-block;width:12px;height:12px;margin-left:4px;vertical-align:-1px}
+.adm-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 8px 12px;font-size:13px;color:var(--dim)}
 
 /* ── Lists / rows ────────────────────────────────────────────────────────── */
 .list{display:flex;flex-direction:column}
-.list-date{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-faint);
-  padding:16px 4px 6px;border-bottom:1px solid var(--border)}
-.list-date:first-child{padding-top:2px}
-.list-date .ld-date{cursor:pointer}
-.list-date .ld-date:hover,.list-date .ld-date.on{color:var(--accent-2)}
-.list-date .ld-sum{font-variant-numeric:tabular-nums;letter-spacing:0;text-transform:none;font-weight:600}
-.litem{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border)}
+.litem{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--sep)}
 .litem:last-child{border-bottom:none}
 .litem .ic{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-size:16px;flex:none;
-  background:var(--surface-3);color:var(--text-dim)}
-.litem .ic.in{background:rgba(62,207,142,.13);color:var(--pos)}
-.litem .ic.out{background:rgba(255,115,115,.12);color:var(--neg)}
-.litem .ic.xfer{background:rgba(91,140,255,.13);color:var(--accent-2)}
+  background:var(--card-3);color:var(--dim)}
 .litem .grow{flex:1;min-width:0}
 .litem .t1{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.litem .t2{font-size:12px;color:var(--text-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.litem .t2{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
 .litem .amt{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
-.litem .amt .amt-sub{display:block;font-weight:500;font-size:11px;color:var(--text-faint);text-align:right}
+.litem .amt .amt-sub{display:block;font-weight:500;font-size:11px;color:var(--dim);text-align:right}
 .litem.click{cursor:pointer;border-radius:12px}
-.litem.click:hover{background:var(--surface-2)}
+@media(hover:hover){.litem.click:hover{background:var(--card-2)}}   /* iOS keeps :hover after a tap */
 /* in-flight (optimistic) row: dimmed with a spinner in the icon slot */
-.litem.pending{opacity:.6;animation:pendPulse 1.4s ease-in-out infinite}
-.mini-spin{width:16px;height:16px;border:2px solid var(--border-2);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
+.litem.pending{opacity:.6;animation:rowIn .25s cubic-bezier(.2,.8,.2,1),pendPulse 1.4s ease-in-out .25s infinite}
+.mini-spin{width:16px;height:16px;border:2px solid var(--sep);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
 @keyframes pendPulse{0%,100%{opacity:.6}50%{opacity:.4}}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
-.btn{background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);
+.btn{background:var(--card-2);color:var(--text);border:1px solid var(--sep);border-radius:var(--radius-sm);
   padding:9px 15px;font-size:14px;font-weight:600;transition:background .15s,transform .1s;min-height:38px}
-.btn:hover{background:var(--surface-3)}
+.btn:hover{background:var(--card-3)}
 .btn:active{transform:scale(.97)}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:#0b1020}
-.btn.primary:hover{background:var(--accent-2)}
-.btn.danger{color:var(--neg);border-color:rgba(255,115,115,.4)}
-.btn.danger:hover{background:rgba(255,115,115,.1)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent)}
+.btn.danger{color:var(--neg);border-color:var(--neg-tint)}
+.btn.danger:hover{background:var(--neg-tint)}
 .btn.sm{padding:6px 11px;font-size:12.5px;min-height:32px}
-.btn.ghost{background:none;border-color:transparent}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
 
-/* ── Filters ─────────────────────────────────────────────────────────────── */
-.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-.filters input,.filters select{background:var(--surface-2);color:var(--text);border:1px solid var(--border);
-  border-radius:var(--radius-sm);padding:9px 11px;font-size:13px;outline:none;min-width:0;min-height:38px}
-.filters input:focus,.filters select:focus{border-color:var(--accent)}
-/* an active filter keeps an accent border so a narrowed list is never a surprise */
-.filters input.on,.filters .combo.on .combo-input{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-.filters .search{flex:1;min-width:140px}
-
 /* ── Forms / modal ───────────────────────────────────────────────────────── */
-.modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:16px}
+/* iOS zooms the page into any field under 16px when it takes focus. !important because
+ * the smaller field styles below are more specific. */
+@media(pointer:coarse){ :is(input,select,textarea):not(.ed-in,.ed-search){font-size:16px!important} }   /* the editor's own fields are 17px+ */
+.modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;
+  padding:calc(max(16px,env(safe-area-inset-top)) + var(--edge)) 16px max(16px,env(safe-area-inset-bottom))}
 .modal-root[hidden]{display:none}
 .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(3px)}
 /* max-height:100% (not 90vh) so the card fits the JS-set visual-viewport height when the iOS keyboard is up. */
-.modal-card{position:relative;background:var(--surface);border:1px solid var(--border-2);border-radius:18px;
-  width:100%;max-width:460px;max-height:100%;overflow:auto;box-shadow:var(--shadow);animation:pop .2s ease}
-.modal-h{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)}
+.modal-card{position:relative;background:var(--card);border-radius:20px;
+  width:100%;max-width:460px;max-height:100%;overflow:auto;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
+.modal-h{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--sep);
+  position:sticky;top:0;background:var(--card);z-index:2}   /* title and Save stay in view on a long form */
 .modal-h h3{margin:0;font-size:16px}
 .modal-b{padding:18px}
-.modal-f{padding:14px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
+.modal-f{padding:14px 18px;border-top:1px solid var(--sep);display:flex;gap:8px;justify-content:flex-end;
+  position:sticky;bottom:0;background:var(--card);z-index:2}
 .field{margin-bottom:13px}
-.field label{display:block;font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:5px}
-.field input,.field select,.field textarea{width:100%;background:var(--surface-2);color:var(--text);
-  border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;outline:none;font-family:inherit;min-height:40px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--dim);margin-bottom:5px}
+.field input,.field select,.field textarea{width:100%;background:var(--card-2);color:var(--text);
+  border:1px solid var(--sep);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;outline:none;font-family:inherit;min-height:40px}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--accent)}
 /* iOS renders native date inputs with an intrinsic width that overflows the container — normalize to a plain box. */
 .field input[type=date]{-webkit-appearance:none;appearance:none;min-width:0;text-align:left}
-.field .hint{font-size:11px;color:var(--text-faint);margin-top:4px}
+.field .hint{font-size:11px;color:var(--dim);margin-top:4px}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.seg-toggle{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;margin-bottom:14px}
-.seg-toggle button{flex:1;background:none;border:none;color:var(--text-dim);padding:8px;border-radius:8px;font-weight:600;font-size:13px}
-.seg-toggle button.on{background:var(--accent);color:#0b1020}
+.seg-toggle{display:flex;background:var(--card-2);border-radius:var(--radius-sm);padding:3px;margin-bottom:14px}
+.seg-toggle button{flex:1;background:none;border:none;color:var(--dim);padding:8px;border-radius:8px;font-weight:600;font-size:13px}
+.seg-toggle button.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 
 /* ── Combobox (fuzzy picker, replaces <select>) ──────────────────────────── */
 .combo{position:relative}
 .combo-input{width:100%}
 .filters .combo{flex:1;min-width:130px}
 .combo-list{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:70;max-height:240px;overflow:auto;
-  background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);box-shadow:var(--shadow);padding:4px}
+  background:var(--card-2);border:1px solid var(--sep);border-radius:var(--radius-sm);box-shadow:var(--shadow);padding:4px}
 .combo-opt{padding:9px 10px;border-radius:8px;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:8px}
 .combo-opt .combo-lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.combo-opt.active{background:var(--surface-3)}
-.combo-opt.sel{color:var(--accent-2)}
-.combo-empty{padding:8px 10px;color:var(--text-faint);font-size:13px}
+.combo-opt.active{background:var(--card-3)}
+.combo-opt.sel{color:var(--accent)}
+.combo-empty{padding:8px 10px;color:var(--dim);font-size:13px}
 
 /* small colored dot used to identify accounts across screens */
 .acct-dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:5px;flex:none}
 
 /* ── Color picker (account color-coding) ─────────────────────────────────── */
 .color-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.color-row input[type=color]{width:46px;height:38px;padding:2px;border:1px solid var(--border);
-  border-radius:var(--radius-sm);background:var(--surface-2);cursor:pointer;flex:none}
+.color-row input[type=color]{width:46px;height:38px;padding:2px;border:1px solid var(--sep);
+  border-radius:var(--radius-sm);background:var(--card-2);cursor:pointer;flex:none}
 .swatches{display:flex;gap:7px;flex-wrap:wrap}
-.swatch{width:24px;height:24px;border-radius:50%;border:2px solid var(--border);padding:0;cursor:pointer;transition:.12s}
-.swatch.none{background:var(--surface-2);color:var(--text-faint);font-size:11px;display:grid;place-items:center;border-style:dashed}
-.swatch.on{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--accent);border-color:transparent}
+.swatch{width:24px;height:24px;border-radius:50%;border:2px solid var(--sep);padding:0;cursor:pointer;transition:.12s}
+.swatch.none{background:var(--card-2);color:var(--dim);font-size:11px;display:grid;place-items:center;border-style:dashed}
+.swatch.on{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--accent);border-color:transparent}
 .swatch:hover{transform:scale(1.12)}
 
-/* ── FAB ─────────────────────────────────────────────────────────────────── */
-.fab{position:fixed;right:18px;bottom:calc(84px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:18px;border:none;z-index:30;
-  background:var(--accent);color:#0b1020;font-size:28px;font-weight:400;line-height:1;box-shadow:0 8px 24px rgba(91,140,255,.35);transition:.15s}
-.fab:hover{background:var(--accent-2);transform:translateY(-2px)}
-.fab:active{transform:scale(.94)}
-
 /* ── Toast ───────────────────────────────────────────────────────────────── */
-.toast-root{position:fixed;left:0;right:0;bottom:96px;z-index:60;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
-.toast{background:var(--surface-3);border:1px solid var(--border-2);color:var(--text);padding:10px 16px;border-radius:999px;
-  font-size:13px;font-weight:600;box-shadow:var(--shadow);animation:pop .2s ease}
-.toast.ok{border-color:rgba(62,207,142,.5)} .toast.err{border-color:rgba(255,115,115,.5)}
+.toast-root{position:fixed;left:0;right:0;bottom:calc(150px + env(safe-area-inset-bottom));z-index:60;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+.toast{background:var(--tip);border:1px solid transparent;color:#F5F5F7;padding:10px 16px;border-radius:999px;
+  font-size:13px;font-weight:600;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
+.toast.ok{border-color:var(--pos-tint)} .toast.err{border-color:var(--neg-tint)}
 
 /* ── Table (Tax / wide lists) ────────────────────────────────────────────── */
 .tbl-wrap{overflow:auto;max-height:72vh}
 table.tbl{width:100%;border-collapse:collapse;font-size:13px}
-table.tbl th{text-align:left;color:var(--text-faint);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.4px;
-  padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;
-  position:sticky;top:0;background:var(--surface);z-index:1}
-table.tbl td{padding:9px 10px;border-bottom:1px solid var(--border);white-space:nowrap;font-variant-numeric:tabular-nums}
-table.tbl tr:hover td{background:var(--surface-2)}
+table.tbl th{text-align:left;color:var(--dim);font-weight:600;font-size:12px;
+  padding:8px 10px;border-bottom:1px solid var(--sep);white-space:nowrap;
+  position:sticky;top:0;background:var(--card);z-index:1}
+table.tbl td{padding:9px 10px;border-bottom:1px solid var(--sep);white-space:nowrap;font-variant-numeric:tabular-nums}
+table.tbl tr:hover td{background:var(--card-2)}
 table.tbl td.ed-cell{cursor:pointer}
-table.tbl td.ed-cell:hover{background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--accent)}
+table.tbl td.ed-cell:hover{background:var(--card-3);box-shadow:inset 0 0 0 1px var(--accent)}
 /* Not scoped to the table: the Tax subtitle's BSP link uses it too, and an
  * unstyled <a> there renders as a default blue/underlined UA link. */
 a.tx-link{color:var(--accent);text-decoration:none;border-bottom:1px dotted currentColor}
 /* Not scoped to the table either: the Tax screen's year picker sits in the header,
    and a native <select> there renders as a white UA control on the dark theme. */
-.q-select{background:var(--surface-2);color:var(--text);border:1px solid var(--border);
+.q-select{background:var(--card-2);color:var(--text);border:1px solid var(--sep);
   border-radius:var(--radius-sm);padding:3px 6px;font:inherit;cursor:pointer}
 .q-select:focus{border-color:var(--accent);outline:none}
 /* Inline editor fills the cell; td padding drops to 0 so the row height/width
  * doesn't jump when the input (which carries the same padding) takes over. */
 table.tbl td.editing{padding:0}
 .ledger-edit-input{display:block;box-sizing:border-box;width:100%;margin:0;padding:9px 10px;
-  font:inherit;color:var(--text);background:var(--surface-3);border:0;
+  font:inherit;color:var(--text);background:var(--card-3);border:0;
   box-shadow:inset 0 0 0 1px var(--accent);border-radius:0;outline:none}
 .screen-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
 /* A .screen-sub below carries its own 16px, so the head only needs the title's own gap. */
 .screen-head:has(+.screen-sub){margin-bottom:4px}
 
 /* ── Loaders / empty ─────────────────────────────────────────────────────── */
-.empty{text-align:center;color:var(--text-faint);padding:34px 14px;font-size:14px}
-.empty .empty-ico{display:block;font-size:26px;margin-bottom:8px;opacity:.7}
+.empty{text-align:center;color:var(--dim);padding:34px 14px;font-size:14px}
+.empty>.ico{margin:0 auto 8px;width:26px;height:26px;opacity:.7}
 /* Loading placeholders: shimmer bars laid out inside the REAL .card/.stat/.litem
    boxes (see skeletonHTML in App.html), so the layout doesn't jump when data lands. */
-.skeleton{background:linear-gradient(90deg,var(--surface-2),var(--surface-3),var(--surface-2));background-size:200% 100%;
+.skeleton{background:linear-gradient(90deg,var(--card-2),var(--card-3),var(--card-2));background-size:200% 100%;
   animation:shimmer 1.2s infinite;border-radius:8px;height:14px}
 .skeleton+.skeleton{margin-top:8px}
 .filters .skeleton{margin-top:0}
-@media (prefers-reduced-motion:reduce){.skeleton{animation:none}}
 
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@keyframes pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:none}}
+@keyframes rowIn{from{opacity:0;transform:translateY(-8px)}}
 @keyframes shimmer{to{background-position:-200% 0}}
 
-/* ── Transactions edit mode (account rail beside the list) ───────────────── */
-.tx-split{display:grid;grid-template-columns:1fr;gap:14px}
-.tx-split>.card{min-width:0}
-.tx-rail{max-height:320px;overflow:auto}          /* capped on phone so it doesn't dominate */
-.rail-grp{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-faint);font-weight:600;margin:10px 0 2px;padding:0 4px}
-.litem.rail .t1{font-size:13.5px}
-.litem.rail .ic{width:30px;height:30px;font-size:13px}
-.litem.sel{background:rgba(91,140,255,.12);border-radius:10px}
-.litem.rail.sel{background:rgba(91,140,255,.16)}
 .litem.edit{overflow:visible}                      /* let inline-edit dropdown escape the row */
+.litem.sel{background:var(--accent-tint)}
 .tx-check{width:17px;height:17px;flex:none;accent-color:var(--accent);cursor:pointer;margin:0}
-.sel-all{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-dim);cursor:pointer}
-.sel-all input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
-.ed{cursor:pointer;border-bottom:1px dashed var(--border-2)}
+.ed{cursor:pointer;border-bottom:1px dashed var(--sep)}
 .ed:hover{color:var(--text);border-bottom-color:var(--accent)}
 .t1-edit{cursor:text}
-.t1-edit:hover{color:var(--accent-2)}
+.t1-edit:hover{color:var(--accent)}
 /* no description: a quiet affordance, not a "(no description)" placeholder */
-.t1-edit:empty::before{content:"+ note";color:var(--text-faint);font-weight:500}
+.t1-edit:empty::before{content:"+ note";color:var(--dim);font-weight:500}
 .amt-edit{cursor:text}
 .amt-edit:hover{opacity:.8}
 .ic-edit{cursor:pointer}
 .ic-edit:hover{filter:brightness(1.25)}
-.inline-edit-input{background:var(--surface-3);border:1px solid var(--accent);border-radius:6px;color:var(--text);
+.inline-edit-input{background:var(--card-3);border:1px solid var(--accent);border-radius:6px;color:var(--text);
   padding:3px 7px;font-size:13px;font-family:inherit;outline:none;width:100%;min-width:80px}
 .t1 .inline-edit-input{font-weight:600}
 .amt .inline-edit-input{width:112px;text-align:right;font-variant-numeric:tabular-nums}
 .inline-edit{display:inline-block;min-width:160px;vertical-align:middle}
-.inline-edit .combo-input{padding:3px 7px;font-size:12.5px;background:var(--surface-3);border:1px solid var(--accent);border-radius:6px}
+.inline-edit .combo-input{padding:3px 7px;font-size:12.5px;background:var(--card-3);border:1px solid var(--accent);border-radius:6px}
 
-/* ── Bulk-action bar ─────────────────────────────────────────────────────── */
-.bulk-bar{position:sticky;top:0;z-index:25;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);
-  padding:9px 12px;margin-bottom:12px;box-shadow:var(--shadow)}
-.bulk-bar[hidden]{display:none}
-.bulk-count{font-weight:700;font-size:13px;margin-right:4px}
-
-/* ── Responsive: tablet & up → sidebar layout ────────────────────────────── */
-@media(min-width:860px){
-  .tx-split{grid-template-columns:300px minmax(0,1fr);align-items:start}
-  .tx-rail{position:sticky;top:0;max-height:calc(100vh - 160px)}
-  #app{grid-template-columns:var(--nav-w) minmax(0,1fr);grid-template-rows:auto 1fr;
-    grid-template-areas:"nav topbar" "nav main"}
-  /* Sidebar spans both grid rows, so it starts behind the status bar too. */
-  .nav{flex-direction:column;justify-content:flex-start;gap:4px;border-top:none;border-right:1px solid var(--border);
-    padding:calc(16px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
-    height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;background:var(--bg)}
-  .nav::before{content:"";display:block;height:8px}
-  .nav-item{flex-direction:row;justify-content:flex-start;gap:12px;font-size:14px;padding:11px 14px;width:100%;min-height:42px;flex:none}
-  .nav-item .nav-ico{font-size:18px;width:22px;text-align:center}
-  .nav-item.active{background:var(--surface-2);color:var(--accent-2)}
-  .nav-item.secondary{display:flex}      /* sidebar shows everything… */
-  .nav-item.nav-more{display:none}       /* …so no More button */
-  .fab{bottom:24px;right:24px}           /* no bottom-nav to clear on desktop */
-  .toast-root{bottom:28px}
-  .main{padding:24px max(28px,(100% - 1080px)/2)}
-  .screen-title{font-size:23px}
-}
-/* ── Responsive: desktop → two-column card layout ────────────────────────── */
-/* Every screen is a flat list of cards appended to .screen, so the layout lives
- * on the parent — no per-card wrappers. Multi-column, NOT a 2-col grid: grid
- * rows are as tall as their tallest card, so one long account list leaves a
- * half-screen void beside it; multicol balances the columns instead. Opt in
- * with .cols (Dashboard, Accounts, Budgets); Transactions/Tax/Admin/Swap stay
- * one column because a wide table or the tx rail already owns the row.
- * .wide breaks the flow and runs full width; it is set in JS, never by
- * :has(svg) — a chart is appended at rAF, so the column count would change
- * AFTER the chart measured the host it drew into. */
+/* ── Activity (DESIGN.md: token field, chips, bulk bar) ─────────────────── */
+.act-head{margin-bottom:10px;min-height:44px}   /* Select and Done differ in height; the title must not move */
+.act-sel{font-size:17px;font-weight:400;min-height:44px}
+.tok-wrap{position:relative;margin-bottom:10px}
+.tok-field{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:46px;padding:6px 10px;background:var(--card);
+  border:1px solid var(--sep);border-radius:12px;cursor:text}
+.tok-field:focus-within{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.tok-field>.ico{width:18px;height:18px;color:var(--dim);flex:none}
+.tok-field input{flex:1;min-width:60px;border:0;outline:0;background:none;color:var(--text);font:inherit;font-size:16px;padding:4px 0}
+.tok{display:inline-flex;align-items:center;gap:4px;height:30px;padding:0 2px 0 10px;border-radius:15px;background:var(--accent-tint);
+  color:var(--accent);font-size:14px;font-weight:600;white-space:nowrap;max-width:100%;overflow:hidden}
+.tok-f{font-weight:400;opacity:.8}
+.tok-x{position:relative;width:26px;height:26px;border:0;border-radius:13px;background:none;color:inherit;display:grid;place-items:center;padding:0;flex:none}
+.tok-x::before{content:"";position:absolute;inset:-9px}      /* 44px target */
+.tok-x .ico{width:14px;height:14px;stroke-width:2.6}
+.tok-menu{position:absolute;left:0;top:calc(100% + 6px);z-index:30;width:min(380px,100%);background:var(--card);
+  border:1px solid var(--sep);border-radius:12px;box-shadow:var(--shadow);padding:6px;animation:pop .32s cubic-bezier(.2,.8,.2,1)}
+.tok-menu[hidden]{display:none}
+.tok-opt{display:flex;align-items:center;gap:10px;min-height:40px;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:14px}
+.tok-opt .tok-f{width:72px;flex:none;font-size:12px}
+.tok-opt .tok-v{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tok-opt.on{background:var(--accent);color:#fff}
+.tok-hint{font-size:12px;color:var(--dim);padding:6px 10px 2px}
+.chips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;border:1px solid var(--sep);border-radius:18px;
+  background:var(--card);color:var(--text);font-size:14px;font-weight:600;white-space:nowrap}
+.chip.on{background:var(--accent-tint);color:var(--accent);border-color:var(--accent)}
+.chip.dark{background:var(--text);color:var(--bg);border-color:var(--text)}
+.chip .ico{width:16px;height:16px;stroke-width:2.4}
+.chip:active{transform:scale(.97)}
+.act-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.act-hint{font-size:12px;color:var(--dim)}
+.act-count{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:32px;font-size:13px;color:var(--dim);padding:0 4px;margin:8px 0 4px}
+.pager{display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:12px;font-size:13px;color:var(--dim)}
+.adm-foot .pager{margin:0}
+.pager .link-btn:disabled{opacity:.4;cursor:default}
+.day{margin-bottom:14px}
+.day-h{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 4px 6px;font-size:13px;font-weight:600;color:var(--dim)}
+.day-h .ld-date{border:0;background:none;color:inherit;font:inherit;padding:4px 0;min-height:32px;cursor:pointer}
+.day-h .ld-date:hover,.day-h .ld-date.on{color:var(--accent)}
+.day-card{background:var(--card);border-radius:16px;overflow:hidden}
+.day-card .litem.tx{padding:8px 14px;min-height:60px}
+.day-card .litem:last-child,.day-card .swipe:last-child .litem{border-bottom:0}
+.litem .ic.tx-ic{width:34px;height:34px;border-radius:10px;font-size:15px;font-weight:700;background:var(--card-2);color:var(--dim)}
+.litem .ic.s-ess{background:var(--ess-tint);color:var(--ess)}
+.litem .ic.s-rew{background:var(--rew-tint);color:var(--rew)}
+.litem .ic.s-gro{background:var(--gro-tint);color:var(--gro)}
+.litem .ic.s-pos{background:var(--pos-tint);color:var(--pos)}
+.litem .ic.s-accent{background:var(--accent-tint);color:var(--accent)}
+.tok-link{cursor:pointer;border-radius:4px}
+.tok-link:hover{color:var(--accent)}
+.cat-dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;vertical-align:middle}
+.swipe{position:relative;overflow:hidden}   /* the row keeps its own separator, so Select mode (no wrapper) is the same height */
+.swipe-acts{position:absolute;inset:0;display:flex;justify-content:flex-end;visibility:hidden}
+.swipe.sw-on .swipe-acts{visibility:visible}   /* hidden at rest: the row's anti-aliased edge let red show through */
+.swipe-acts button{width:76px;border:0;color:#fff;font-size:14px;font-weight:600}
+.swipe-acts .sw-sel{display:none;flex:1;align-items:center;padding-left:26px;background:var(--accent);color:#fff}
+.swipe.sw-right .sw-sel{display:flex}
+.swipe.sw-right .sw-del{display:none}
+.swipe-acts .sw-del{background:var(--neg)}
+.swipe>.litem{position:relative;background:var(--card);touch-action:pan-y;transition:transform .32s cubic-bezier(.2,.8,.2,1)}
+/* The table (1200px and wider) and its filter pane */
+.tx-table{padding:0}
+.tx-table:not(.sel-mode){overflow:hidden}
+.tx-tr{display:grid;grid-template-columns:76px minmax(0,1fr) minmax(0,210px) minmax(0,170px) 130px;align-items:center;gap:12px;
+  min-height:52px;padding:0 14px;border-bottom:1px solid var(--sep);font-size:14px}
+.sel-mode .tx-tr{grid-template-columns:24px 76px minmax(0,1fr) minmax(0,210px) minmax(0,170px) 130px}
+.tx-tr:last-child{border-bottom:0}
+.tx-th{min-height:36px;font-size:12px;font-weight:600;color:var(--dim)}
+.tx-tr.click{cursor:pointer}
+.tx-tr.click:hover{background:color-mix(in srgb,var(--card-2) 45%,transparent)}
+.tx-tr.sel{background:var(--accent-tint)}
+.tx-tr.pending{opacity:.6;animation:rowIn .25s cubic-bezier(.2,.8,.2,1),pendPulse 1.4s ease-in-out .25s infinite}
+.tx-td{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tx-td.editing{overflow:visible}
+.tx-tr .r{text-align:right}
+.tx-tr .amt{font-weight:600}
+.tx-tr .amt .amt-sub{display:block;font-weight:400;font-size:11px;color:var(--dim)}
+.act-pane{display:flex;flex-direction:column;gap:2px}
+.pane-h{font-size:12px;font-weight:600;color:var(--dim);padding:14px 10px 6px}
+.pane-h:first-child{padding-top:4px}
+.pane-row{display:flex;align-items:center;border-radius:8px}
+.pane-row:hover{background:var(--card-2)}
+.pane-row.on{background:var(--side-sel)}
+.pane-btn{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;border:0;background:none;color:var(--text);
+  font-size:14px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pane-row.on .pane-btn{font-weight:600}
+.pane-btn .acct-dot{margin:0}
+.pane-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pane-v{font-size:13px;color:var(--dim);font-variant-numeric:tabular-nums}
+.pane-v.neg{color:var(--neg)}
+.pane-x{width:30px;height:30px;border:0;background:none;color:var(--dim);display:grid;place-items:center;flex:none}
+.pane-x .ico{width:14px;height:14px}
+.pane-x:hover{color:var(--neg)}
+.pane-add{text-align:left;padding:0 10px;font-weight:400}
 @media(min-width:1200px){
-  .main{padding:24px max(28px,(100% - 1440px)/2)}
-  .cols{columns:2;column-gap:14px}
-  .cols .card,.cols>.stat,.cols>.grid{break-inside:avoid}
-  .cols>.screen-head,.cols>.screen-title,.cols>.screen-sub,.cols>.wide{column-span:all}
-  /* #invCards is an empty wrapper the investments fetch fills later — dissolve
-   * it, or its four cards are one unbreakable block in one column. */
-  .cols>#invCards{display:contents}
-  /* One row of equal-height heroes: in the plain column flow they land in
-   * different columns, each its own height, with a ragged gap under the shorter
-   * one. grid-auto-columns keeps it honest when only one hero exists. */
-  .cols>.hero-row{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:14px;margin-bottom:14px}
-  .cols>.hero-row>.stat{margin-bottom:0}
+  .act-body{display:grid;grid-template-columns:230px minmax(0,1fr);gap:24px;align-items:start}
+  .act-pane{position:sticky;top:0;max-height:calc(var(--app-h,100dvh) - 110px);overflow-y:auto;overscroll-behavior:contain;
+    border-right:1px solid var(--sep);padding-right:12px}
+}
+/* The bulk bar floats at the bottom of the scroller while Select mode has a selection. */
+.bulk-bar{position:sticky;bottom:12px;z-index:25;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:4px;
+  width:max-content;max-width:100%;margin:12px auto 0;padding:6px 6px 6px 16px;border-radius:16px;background:var(--tip);color:#F5F5F7;
+  box-shadow:var(--shadow);font-size:14px;animation:pop .32s cubic-bezier(.2,.8,.2,1)}
+.bulk-bar[hidden]{display:none}
+.bulk-count{font-weight:600;margin-right:8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.bulk-bar button{height:36px;min-width:44px;padding:0 12px;border:0;border-radius:10px;background:rgba(255,255,255,.12);color:inherit;font-size:13px}
+.bulk-bar button.del{background:rgba(255,69,58,.25);color:#FF8A80}
+.bulk-bar button.x{background:none;padding:0;display:grid;place-items:center}
+.bulk-bar .ico{width:14px;height:14px;stroke-width:2.6}
+/* Filters sheet (openFilterSheet): a bottom sheet on a phone */
+.fsheet{display:flex;flex-direction:column}
+.fs-grab{margin:8px auto 0;display:none}
+.fs-h{display:flex;align-items:center;justify-content:space-between;padding:6px 16px}
+.fs-h button{height:44px;border:0;background:none;color:var(--accent);font-size:17px;padding:0}
+.fs-h button.b{font-weight:600}
+.fs-h b{font-size:17px}
+.fs-b{padding:4px 16px 8px;display:flex;flex-direction:column;gap:18px}
+.fs-sec{display:flex;flex-direction:column;gap:8px}
+.fs-l{font-size:13px;font-weight:600;color:var(--dim);padding-left:4px}
+.fs-chips{display:flex;flex-wrap:wrap;gap:8px}
+.fs-sec .seg>button{flex:1}
+.fs-group{display:flex;flex-direction:column}
+.fs-row{display:flex;align-items:center;gap:12px;min-height:52px;border-top:1px solid var(--sep)}
+.fs-row:first-child{border-top:0}
+.fs-row>span{flex:none;width:92px;font-size:16px}
+.fs-row>.combo,.fs-row>input{flex:1;min-width:0}
+.fsheet input{width:100%;background:var(--card-2);color:var(--text);border:1px solid var(--sep);border-radius:12px;
+  padding:9px 12px;font:inherit;font-size:16px;outline:none;min-height:44px}
+.fsheet input:focus{border-color:var(--accent)}
+.fsheet input[type=date]{-webkit-appearance:none;appearance:none;min-width:0;text-align:left}
+.fs-amt{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.fs-in{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim)}
+.fs-f{padding:12px 16px 16px;display:flex;flex-direction:column;gap:6px}
+.fs-f .btn.primary{min-height:50px;font-size:17px;border-radius:14px}
+.fs-f .link-btn{min-height:40px;font-size:15px;font-weight:400}
+@media(max-width:767px){
+  .modal-root.as-sheet{place-items:end stretch;padding:0}
+  .as-sheet .fs-grab{display:block}
+  .modal-root.as-sheet .modal-card{max-width:none;border-radius:16px 16px 0 0;max-height:92%;padding-bottom:env(safe-area-inset-bottom);
+    animation:sheetUp .32s cubic-bezier(.2,.8,.2,1)}
+}
+
+/* ── Transaction editor (DESIGN.md "Editor"): a page on a phone, a form sheet from 768px ── */
+.ed-root{position:fixed;left:0;right:0;top:0;height:var(--app-h,100dvh);z-index:48}
+.ed-root[hidden]{display:none}
+.ed-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.4);opacity:0;transition:opacity .3s}
+.ed-card{position:absolute;inset:0;overflow:hidden;background:var(--bg)}
+.ed-root.in .ed-card{animation:edIn .35s cubic-bezier(.2,.8,.2,1)}
+.ed-root.out .ed-card{animation:edOut .3s cubic-bezier(.4,0,1,1) forwards}
+@keyframes edIn{from{transform:translateX(100%)}}
+@keyframes edOut{to{transform:translateX(100%)}}
+@keyframes edFade{to{opacity:0;transform:scale(.98)}}
+@keyframes edBd{from{opacity:0}}
+.ed-page{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg)}
+.ed-page.push{animation:edIn .35s cubic-bezier(.2,.8,.2,1);box-shadow:-8px 0 24px rgba(0,0,0,.18)}
+.ed-page.pop{animation:edOut .3s cubic-bezier(.4,0,1,1) forwards}
+.ed-bar{flex:none;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;
+  padding:calc(env(safe-area-inset-top) + var(--edge) + 2px) 8px 2px;border-bottom:1px solid var(--sep);background:var(--bg)}   /* clear the iOS status-bar blur (--edge) */
+.ed-bar>:first-child{justify-self:start}
+.ed-bar>:last-child{justify-self:end}
+.ed-title{font-weight:600;font-size:17px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ed-bb{background:none;border:0;color:var(--accent);font:inherit;font-size:17px;min-height:44px;padding:0 8px;display:inline-flex;align-items:center;cursor:pointer}
+.ed-bb.primary{font-weight:600}
+.ed-bb.back .ico{transform:rotate(90deg);width:24px;height:24px;margin-left:-6px}
+.ed-bb:active{opacity:.5}
+.ed-scroll{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:16px 16px calc(32px + env(safe-area-inset-bottom) + var(--kb,0px))}
+.ed-scroll>.seg-toggle{margin-bottom:20px}
+.ed-group{background:var(--card);border-radius:12px;overflow:hidden;margin-bottom:24px}
+.ed-foot{font-size:13px;color:var(--dim);margin:-18px 16px 24px}
+.ed-row{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:0 16px;background:none;border:0;
+  color:var(--text);font:inherit;font-size:17px;text-align:left;position:relative}
+.ed-row+.ed-row::before{content:'';position:absolute;top:0;left:16px;right:0;border-top:1px solid var(--sep)}
+.ed-lab{flex:none}
+.ed-in{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--text);font:inherit;font-size:17px;text-align:right;padding:12px 0}
+.ed-in::placeholder{color:var(--dim)}
+.ed-date{appearance:none;-webkit-appearance:none;min-height:46px}
+.ed-date::-webkit-date-and-time-value{text-align:right}
+.ed-amt .ed-in{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.ed-cur{flex:none;color:var(--dim);font-size:15px}
+.ed-cur:empty{display:none}
+.ed-pm{flex:none;width:32px;height:32px;border-radius:8px;border:0;background:var(--card-2);color:var(--text);font-size:17px;cursor:pointer}
+.ed-link,.ed-opt,.ed-del{cursor:pointer}
+.ed-link:active,.ed-opt:active,.ed-del:active{background:var(--card-2)}
+.ed-val{flex:1;min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:6px;color:var(--dim)}
+.ed-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ed-val .acct-dot,.ed-opt .acct-dot{margin:0}
+.ed-link>.ico{width:18px;height:18px;transform:rotate(-90deg);color:var(--dim);flex:none}
+.ed-morebtn .ed-lab{color:var(--accent)}
+.ed-morebtn>.ico{margin-left:auto}
+.ed-del{justify-content:center;color:var(--neg)}
+.ed-opt .ico{margin-left:auto;color:var(--accent);width:20px;height:20px}
+.ed-empty{color:var(--dim);justify-content:center}
+.ed-search{width:100%;background:var(--card-2);border:0;border-radius:10px;padding:9px 12px;font:inherit;font-size:17px;color:var(--text);margin-bottom:16px;outline:0}
+@media(min-width:768px){
+  .ed-root{display:grid;place-items:center;padding:max(24px,env(safe-area-inset-top)) 24px calc(24px + var(--kb,0px));
+    transition:padding .25s cubic-bezier(.2,.8,.2,1)}
+  .ed-backdrop{opacity:1}
+  .ed-root.in .ed-backdrop{animation:edBd .3s}
+  .ed-root.out .ed-backdrop{opacity:0}
+  .ed-card{position:relative;inset:auto;width:min(540px,100%);height:min(680px,100%);border-radius:16px;box-shadow:var(--shadow)}
+  .ed-root.in .ed-card{animation:pop .32s cubic-bezier(.2,.8,.2,1)}
+  .ed-root.out .ed-card{animation:edFade .2s forwards}
+  .ed-bar{padding-top:2px}
+  .ed-scroll{padding:20px 20px calc(24px)}
+}
+
+/* ── Shell: icon rail + header add field, 768–1199px (iPad portrait) ────────── */
+@media(min-width:768px){
+  #app{grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:auto 1fr;grid-template-areas:"nav add" "nav main"}
+  #app{padding-top:calc(env(safe-area-inset-top) + var(--edge))}
+  .addbar{padding:max(0px,calc(10px - var(--edge))) max(24px,(100% - 1080px)/2) 4px}
+  .add-field{height:44px;border-radius:12px;box-shadow:none;padding:0 8px 0 4px}
+  .add-plus{width:36px;height:36px;border-radius:9px;background:none;color:var(--accent)}
+  .add-field input{font-size:16px}
+  .qa{bottom:auto;top:calc(100% + 6px);left:max(24px,(100% - 1080px)/2);right:auto;width:min(520px,calc(100% - 48px));
+    border-radius:16px;box-shadow:var(--shadow);max-height:min(70vh,640px);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
+  .qa-bd{background:rgba(0,0,0,.15)}
+  .nav{display:flex;flex-direction:column;align-items:center;gap:6px;border-top:0;border-right:1px solid var(--sep);
+    background:var(--side);backdrop-filter:none;-webkit-backdrop-filter:none;height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+    padding:20px 0 calc(20px + env(safe-area-inset-bottom)) env(safe-area-inset-left)}
+  .nav-brand{display:flex;margin-bottom:14px}
+  .brand-tile{width:40px;height:40px;border-radius:10px;background:linear-gradient(160deg,#4A86FF,#1D4ED8);color:#fff;
+    display:grid;place-items:center;font-weight:700;font-size:22px;flex:none}
+  .brand-name,.brand-ver{display:none}
+  /* In the rail the second group label is a short divider; the first is not drawn. */
+  .nav-group{display:block;width:28px;height:1px;background:var(--sep);margin:8px 0;font-size:0;flex:none}
+  .nav-brand+.nav-group{display:none}
+  .nav-item{width:48px;height:48px;min-height:0;padding:0;border-radius:12px;justify-content:center;flex:none}
+  .nav-item .ico{width:24px;height:24px}
+  .nav-item .nav-label{display:none}
+  .nav-item.active{background:var(--side-sel)}
+  .nav-item:hover{color:var(--text)}
+  .nav-item.active:hover{color:var(--accent)}
+  .nav-item.secondary{display:flex}
+  .nav-more{display:none}
+  .nav-foot{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:auto;padding-top:12px}
+  .nav .sync{justify-content:center;width:44px;padding:0}
+  .nav .sync-label{display:none}
+  .main{padding:12px max(24px,(100% - 1080px)/2) calc(24px + env(safe-area-inset-bottom))}
+  .toast-root{bottom:28px}
+}
+@media(min-width:768px) and (hover:hover) and (pointer:fine){ .add-kbd{display:inline-block} }
+
+/* ── Shell: sidebar, 1200px and wider (iPad landscape, PC) ──────────────── */
+@media(min-width:1200px){
+  #app{grid-template-columns:var(--nav-w) minmax(0,1fr)}
+  .addbar{padding-left:max(28px,(100% - 1440px)/2);padding-right:max(28px,(100% - 1440px)/2)}
+  .qa{left:max(28px,(100% - 1440px)/2)}
+  .nav{align-items:stretch;gap:2px;padding:16px 12px calc(16px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left))}
+  .nav-brand{align-items:center;gap:10px;padding:4px 8px 16px;margin:0}
+  .brand-tile{width:30px;height:30px;border-radius:8px;font-size:17px}
+  .brand-name{display:inline;font-size:16px;font-weight:700}
+  .brand-ver{display:inline;font-size:11px;font-weight:600;color:var(--dim);margin-left:auto}
+  .nav-group,.nav-brand+.nav-group{display:block;width:auto;height:auto;background:none;margin:0;
+    font-size:12px;font-weight:600;color:var(--dim);padding:16px 10px 4px}
+  .nav-brand+.nav-group{padding-top:6px}
+  .nav-item{width:auto;height:36px;flex-direction:row;justify-content:flex-start;gap:10px;padding:0 10px;border-radius:9px;
+    color:var(--text);font-size:14px;font-weight:400}
+  .nav-item .ico{width:18px;height:18px;color:var(--accent)}
+  .nav-item.secondary .ico{color:var(--dim)}
+  .nav-item .nav-label{display:inline}
+  .nav-item.active{font-weight:600;color:var(--text)}
+  .nav-item:hover{background:var(--side-sel)}
+  .nav-foot{flex-direction:row;justify-content:space-between;border-top:1px solid var(--sep);padding:8px 0 0 4px}
+  .nav .sync{justify-content:flex-start;width:auto;padding:0 6px;flex:1}
+  .nav .sync-label{display:inline}
+  .nav .theme-btn{width:36px;height:36px}
+}
+/* ── Responsive: 1200px and wider ─────────────────────────────────────────── */
+@media(min-width:1200px){
+  .main{padding:24px max(28px,(100% - 1440px)/2) calc(24px + env(safe-area-inset-bottom))}
+  .screen-title{font-size:26px;line-height:32px;letter-spacing:-.3px}
 }
 @media(max-width:520px){
-  .grid-2,.grid-3{grid-template-columns:1fr}
-  .kpis.grid-3{grid-template-columns:repeat(3,1fr);gap:8px}   /* KPI tiles stay a row */
-  .kpis .stat{padding:11px 12px}
-  .kpis .stat-value{font-size:16px}
-  .kpis .stat-label{font-size:9.5px;letter-spacing:.5px}
-  .kpis .stat-sub{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kpis .delta{font-size:10px;padding:2px 7px}
-  .nav-item{font-size:9px;letter-spacing:-.2px;padding:7px 2px}
   .field-row{grid-template-columns:1fr}
-  .main{padding:14px 12px}
+  .main{padding-left:16px;padding-right:16px}
   .card{padding:15px}
 }

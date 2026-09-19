@@ -21,15 +21,28 @@
     (function(){
       var probe=document.createElement('div');
       probe.style.cssText='position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top)';
-      // ponytail: screen.height is the only value that knows the real height. The equality
-      // is the guard, not a device sniff — it holds *only* in the short-window mismatch, so
-      // a fixed iOS, a Safari tab, iPad, landscape and every other platform fall through to
-      // innerHeight untouched. Delete the whole thing if Apple ever aligns the two.
+      // ponytail: in the mismatch only the WINDOW size knows the real height. Two readings
+      // of it: outerHeight (right on iPad at a cold launch and in a resized iPadOS window,
+      // where the screen is bigger than the window) and the screen side along the current
+      // height (iOS never swaps screen.width/height on rotation, so landscape takes the
+      // SHORT side). The equality is the guard, not a device sniff: it holds only in the
+      // short-window mismatch, so every other platform falls through to innerHeight.
+      // Measured on an iPad at launch, landscape: inner 788 + top 32 = outer 820.
+      // Delete the whole thing if Apple ever aligns the two.
       function fitShell(){
         document.documentElement.appendChild(probe);
         var top=parseFloat(getComputedStyle(probe).paddingTop)||0;
         probe.remove();
-        var h=(screen.height===window.innerHeight+top)?screen.height:window.innerHeight;
+        var land=innerWidth>innerHeight;
+        var side=land?Math.min(screen.width,screen.height):Math.max(screen.width,screen.height);
+        var full=window.innerHeight+top;
+        // The installed iOS app knows its status-bar height only ~150 ms after launch, so
+        // until then `full` is short and the shell would paint short and jump (a flash of
+        // a bottom strip). outerHeight is the real window height from the first run
+        // (iPad: 820 at 41 ms, when inner was 788 and top still 0), so it wins there.
+        // navigator.standalone exists only on iOS, which makes it an exact guard.
+        var h=(navigator.standalone&&outerHeight>innerHeight)?outerHeight
+             :(outerHeight===full||side===full)?full:window.innerHeight;
         document.documentElement.style.setProperty('--app-h',h+'px');
       }
       fitShell();
@@ -41,50 +54,94 @@
     })();
     </script>
     <meta name="apple-mobile-web-app-title" content="Finance">
-    <meta name="theme-color" content="#0d0f14">
+    <meta name="theme-color" content="#F2F2F7">
     <link rel="icon" href="/icon-180.png" sizes="180x180" type="image/png">
     <link rel="apple-touch-icon" href="/icon-180.png">
+    <!-- Theme before first paint, so the page never flashes the wrong one. ft.theme is
+         'light' | 'dark' | absent (= Auto, follow the system). applyTheme in app.js
+         does the same after a switch; keep the two in step. -->
+    <script>
+    (function(){
+      var t=null; try{ t=localStorage.getItem('ft.theme'); }catch(e){}
+      if(t==='light'||t==='dark') document.documentElement.dataset.theme=t;
+      var dark=t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);
+      document.querySelector('meta[name=theme-color]').content=dark?'#000000':'#F2F2F7';
+      // The icon follows the theme too. iOS reads apple-touch-icon at Add to Home Screen, so
+      // the installed icon is the theme at install time; the manifest has no dark variant.
+      document.querySelectorAll('link[rel=icon],link[rel=apple-touch-icon]').forEach(function(l){ l.href=dark?'/icon-180-dark.png':'/icon-180.png'; });
+    })();
+    </script>
     <link rel="manifest" href="/manifest.json">
-    <!-- Inter is self-hosted in /fonts and declared in app.css. Google Fonts cost
-         ~146 KB on a cold install, came back for the CSS every day, needed two extra
-         origins to preconnect to, and left the app on the fallback stack offline. -->
+    <!-- System fonts only (DESIGN.md): nothing to download, works offline. -->
     <link rel="stylesheet" href="/app.css">
-    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
   </head>
   <body>
+    <!-- The icon set (DESIGN.md "Icons"): 24px grid, 1.9 stroke, currentColor.
+         In app.js: icon('name'). In markup: <svg class="ico"><use href="#i-name"/></svg>. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="i-summary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+      <symbol id="i-accounts" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16 15h2"/></symbol>
+      <symbol id="i-investments" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l5-5 4 4 7-7M15 9h5v5"/></symbol>
+      <symbol id="i-swap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h12l-3-3M17 17H5l3 3"/></symbol>
+      <symbol id="i-tax" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h8l4 4v14H7zM15 3v4h4M10 12h6M10 16h6"/></symbol>
+      <symbol id="i-admin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+      <symbol id="i-filter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M7 12h10M10 18h4"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-telegram" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4L3 11.5l6 2.2M21 4l-3.5 16-8.5-6.3M21 4L9 13.7v5.8l3.2-3.4"/></symbol>
+      <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    </svg>
     <div id="app">
-      <!-- Top bar (shown on every screen) -->
-      <header class="topbar">
-        <div class="brand">
-          <span class="brand-dot"></span>
-          <span class="brand-name">FinanceTracker</span>
-          <!-- Hand-kept in sync with package.json; test.js fails the build if it drifts. -->
-          <span class="brand-ver">v2.16.0</span>
-        </div>
-        <div class="topbar-right">
-          <button id="refreshBtn" class="icon-btn" title="Refresh"><span class="ico">&#x21bb;</span></button>
-        </div>
-      </header>
-
-      <!-- Desktop sidebar shows all items; the phone bottom-nav shows the four
-           primary tabs + More (secondary screens live in the More sheet). -->
+      <!-- One nav, three layouts (app.css): tab bar under 768px (four tabs + More),
+           icon rail 768-1199px, sidebar from 1200px. Screen keys stay dashboard and
+           transactions (deep links, the Telegram receipt); only the labels changed. -->
       <nav id="nav" class="nav">
-        <button class="nav-item active" data-screen="dashboard"><span class="nav-ico">&#9737;</span><span class="nav-label">Dashboard</span></button>
-        <button class="nav-item" data-screen="transactions"><span class="nav-ico">&#8645;</span><span class="nav-label">Transactions</span></button>
-        <button class="nav-item" data-screen="accounts"><span class="nav-ico">&#9636;</span><span class="nav-label">Accounts</span></button>
-        <button class="nav-item secondary" data-screen="exchange"><span class="nav-ico">&#8646;</span><span class="nav-label">Swap</span></button>
-        <button class="nav-item secondary" data-screen="tax"><span class="nav-ico">&#167;</span><span class="nav-label">Tax</span></button>
-        <button class="nav-item secondary" data-screen="admin"><span class="nav-ico">&#9881;</span><span class="nav-label">Admin</span></button>
-        <button class="nav-item nav-more" id="navMore"><span class="nav-ico">&#8943;</span><span class="nav-label">More</span></button>
+        <div class="nav-brand">
+          <span class="brand-tile">&#8369;</span>
+          <span class="brand-name">Finance</span>
+          <!-- stamp-version.js writes this; test.js fails the build if it drifts. -->
+          <span class="brand-ver">v3.0.0</span>
+        </div>
+        <div class="nav-group">Overview</div>
+        <button class="nav-item active" data-screen="dashboard" title="Summary"><svg class="ico" aria-hidden="true"><use href="#i-summary"/></svg><span class="nav-label">Summary</span></button>
+        <button class="nav-item" data-screen="transactions" title="Activity"><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg><span class="nav-label">Activity</span></button>
+        <button class="nav-item" data-screen="accounts" title="Accounts"><svg class="ico" aria-hidden="true"><use href="#i-accounts"/></svg><span class="nav-label">Accounts</span></button>
+        <button class="nav-item secondary" data-screen="investments" title="Investments"><svg class="ico" aria-hidden="true"><use href="#i-investments"/></svg><span class="nav-label">Investments</span></button>
+        <div class="nav-group">Tools</div>
+        <button class="nav-item secondary" data-screen="exchange" title="Swap"><svg class="ico" aria-hidden="true"><use href="#i-swap"/></svg><span class="nav-label">Swap</span></button>
+        <button class="nav-item secondary" data-screen="tax" title="Tax"><svg class="ico" aria-hidden="true"><use href="#i-tax"/></svg><span class="nav-label">Tax</span></button>
+        <button class="nav-item secondary" data-screen="admin" title="Admin"><svg class="ico" aria-hidden="true"><use href="#i-admin"/></svg><span class="nav-label">Admin</span></button>
+        <button class="nav-item nav-more" id="navMore" title="More"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg><span class="nav-label">More</span></button>
+        <div class="nav-foot">
+          <button class="sync" type="button" title="Refresh"><span class="sync-dot"></span><span class="sync-label">Synced</span></button>
+          <button class="theme-btn" type="button"></button>
+        </div>
       </nav>
+
+      <!-- The add field: docked above the tab bar on a phone, in the header from 768px.
+           Phase 1 hands the text to the full form as its description. -->
+      <header class="addbar">
+        <label class="add-field">
+          <button class="add-plus" type="button" title="Open the full add form" aria-label="Open the full add form"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg></button>
+          <input id="addInput" type="text" enterkeyhint="go" autocomplete="off" aria-label="Add, search or jump" placeholder="Add &#8220;grab 312 gcash&#8221;">
+          <kbd class="add-kbd">Ctrl K</kbd>
+        </label>
+      </header>
 
       <!-- Screens render here -->
       <main id="main" class="main">
         <div id="bootLoader" class="boot-loader"><div class="spinner"></div><p>Loading your finances…</p></div>
       </main>
-
-      <!-- Floating quick-add (every screen); the modal switches to a transfer in place -->
-      <button id="fab" class="fab" title="Add transaction or transfer">+</button>
 
       <!-- More sheet (mobile secondary nav) -->
       <div id="sheetRoot" class="sheet-root" hidden>
@@ -92,9 +149,15 @@
         <div class="sheet">
           <div class="sheet-grab"></div>
           <div class="sheet-grid">
-            <button class="sheet-item" data-screen="exchange"><span class="nav-ico">&#8646;</span>Swap</button>
-            <button class="sheet-item" data-screen="tax"><span class="nav-ico">&#167;</span>Tax</button>
-            <button class="sheet-item" data-screen="admin"><span class="nav-ico">&#9881;</span>Admin</button>
+            <button class="sheet-item" data-screen="investments"><svg class="ico" aria-hidden="true"><use href="#i-investments"/></svg>Investments</button>
+            <button class="sheet-item" data-screen="exchange"><svg class="ico" aria-hidden="true"><use href="#i-swap"/></svg>Swap</button>
+            <button class="sheet-item" data-screen="tax"><svg class="ico" aria-hidden="true"><use href="#i-tax"/></svg>Tax</button>
+            <button class="sheet-item" data-screen="admin"><svg class="ico" aria-hidden="true"><use href="#i-admin"/></svg>Admin</button>
+          </div>
+          <!-- The phone's copy of the sidebar footer: sync state and theme. -->
+          <div class="sheet-foot">
+            <button class="sync" type="button" title="Refresh"><span class="sync-dot"></span><span class="sync-label">Synced</span></button>
+            <button class="theme-btn" type="button"></button>
           </div>
         </div>
       </div>

@@ -681,6 +681,43 @@ describe('Gmail courier watermark (vm)', () => {
       vm.createContext(app);
       vm.runInContext(fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8'), app, { filename: 'app.js' });
       assert.ok(app.SCREEN_FNS.admin, 'the Admin screen is not registered');
+      // The shell's sync words: a queue always shows, offline wins over "Synced".
+      assert.strictEqual(app.syncText(false, 0, 0, 0), 'Synced');
+      assert.strictEqual(app.syncText(false, 0, 1000, 1000 + 30e3), 'Synced just now');
+      assert.strictEqual(app.syncText(false, 0, 0 + 1, 5 * 60e3 + 1), 'Synced 5 min ago');
+      assert.strictEqual(app.syncText(true, 0, 1, 2), 'Offline');
+      assert.strictEqual(app.syncText(true, 2, 1, 2), 'Offline · 2 waiting to sync');
+      // The tooltip body escapes its inputs and bolds only the result rows.
+      // Swap: floor = (usd − your fee) × mid, ceiling = usd × mid + their fee; the split shares the pot.
+      const sw = app.swapCalc(1000, 60, 4, 150, 50);
+      assert.strictEqual(sw.floor, 59760); assert.strictEqual(sw.ceil, 60150);
+      assert.strictEqual(sw.pot, 390); assert.strictEqual(sw.deal, 59955);
+      assert.strictEqual(sw.youSave + sw.theySave, sw.pot);
+      assert.strictEqual(app.swapCalc(1000, 60, 4, 150, 0).deal, 59760, 'a 0% share is the Wise floor');
+      // Tax quarters: filed only when every salary in it is; Q4 is due on the annual return.
+      const tq = app.taxQuarters([
+        { 'Date Received': '2026-02-01', 'Filed?': '2026-Q1', 'Total Income': 100, '8% Tax': 8 },
+        { 'Date Received': '2026-08-01', 'Filed?': '', 'Total Income': 200, '8% Tax': 16 },
+        { 'Date Received': '2026-07-01', 'Filed?': '2026-Q3', 'Total Income': 50, '8% Tax': 4 },
+        { 'Date Received': '⚠ transaction deleted', 'Filed?': '', 'Total Income': 999, '8% Tax': 80 },
+        { 'Date Received': '2025-12-01', 'Filed?': '', 'Total Income': 999, '8% Tax': 80 }
+      ], '2026', '2026-09-19');
+      assert.strictEqual(tq.map((q) => q.state).join(), 'filed,empty,due,future');
+      assert.strictEqual(tq[2].php, 250); assert.strictEqual(tq[2].tax, 20); assert.ok(tq[2].current);
+      assert.strictEqual(tq[2].due, '2026-11-15'); assert.strictEqual(tq[3].due, '2027-04-15');
+      // A changed figure rolls only when the text around the number is the same.
+      assert.strictEqual(app.rollPlan('₱1,200', '₱1,350').text(1275), '₱1,275');
+      assert.strictEqual(app.rollPlan('5.2 months', '5.4 months').text(5.3), '5.3 months');
+      assert.strictEqual(app.rollPlan('—', '₱0'), null);
+      assert.strictEqual(app.rollPlan('₱5', '₱5'), null);
+      const tipH = app.tipHTML({ title: 'A<b>', rows: [['In', '1'], ['Out', '2', true]], note: 'n' });
+      assert.ok(tipH.includes('A&lt;b&gt;') && !tipH.includes('A<b>'), 'tipHTML must escape');
+      // Accounts rows: interest_rate is a fraction, and a 0% rate says nothing.
+      assert.strictEqual(app.rateText({ interestRate: 0.0325, interestFrequency: 'Monthly' }), '3.25% a year · monthly interest');
+      assert.strictEqual(app.rateText({ interestRate: 0.05, interestFrequency: 'None' }), '5.00% a year');
+      assert.strictEqual(app.rateText({ interestRate: 0 }), '');
+      assert.ok(app.signedPhp(-5).startsWith('−') && !app.signedPhp(5).startsWith('−'), 'a liability reads with a real minus');
+      assert.strictEqual((tipH.match(/class="b"/g) || []).length, 2, 'only the bold row carries class b');
       // A new transaction defaults to the date the list is filtered to, not today.
       app.S.screen = 'transactions'; app.S.tx.filters = { date: '2026-02-14' };
       assert.strictEqual(app.newTxDate(), '2026-02-14');
@@ -709,19 +746,21 @@ describe('Gmail courier watermark (vm)', () => {
       const held = app.netWorthSeries(cf, 500, {}, false);
       assert.strictEqual(held[2].nw, 500);
       assert.strictEqual(held[0].nw, 500, 'invested holds flat, does not roll back through cash flow');
-      // The cash-flow chart's right axis floats over the net-worth range, so its zero
-      // is NOT the baseline the bars sit on. A negative net worth used to draw above
-      // the left axis's ₱0 and read positive; it must now sit below a dashed zero line.
-      const nsNeg = [{ month: '2026-Jul', nw: 100000, real: true },
-                     { month: '2026-Aug', nw: -9106, real: true }];
-      const chart = app.cashflowChart(cf.slice(1), 640, nsNeg);
+      // The history tile keeps zero in its net-worth domain: a NEGATIVE month must
+      // plot below a dashed zero line, never read as positive (it once did, on the
+      // v2 chart's floating right axis).
+      const liqNeg = [{ month: '2026-Jul', nw: 100000, real: true }, { month: '2026-Aug', nw: -9106, real: true }];
+      const stk0 = liqNeg.map(p => ({ month: p.month, nw: 0, real: true }));
+      const hc = app.historyCharts(cf.slice(1), liqNeg, stk0, false, 600);
       const flat = (n, out = []) => { out.push(n); (n.kids || []).forEach(k => flat(k, out)); return out; };
-      const nodes = flat(chart);
-      const zero = nodes.find(n => n.tag === 'line' && n.attrs['stroke-dasharray']);
-      assert.ok(zero, 'no dashed zero line on the right axis');
-      const line = nodes.find(n => n.tag === 'polyline');
-      const lastY = Number(line.attrs.points.split(' ').pop().split(',')[1]);
-      assert.ok(lastY > Number(zero.attrs.y1), 'a negative net worth must plot BELOW the right axis zero');
+      assert.ok(flat(hc.nw).some(n => n.tag === 'line' && n.attrs['stroke-dasharray']), 'no dashed zero line');
+      assert.ok(hc.yTot[1] > hc.y0, 'a negative net worth must plot BELOW zero');
+      assert.deepStrictEqual(hc.cx, [21, 579], 'the end months sit at the edges, inset by one bar pair (18 + 3)');
+      // The FI countdown rounds to whole months BEFORE it splits years off.
+      assert.strictEqual(app.yearsMonths(3683), '10y 1m');
+      assert.strictEqual(app.yearsMonths(353), '1y 0m', '11.6 months rounds up to a year');
+      assert.strictEqual(app.yearsMonths(330), '11m');
+      assert.strictEqual(app.yearsMonths(10), 'Under a month');
 
       // A refund is a NEGATIVE Expense row. The list used to read Amount as a magnitude
       // and take its sign from the category type, which printed "- -₱95" and — far
@@ -732,6 +771,53 @@ describe('Gmail courier watermark (vm)', () => {
       assert.strictEqual(app.groupByDay([refund])[0].net, 95, 'a refund ADDS to the day net');
       assert.strictEqual(app.groupByDay([{ Date: '2026-08-25', Type: 'Expense', Amount: 95,
                                            'Amount (PHP)': 95 }])[0].net, -95);
+      // Activity's token grammar: quotes, comparisons and ISO dates are exact; a word
+      // offers every reading, best first, and Text always comes last.
+      const ctx = { categories: ['Food: Groceries', 'Transport: Fuel'], accounts: ['GCash', 'Wise'],
+                    segments: ['Essentials', 'Growth'], now: new Date(2026, 8, 19) };
+      const P = (q) => JSON.parse(JSON.stringify(app.parseTokens(q, ctx)));   // vm-realm arrays
+      assert.deepStrictEqual(P('"grab car"'), [{ k: 'search', v: 'grab car' }]);
+      assert.deepStrictEqual(P('>500'), [{ k: 'minAmount', v: '500' }]);
+      assert.deepStrictEqual(P('≤ 1.5k'), [{ k: 'maxAmount', v: '1500' }]);
+      assert.deepStrictEqual(P('2026-09-18'), [{ k: 'date', v: '2026-09-18' }]);
+      assert.deepStrictEqual(P('aug')[0], { k: 'month', v: '2026-Aug' });
+      assert.deepStrictEqual(P('sep 17')[0], { k: 'date', v: '2026-09-17' });
+      assert.deepStrictEqual(P('17 september')[0], { k: 'date', v: '2026-09-17' });
+      assert.deepStrictEqual(P('9/17/2025')[0], { k: 'date', v: '2025-09-17' });
+      assert.deepStrictEqual(P('oct 3')[0], { k: 'date', v: '2025-10-03' }, 'a date without a year is never in the future');
+      assert.ok(!P('feb 30').some((t) => t.k === 'date'), 'no such day');
+      assert.deepStrictEqual(P('sep 17').pop(), { k: 'search', v: 'sep 17' });
+      assert.deepStrictEqual(P('oct')[0], { k: 'month', v: '2025-Oct' }, 'a bare month is never in the future');
+      assert.deepStrictEqual(P('march 2024')[0], { k: 'month', v: '2024-Mar' });
+      assert.deepStrictEqual(P('this month')[0], { k: 'month', v: '2026-Sep' });
+      assert.ok(P('transfer').some((t) => t.k === 'type' && t.v === 'Transfer'));
+      assert.ok(P('gmail').some((t) => t.k === 'source' && t.v === 'gm'));
+      assert.ok(P('gro').some((t) => t.k === 'category' && t.v === 'Food: Groceries'));
+      assert.ok(P('gro').some((t) => t.k === 'segment' && t.v === 'Growth'));
+      assert.ok(P('300').some((t) => t.k === 'minAmount' && t.v === '300'), 'a bare number is "at least"');
+      assert.deepStrictEqual(P('gcash').pop(), { k: 'search', v: 'gcash' });
+      assert.deepStrictEqual(P('  '), []);
+      // parseAdd: the add field's instant, local pass.
+      const qctx = { accounts: ['GCash', 'GrabPay', 'Wise USD', 'Maya'], descCategory: { vitamins: 'Health: Medical' } };
+      const A = (t) => JSON.parse(JSON.stringify(app.parseAdd(t, qctx)));
+      assert.deepStrictEqual(A('vitamins 620 gcash'),
+        { Amount: 620, Account: 'GCash', ToAccount: '', Category: 'Health: Medical', Description: 'Vitamins' });
+      assert.strictEqual(A('grab 312 gcash').Account, 'GCash', 'the last account named wins');
+      assert.strictEqual(A('grab 312 gcash').Description, 'Grab', 'an earlier prefix match stays text');
+      assert.strictEqual(A('lunch 1.5k').Amount, 1500);
+      assert.strictEqual(A('refund -₱1,200.50 maya').Amount, -1200.5);
+      assert.deepStrictEqual([A('gcash to maya 500').Account, A('gcash to maya 500').ToAccount, A('gcash to maya 500').Description], ['GCash', 'Maya', '']);
+      assert.strictEqual(A('500 wise usd').Account, 'Wise USD', 'a two-word name');
+      assert.strictEqual(A('go to the gym 300').ToAccount, '', '"to" without accounts on both sides is text');
+      assert.deepStrictEqual(A('coffee'), { Amount: null, Account: '', ToAccount: '', Category: '', Description: 'Coffee' });
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(app.activeTokens({ month: '', type: 'Expense', minAmount: '300' }))),
+                             [{ k: 'type', v: 'Expense' }, { k: 'minAmount', v: '300' }], 'month "" means all months: no token');
+      assert.strictEqual(app.tokenText('month', '2026-Sep'), 'September 2026');
+      assert.strictEqual(app.tokenText('type', 'Transfer'), 'Moved');
+      // A smart list without a month is every month, never the Summary's month.
+      assert.strictEqual(app.filterSig(app.listFilters({ filters: { source: 'gm' } })), app.filterSig({ month: '', source: 'gm' }));
+      assert.strictEqual(app.fmtNet(-3758.4), '−₱3,758');
+
       app.S.tx = { pendingEdits: { r1: { ID: 'r1', Amount: -50 } } };
       assert.strictEqual(app.withPendingEdit(refund).Amount, -50, 'an in-flight edit keeps the sign');
       assert.strictEqual(app.withPendingEdit(refund)['Amount (PHP)'], -50);

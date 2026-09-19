@@ -13,10 +13,10 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 ## What it does
 
 - **Telegram bot.** Send "coffee 120 maya". The bot writes the row and answers with a receipt that has an **Undo** button. One message can hold more than one transaction. The bot also answers `/balance` and questions such as "how much on food this month".
-- **Progressive web app.** Six screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
+- **Progressive web app.** Seven screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
 - **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
-- **Net worth history.** Each day the app records the total net worth for the month. The Dashboard shows the history as a line on the cash-flow chart.
-- **Retirement countdown.** The Dashboard shows the time to financial independence as years and months, with a progress bar. The target is 25 times the yearly expenses. The app calculates the date at each month close, thus the count goes down each day.
+- **Net worth history.** Each day the app records the total net worth for the month. The Summary screen shows the history above the cash-flow chart, on the same months.
+- **Retirement countdown.** The Summary screen shows the time to financial independence as years and months. The target is 25 times the yearly expenses. The app calculates the date at each month close, thus the count goes down each day.
 - **iPhone widgets.** Four home-screen widgets show the latest transactions, three account balances, the net worth and the segment targets. See [iPhone widgets](#iphone-widgets).
 - **Two more parts.** A nightly job reads the share prices from Interactive Brokers. A Tax screen collects the data for the Philippine BIR 8 percent regime.
 
@@ -74,7 +74,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 
 **The Gmail ingest uses the bot.** The courier has no parser for each bank. The Worker sends the email text to the function that reads a Telegram message, then to the same write function. Thus an email gives the same receipt and the same **Undo** button as a message that you typed. There is one parser, not two.
 
-**The application carries its own typeface.** The first version asked Google Fonts for the font Inter. A measurement gave 146 kilobytes on a first installation, which was 72 percent of the total. The style sheet had a cache time of one day, so a phone requested it again each day, and the font also failed when the phone had no connection. The two font files are now in the repository, and the service worker holds them.
+**The application uses the system typeface.** The first version asked Google Fonts for the font Inter. A measurement gave 146 kilobytes on a first installation, which was 72 percent of the total. The style sheet had a cache time of one day, so a phone requested it again each day, and the font also failed when the phone had no connection. The font files then moved into the repository. Version 3 removes them. The system font of each device shows the text, so the application downloads no font and the text shows with no connection.
 
 **The cache asks the correct question.** One counter in the database recorded the version of the data. Each write increased it, and the app downloaded each screen again. An automatic write at 03:00 thus made the next start of the app expensive, because the counter cannot say which screen changed. Each read now carries an ETag, which is a hash of the answer. The app sends the tag back, and the server answers 304 with no content when the answer is the same. The tag also knows the month, the year and the page, so an old month does not download again, and no write function must remember to invalidate a cache.
 
@@ -102,7 +102,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 - **The share prices are one day old.** A nightly job writes them. No page reads a price service.
 - **The language model can read an email incorrectly.** Each receipt has an **Undo** button and a button that shows the source email.
 - **A screen that stays open does not refresh itself.** The app revalidates a screen when you go to it.
-- **The Dashboard downloads again after each write.** Each month of the Dashboard shows the live net worth, so each write changes the answer. The other screens answer 304.
+- **The Summary screen downloads again after each write.** Each month of the Summary screen shows the live net worth, so each write changes the answer. The other screens answer 304.
 - **The system does not know a corporate action.** A split of shares changes the price at IBKR and does not change the ledger. The nightly job compares the two counts and sends a message. A person corrects the earlier rows.
 - **A widget tap opens Safari.** iOS has no link that opens an installed web app, so the widget opens the app address in Safari.
 - **The Tax screen shows one year.** Use the year list at the top of the screen to see an earlier year.
@@ -169,9 +169,10 @@ The `meta` table holds the settings that were script properties before. Change t
 | --- | --- |
 | `monthly_income_php` | The income that the percentage budget targets use. |
 | `usd_php_fallback` | The exchange rate to use if the live rate is not available. |
-| `fire_real_return` | The return each year, as a percent, after inflation. The Dashboard countdown uses it. |
+| `fire_real_return` | The return each year, as a percent, after inflation. The Summary countdown uses it. |
 | `owner_email` | It identifies the owner. |
-| `widget_accounts` | The 3 accounts that the balance widget shows, as a JSON list of names. Set it on the screen **Accounts**, card **Home-screen widget**. |
+| `widget_accounts` | The 3 accounts that the balance widget shows, as a JSON list of names. Set it on the screen **Admin**, card **iPhone balance widget**. |
+| `smart_lists` | The saved filter sets of the screen **Activity**, as a JSON list of `{name, filters}` (20 maximum). Save and remove them on the screen **Activity**. |
 | `tg_last_ids` | The code writes this value. Do not change it manually. |
 | `app_url` | The address of the app. The code writes this value. The rescue cron reads it to build the Edit button. Do not change it manually. |
 | `data_version`, `ledger_first_year` | No code reads these rows. A later version removes them. Do not change them. |
@@ -204,10 +205,10 @@ The file `widgets/FinanceTracker.js` makes four home-screen widgets with the fre
 
 | Widget | Size | Parameter | Content | A tap opens |
 | --- | --- | --- | --- | --- |
-| Recent | Small | `recent` | The 3 latest transactions. | Transactions |
-| Balances | Small | `balances` | The balances of 3 accounts. Select the accounts on the screen **Accounts**, card **Home-screen widget**. | Accounts |
-| Net worth | Small | `networth` | The net worth, the change in 6 months and a line of the 6 months. | Dashboard |
-| Segment targets | Medium | `segments` | Essentials + Rewards, Essentials and Rewards. Each has a bar and a mark for the date in the month. | Dashboard |
+| Recent | Small | `recent` | The 3 latest transactions. | Activity |
+| Balances | Small | `balances` | The balances of 3 accounts. Select the accounts on the screen **Admin**, card **iPhone balance widget**. | Accounts |
+| Net worth | Small | `networth` | The net worth, the change in 6 months and a line of the 6 months. | Summary |
+| Segment targets | Medium | `segments` | Essentials + Rewards, Essentials and Rewards. Each has a bar and a mark for the date in the month. | Summary |
 
 ### Install the script
 
@@ -304,7 +305,7 @@ The code and the database do not go back together. Undo the code first.
 
 1. **D1 Time Travel.** It restores the database to a time in the last 7 days: `npx wrangler d1 time-travel restore financetracker --timestamp=<ISO time>`.
 2. **The backup spreadsheet.** It holds one tab for each table, from the last night.
-3. **The Admin screen.** Each table has a CSV button.
+3. **The Admin screen.** Each table has an **Export CSV** button.
 
 ## Fault isolation
 
