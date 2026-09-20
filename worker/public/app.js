@@ -2307,11 +2307,13 @@ function invColors(pos){
   return m;
 }
 function gainSpec(inv){
+  var ex=(inv.pulse&&inv.pulse.excluded)||[];
   return {title:'Gain uses average cost',
-    text:'Value today minus what the shares cost, at the peso rate on each buy day.',
+    text:'Value today minus what the growth shares cost, at the peso rate on each buy day.',
     rows:[['Value today',money(inv.totalValuePhp,true)],['− Cost',money(inv.totalCostPhp,true)],
           ['= Gain',signedMoney(inv.totalGainPhp),true]],
-    note:'A sale takes cost out in proportion, so the average cost never moves on a sale. Gain includes currency moves.'};
+    note:'A sale takes cost out in proportion, so the average cost never moves on a sale. Gain includes currency moves.'+
+      (ex.length?' '+esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.':'')};
 }
 function qLabel(k){ var m=/^(\d{4})-(Q\d)$/.exec(k); return m?(m[2]+' '+m[1]):k; }
 
@@ -2330,7 +2332,10 @@ function renderInvestments(){
     t.appendChild(el('div','fig',money(inv.totalValuePhp,true)));
     if(inv.totalCostPhp) t.appendChild(el('div','inv-gain '+(gn>=0?'pos':'neg'),(gn>=0?'▲ ':'▼ ')+money(Math.abs(gn),true)+
       ' · '+pct(Math.abs(100*gn/inv.totalCostPhp))+(gn>=0?' over':' under')+' cost'));
-    var usd=usdOf(inv.totalValuePhp); if(usd) t.appendChild(el('div','tile-foot',usd));
+    // EF parks are out of the figure above (see gainSpec), so the tile says so.
+    var usd=usdOf(inv.totalValuePhp), ex=(inv.pulse&&inv.pulse.excluded)||[];
+    var foot=[ex.length?'Growth holdings only':'',usd].filter(Boolean).join(' · ');
+    if(foot) t.appendChild(el('div','tile-foot',foot));
     g.appendChild(t);
     if(inv.pulse) g.appendChild(pulseTile(inv.pulse,pos,col));
     g.appendChild(allocTile(inv,pos,col));
