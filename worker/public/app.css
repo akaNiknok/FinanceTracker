@@ -424,6 +424,10 @@ button.h-row:active{background:var(--card-2)}
 .t-hold>button.h-row:last-child{border-radius:0 0 20px 20px}
 @media(hover:hover){button.h-row:hover{background:var(--card-2)}}
 .h-head{min-height:44px;font-size:12px;font-weight:600;color:var(--dim)}
+/* Group header + subtotal: overrides the row grid, so it reads the same on a phone. */
+.h-grp{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:38px;
+  font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.02em}
+.h-grp b{color:var(--ink);font-variant-numeric:tabular-nums}
 .h-gh{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px}
 .h-gh .tip-btn{margin:-6px -6px -6px 0}
 .h-name{display:flex;align-items:center;gap:12px;min-width:0;text-align:left}
@@ -441,8 +445,13 @@ button.h-row:active{background:var(--card-2)}
   .h-n .h-m{display:block}
   .t-hold>button.h-row:first-of-type{border-top:0}
 }
-@media(min-width:768px){ .t-pulse,.t-hold{grid-column:span 2} }
-@media(min-width:1200px){ .t-hold{grid-column:span 4} }
+/* Invested and Runway are one row of two, so Allocation spans what is left: the grid
+ * has no hole at any width. The wide allocation lists its rows in two columns. */
+@media(min-width:768px){
+  .t-pulse,.t-hold,.t-alloc{grid-column:span 2}
+  .alloc-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}
+}
+@media(min-width:1200px){ .t-hold,.t-alloc{grid-column:span 4} }
 
 /* ── Swap (v3 Phase 6): inputs as a grouped list, then the result tiles. Side by
  * side from 1200px. ── */
