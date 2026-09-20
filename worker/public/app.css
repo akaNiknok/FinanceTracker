@@ -585,8 +585,13 @@ table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
 .combo-opt.sel{color:var(--accent)}
 .combo-empty{padding:8px 10px;color:var(--dim);font-size:13px}
 
-/* small colored dot used to identify accounts across screens */
-.acct-dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:5px;flex:none}
+/* small colored dot used to identify accounts across screens.
+ * `middle` centres it on the x-height, which reads LOW next to capitals and
+ * ascenders; `0.5cap - 4px` raises its baseline so the 8px dot centres on the
+ * cap height instead. `middle` stays as the fallback for no-`cap` browsers.
+ * Flex/grid parents ignore vertical-align — align-items:center already wins there. */
+.acct-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;flex:none;
+  vertical-align:middle;vertical-align:calc(0.5cap - 4px)}
 
 /* ── Color picker (account color-coding) ─────────────────────────────────── */
 .color-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -720,7 +725,8 @@ table.tbl td.editing{padding:0}
 .litem .ic.s-accent{background:var(--accent-tint);color:var(--accent)}
 .tok-link{cursor:pointer;border-radius:4px}
 .tok-link:hover{color:var(--accent)}
-.cat-dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;vertical-align:middle}
+.cat-dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;
+  vertical-align:middle;vertical-align:calc(0.5cap - 4px)}
 .swipe{position:relative;overflow:hidden}   /* the row keeps its own separator, so Select mode (no wrapper) is the same height */
 .swipe-acts{position:absolute;inset:0;display:flex;justify-content:flex-end;visibility:hidden}
 .swipe.sw-on .swipe-acts{visibility:visible}   /* hidden at rest: the row's anti-aliased edge let red show through */
