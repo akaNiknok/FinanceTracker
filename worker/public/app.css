@@ -383,11 +383,12 @@ button.a-row:active{background:var(--card-2)}
   .a-tot .lg-long{display:inline} .a-tot .lg-short{display:none}
   .a-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
   .a-col{gap:16px}
-  .a-grp{background:var(--card);border-radius:20px;padding:14px 20px 6px;gap:0}
+  .a-grp{background:var(--card);border-radius:20px;padding:14px 20px 6px;gap:0;overflow:hidden}
   .a-gh{padding:0 0 6px}
   .a-gh>span:last-child{color:var(--text)}
   .a-list{background:none;border-radius:0;overflow:visible}
-  .a-row,.a-row:first-child{padding:8px 0;min-height:50px;border-top:1px solid var(--sep)}
+  /* bleed out of .a-grp's padding so the hover highlight and the separator reach the card edges, like every other table */
+  .a-row,.a-row:first-child{padding:8px 20px;margin:0 -20px;width:calc(100% + 40px);min-height:50px;border-top:1px solid var(--sep)}
   .r-row{min-height:40px}
   .a-t,.a-v{font-size:15px}
   .a-s{font-size:12px}
