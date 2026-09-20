@@ -2308,7 +2308,7 @@ function invColors(pos){
 }
 function gainSpec(inv){
   return {title:'Gain uses average cost',
-    text:'Value today minus what the shares cost, at the peso rate on each buy day.',
+    text:'Value today minus what the growth shares cost, at the peso rate on each buy day.',
     rows:[['Value today',money(inv.totalValuePhp,true)],['− Cost',money(inv.totalCostPhp,true)],
           ['= Gain',signedMoney(inv.totalGainPhp),true]],
     note:'A sale takes cost out in proportion, so the average cost never moves on a sale. Gain includes currency moves.'};
@@ -2330,8 +2330,15 @@ function renderInvestments(){
     t.appendChild(el('div','fig',money(inv.totalValuePhp,true)));
     if(inv.totalCostPhp) t.appendChild(el('div','inv-gain '+(gn>=0?'pos':'neg'),(gn>=0?'▲ ':'▼ ')+money(Math.abs(gn),true)+
       ' · '+pct(Math.abs(100*gn/inv.totalCostPhp))+(gn>=0?' over':' under')+' cost'));
-    var usd=usdOf(inv.totalValuePhp); if(usd) t.appendChild(el('div','tile-foot',usd));
+    // EF parks are out of the figure above (see gainSpec), so the tile says so.
+    var usd=usdOf(inv.totalValuePhp), ex=(inv.pulse&&inv.pulse.excluded)||[];
+    var foot=[ex.length?'Growth holdings only':'',usd].filter(Boolean).join(' · ');
+    if(foot) t.appendChild(el('div','tile-foot',foot));
     g.appendChild(t);
+    // Stability's counterpart to Invested, and the same tile Summary shows. The EF is
+    // commingled with spending cash (there is no EF account), so the runway measures it
+    // and a park's share price never can. Same payload, so it costs no request.
+    var rw=el('section','tile t-rw'); fillRunway(rw,inv.runway); g.appendChild(rw);
     if(inv.pulse) g.appendChild(pulseTile(inv.pulse,pos,col));
     g.appendChild(allocTile(inv,pos,col));
     g.appendChild(holdingsTile(inv,pos,col));
@@ -2382,21 +2389,24 @@ function pulseTile(pl,pos,col){
       return esc(b.symbol)+' '+moneyCur(b.amount,b.currency)+' ('+num(b.quantity)+' shares)'; }).join(' · ')));
   });
   t.appendChild(list);
-  var ex=pl.excluded||[];
-  t.appendChild(el('div','tile-foot','Growth buys only.'+(ex.length?' '+esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.':'')));
+  t.appendChild(el('div','tile-foot','Growth buys only.'));
   return t;
 }
 
+/* Growth holdings only, like the Invested tile: the mix is read against the strategy
+ * targets below, and an EF park is not part of that mix. The server leaves weightPct
+ * null on a park, so the bar sums to 100. */
 function allocTile(inv,pos,col){
   var t=sumTile('t-alloc','Allocation');
+  var ex=(inv.pulse&&inv.pulse.excluded)||[], g=pos.filter(function(p){ return ex.indexOf(p.name)<0; });
   var bar=el('div','alloc'), rows=el('div','alloc-rows');
-  pos.forEach(function(p){
+  g.forEach(function(p){
     var i=el('i'); i.style.flex=Math.max(p.weightPct||0,.5); i.style.background=col[p.name]; i.title=p.name+' · '+pct(p.weightPct); bar.appendChild(i);
-    var r=el('div','alloc-row','<i></i><span>'+esc(p.name)+(/^EF$/i.test(p.subtype||'')?' <span class="dim">· emergency fund</span>':'')+
-      '</span><b>'+pct(p.weightPct)+'</b>');
+    var r=el('div','alloc-row','<i></i><span>'+esc(p.name)+'</span><b>'+pct(p.weightPct)+'</b>');
     r.firstChild.style.background=col[p.name]; rows.appendChild(r);
   });
-  t.appendChild(bar); t.appendChild(rows);
+  if(g.length){ t.appendChild(bar); t.appendChild(rows); }
+  else t.appendChild(el('div','tile-foot','No growth holdings yet.'));
   // Strategy targets: reference figures from getInvestments, not computed.
   var core=inv.coreTargets||{}, seg=inv.segmentTargets||{};
   t.appendChild(el('div','tile-foot','Target: '+Object.keys(core).reverse().map(function(k){ return esc(core[k])+' '+esc(k)+'%'; }).join(' · ')+
@@ -2413,7 +2423,7 @@ function holdingsTile(inv,pos,col){
   t.appendChild(hd);
   var byName={};
   ((S.cache.accounts&&S.cache.accounts.data.accounts)||[]).forEach(function(a){ byName[a.name]=a; });
-  pos.forEach(function(p){
+  function rows(list){ list.forEach(function(p){
     var acc=byName[p.name], r=el(acc?'button':'div','h-row');
     if(acc){ r.type='button'; r.onclick=function(){ openAccountModal(acc); }; }
     var ac=p.avgCostNative!=null?moneyCur(p.avgCostNative,p.costCurrency):'—';
@@ -2426,7 +2436,21 @@ function holdingsTile(inv,pos,col){
       '<span class="h-val">'+money(p.valuePhp,true)+'</span>'+
       '<span class="h-gain '+(p.gainPhp==null?'':p.gainPhp>=0?'pos':'neg')+'">'+gain+'</span>';
     t.appendChild(r);
-  });
+  }); }
+  // The table is the BROAD set — it lists a park too — so it is the one place the two
+  // kinds meet. A subtotal per group is what makes it add up: the Growth line is the
+  // Invested tile's figure, and the park's line is the holding the runway counts.
+  var ex=(inv.pulse&&inv.pulse.excluded)||[];
+  function group(label,list){
+    if(!list.length) return;
+    t.appendChild(el('div','h-row h-grp','<span>'+esc(label)+'</span><b>'+
+      money(list.reduce(function(s2,p){ return s2+(p.valuePhp||0); },0),true)+'</b>'));
+    rows(list);
+  }
+  if(ex.length){
+    group('Growth',pos.filter(function(p){ return ex.indexOf(p.name)<0; }));
+    group('Emergency fund',pos.filter(function(p){ return ex.indexOf(p.name)>=0; }));
+  } else rows(pos);
   return t;
 }
 

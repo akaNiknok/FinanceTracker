@@ -383,11 +383,12 @@ button.a-row:active{background:var(--card-2)}
   .a-tot .lg-long{display:inline} .a-tot .lg-short{display:none}
   .a-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
   .a-col{gap:16px}
-  .a-grp{background:var(--card);border-radius:20px;padding:14px 20px 6px;gap:0}
+  .a-grp{background:var(--card);border-radius:20px;padding:14px 20px 6px;gap:0;overflow:hidden}
   .a-gh{padding:0 0 6px}
   .a-gh>span:last-child{color:var(--text)}
   .a-list{background:none;border-radius:0;overflow:visible}
-  .a-row,.a-row:first-child{padding:8px 0;min-height:50px;border-top:1px solid var(--sep)}
+  /* bleed out of .a-grp's padding so the hover highlight and the separator reach the card edges, like every other table */
+  .a-row,.a-row:first-child{padding:8px 20px;margin:0 -20px;width:calc(100% + 40px);min-height:50px;border-top:1px solid var(--sep)}
   .r-row{min-height:40px}
   .a-t,.a-v{font-size:15px}
   .a-s{font-size:12px}
@@ -424,6 +425,10 @@ button.h-row:active{background:var(--card-2)}
 .t-hold>button.h-row:last-child{border-radius:0 0 20px 20px}
 @media(hover:hover){button.h-row:hover{background:var(--card-2)}}
 .h-head{min-height:44px;font-size:12px;font-weight:600;color:var(--dim)}
+/* Group header + subtotal: overrides the row grid, so it reads the same on a phone. */
+.h-grp{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:38px;
+  font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.02em}
+.h-grp b{color:var(--ink);font-variant-numeric:tabular-nums}
 .h-gh{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px}
 .h-gh .tip-btn{margin:-6px -6px -6px 0}
 .h-name{display:flex;align-items:center;gap:12px;min-width:0;text-align:left}
@@ -441,8 +446,13 @@ button.h-row:active{background:var(--card-2)}
   .h-n .h-m{display:block}
   .t-hold>button.h-row:first-of-type{border-top:0}
 }
-@media(min-width:768px){ .t-pulse,.t-hold{grid-column:span 2} }
-@media(min-width:1200px){ .t-hold{grid-column:span 4} }
+/* Invested and Runway are one row of two, so Allocation spans what is left: the grid
+ * has no hole at any width. The wide allocation lists its rows in two columns. */
+@media(min-width:768px){
+  .t-pulse,.t-hold,.t-alloc{grid-column:span 2}
+  .alloc-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}
+}
+@media(min-width:1200px){ .t-hold,.t-alloc{grid-column:span 4} }
 
 /* ── Swap (v3 Phase 6): inputs as a grouped list, then the result tiles. Side by
  * side from 1200px. ── */
@@ -585,8 +595,13 @@ table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
 .combo-opt.sel{color:var(--accent)}
 .combo-empty{padding:8px 10px;color:var(--dim);font-size:13px}
 
-/* small colored dot used to identify accounts across screens */
-.acct-dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:5px;flex:none}
+/* small colored dot used to identify accounts across screens.
+ * `middle` centres it on the x-height, which reads LOW next to capitals and
+ * ascenders; `0.5cap - 4px` raises its baseline so the 8px dot centres on the
+ * cap height instead. `middle` stays as the fallback for no-`cap` browsers.
+ * Flex/grid parents ignore vertical-align — align-items:center already wins there. */
+.acct-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;flex:none;
+  vertical-align:middle;vertical-align:calc(0.5cap - 4px)}
 
 /* ── Color picker (account color-coding) ─────────────────────────────────── */
 .color-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -720,7 +735,8 @@ table.tbl td.editing{padding:0}
 .litem .ic.s-accent{background:var(--accent-tint);color:var(--accent)}
 .tok-link{cursor:pointer;border-radius:4px}
 .tok-link:hover{color:var(--accent)}
-.cat-dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;vertical-align:middle}
+.cat-dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;
+  vertical-align:middle;vertical-align:calc(0.5cap - 4px)}
 .swipe{position:relative;overflow:hidden}   /* the row keeps its own separator, so Select mode (no wrapper) is the same height */
 .swipe-acts{position:absolute;inset:0;display:flex;justify-content:flex-end;visibility:hidden}
 .swipe.sw-on .swipe-acts{visibility:visible}   /* hidden at rest: the row's anti-aliased edge let red show through */
