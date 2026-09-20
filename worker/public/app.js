@@ -2392,19 +2392,24 @@ function pulseTile(pl,pos,col){
   return t;
 }
 
+/* Growth holdings only, like the Invested tile: the mix is read against the strategy
+ * targets below, and an EF park is not part of that mix. The server leaves weightPct
+ * null on a park, so the bar sums to 100. */
 function allocTile(inv,pos,col){
   var t=sumTile('t-alloc','Allocation');
+  var ex=(inv.pulse&&inv.pulse.excluded)||[], g=pos.filter(function(p){ return ex.indexOf(p.name)<0; });
   var bar=el('div','alloc'), rows=el('div','alloc-rows');
-  pos.forEach(function(p){
+  g.forEach(function(p){
     var i=el('i'); i.style.flex=Math.max(p.weightPct||0,.5); i.style.background=col[p.name]; i.title=p.name+' · '+pct(p.weightPct); bar.appendChild(i);
-    var r=el('div','alloc-row','<i></i><span>'+esc(p.name)+(/^EF$/i.test(p.subtype||'')?' <span class="dim">· emergency fund</span>':'')+
-      '</span><b>'+pct(p.weightPct)+'</b>');
+    var r=el('div','alloc-row','<i></i><span>'+esc(p.name)+'</span><b>'+pct(p.weightPct)+'</b>');
     r.firstChild.style.background=col[p.name]; rows.appendChild(r);
   });
-  t.appendChild(bar); t.appendChild(rows);
+  if(g.length){ t.appendChild(bar); t.appendChild(rows); }
+  else t.appendChild(el('div','tile-foot','No growth holdings yet.'));
   // Strategy targets: reference figures from getInvestments, not computed.
   var core=inv.coreTargets||{}, seg=inv.segmentTargets||{};
-  t.appendChild(el('div','tile-foot','Target: '+Object.keys(core).reverse().map(function(k){ return esc(core[k])+' '+esc(k)+'%'; }).join(' · ')+
+  t.appendChild(el('div','tile-foot',(ex.length?esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.<br>':'')+
+    'Target: '+Object.keys(core).reverse().map(function(k){ return esc(core[k])+' '+esc(k)+'%'; }).join(' · ')+
     '<br>Segments: '+Object.keys(seg).map(function(k){ return esc(k)+' '+esc(seg[k])+'%'; }).join(' · ')));
   return t;
 }
