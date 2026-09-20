@@ -1391,6 +1391,15 @@ function d1(db) {
       assert.strictEqual(p.costPhp, 2500);
       assert.strictEqual(p.valuePhp, 55 * 50);
 
+      // ...but OUT of the Invested tile's totals, which are the growth set: the runway
+      // already counts this peso, and counting it twice overstated both figures.
+      assert.strictEqual(inv.totalValuePhp, before.totalValuePhp, 'EF leaked into Invested');
+      assert.strictEqual(inv.totalCostPhp, before.totalCostPhp, 'EF cost leaked into Invested');
+      assert.strictEqual(inv.totalGainPhp, dbm.q2(inv.totalValuePhp - inv.totalCostPhp));
+      // The allocation bar still spans every holding, EF included, so it sums to 100.
+      assert.ok(p.weightPct > 0 && Math.abs(inv.positions
+        .reduce((s2, x) => s2 + x.weightPct, 0) - 100) < 0.2);
+
       // And the runway is where it DOES count — the same peso, measured once. $50 left
       // Wise (also cash-like) and came back as a 2750-peso holding.
       assert.strictEqual(inv.runway.efPhp, dbm.q2(before.runway.efPhp + 2750 - 2500));

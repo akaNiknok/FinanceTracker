@@ -873,7 +873,6 @@ export async function getInvestments(args, env) {
     p.gainPct = (p.valuePhp == null || !b.poolPhp) ? null
       : Math.round((p.valuePhp / b.poolPhp - 1) * 1000) / 10;
   });
-  const totalCostPhp = positions.reduce((s, p) => s + (p.costPhp || 0), 0);
 
   // Quarterly pulse: GROWTH holdings only. A leg into or out of a share-priced account
   // filed under a cash-like subtype (IB01, subtype EF) is EF parking, not investing, and
@@ -882,6 +881,15 @@ export async function getInvestments(args, env) {
   // name set filters the rows the pulse may see; the cost basis above still walks all of
   // them. Newest quarter first; the SPA flags the current quarter when it has no buys.
   const pulseSymbols = new Set(r.accounts.filter(isPulseAcct).map((a) => a.name));
+
+  // The Invested tile is GROWTH only, the same split the pulse makes: an EF park (IB01,
+  // subtype EF) is priced as a share but is runway cash, and the runway card already
+  // counts it — totalling it here reported the same peso as invested AND as reserve.
+  // The allocation bar and the holdings table still carry it, and weightPct still spans
+  // every position, so the two tiles answer different questions on purpose.
+  const growth = positions.filter((p) => pulseSymbols.has(p.name));
+  const growthValuePhp = growth.reduce((s, p) => s + (p.valuePhp || 0), 0);
+  const totalCostPhp = growth.reduce((s, p) => s + (p.costPhp || 0), 0);
   const quarters = [];
   legsQ.results.forEach((x) => {
     if (!pulseSymbols.has(x.symbol)) return;
@@ -929,8 +937,8 @@ export async function getInvestments(args, env) {
 
   return {
     status: 'success',
-    totalValuePhp: q2(total), totalCostPhp: q2(totalCostPhp),
-    totalGainPhp: q2(total - totalCostPhp), positions,
+    totalValuePhp: q2(growthValuePhp), totalCostPhp: q2(totalCostPhp),
+    totalGainPhp: q2(growthValuePhp - totalCostPhp), positions,
     // excluded = the holdings the pulse skips (an EF park like IB01), named in its footnote.
     pulse: { currentQuarter: quarterOf(manilaToday()), quarters,
              excluded: positions.filter((p) => !pulseSymbols.has(p.name)).map((p) => p.name) },
