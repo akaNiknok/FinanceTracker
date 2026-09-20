@@ -1396,9 +1396,13 @@ function d1(db) {
       assert.strictEqual(inv.totalValuePhp, before.totalValuePhp, 'EF leaked into Invested');
       assert.strictEqual(inv.totalCostPhp, before.totalCostPhp, 'EF cost leaked into Invested');
       assert.strictEqual(inv.totalGainPhp, dbm.q2(inv.totalValuePhp - inv.totalCostPhp));
-      // The allocation bar still spans every holding, EF included, so it sums to 100.
-      assert.ok(p.weightPct > 0 && Math.abs(inv.positions
-        .reduce((s2, x) => s2 + x.weightPct, 0) - 100) < 0.2);
+      // Same for the allocation bar: the mix is read against the strategy targets, so a
+      // park has no share of it at all (null, not 0) and the growth weights sum to 100.
+      assert.strictEqual(p.weightPct, null, 'an EF park took a slice of the allocation');
+      const grow = inv.positions.filter((x) => !inv.pulse.excluded.includes(x.name));
+      assert.ok(Math.abs(grow.reduce((s2, x) => s2 + x.weightPct, 0) - 100) < 0.2);
+      grow.forEach((x) => assert.strictEqual(x.weightPct,
+        dbm.q2(Math.round(x.valuePhp / inv.totalValuePhp * 1000) / 10), 'weight is off the growth total'));
 
       // And the runway is where it DOES count — the same peso, measured once. $50 left
       // Wise (also cash-like) and came back as a 2750-peso holding.

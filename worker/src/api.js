@@ -798,8 +798,6 @@ export async function getInvestments(args, env) {
     ...(() => { const p = prices[symOf[a.name]];
       return { price: p ? p.price : null, priceCurrency: p ? p.currency : null, pricedAt: p ? p.priced_at : null }; })()
   }));
-  const total = positions.reduce((s, p) => s + (p.valuePhp || 0), 0);
-  positions.forEach((p) => { p.weightPct = total ? Math.round((p.valuePhp || 0) / total * 1000) / 10 : 0; });
 
   // The trade legs ARE transfers into and out of share-priced accounts, so the history
   // needs no category discipline — it is derived from account subtypes and works
@@ -890,6 +888,13 @@ export async function getInvestments(args, env) {
   const growth = positions.filter((p) => pulseSymbols.has(p.name));
   const growthValuePhp = growth.reduce((s, p) => s + (p.valuePhp || 0), 0);
   const totalCostPhp = growth.reduce((s, p) => s + (p.costPhp || 0), 0);
+  // weightPct is the ALLOCATION share, so it spans the same growth set and sums to 100 —
+  // it is read against the 60/25/15 strategy targets, and an EF park is not part of that
+  // mix. A park gets null, not 0: it has no share of a total it is not in.
+  positions.forEach((p) => {
+    p.weightPct = !pulseSymbols.has(p.name) ? null
+      : growthValuePhp ? Math.round((p.valuePhp || 0) / growthValuePhp * 1000) / 10 : 0;
+  });
   const quarters = [];
   legsQ.results.forEach((x) => {
     if (!pulseSymbols.has(x.symbol)) return;
