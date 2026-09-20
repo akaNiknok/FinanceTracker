@@ -2307,13 +2307,11 @@ function invColors(pos){
   return m;
 }
 function gainSpec(inv){
-  var ex=(inv.pulse&&inv.pulse.excluded)||[];
   return {title:'Gain uses average cost',
     text:'Value today minus what the growth shares cost, at the peso rate on each buy day.',
     rows:[['Value today',money(inv.totalValuePhp,true)],['− Cost',money(inv.totalCostPhp,true)],
           ['= Gain',signedMoney(inv.totalGainPhp),true]],
-    note:'A sale takes cost out in proportion, so the average cost never moves on a sale. Gain includes currency moves.'+
-      (ex.length?' '+esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.':'')};
+    note:'A sale takes cost out in proportion, so the average cost never moves on a sale. Gain includes currency moves.'};
 }
 function qLabel(k){ var m=/^(\d{4})-(Q\d)$/.exec(k); return m?(m[2]+' '+m[1]):k; }
 
@@ -2387,8 +2385,7 @@ function pulseTile(pl,pos,col){
       return esc(b.symbol)+' '+moneyCur(b.amount,b.currency)+' ('+num(b.quantity)+' shares)'; }).join(' · ')));
   });
   t.appendChild(list);
-  var ex=pl.excluded||[];
-  t.appendChild(el('div','tile-foot','Growth buys only.'+(ex.length?' '+esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.':'')));
+  t.appendChild(el('div','tile-foot','Growth buys only.'));
   return t;
 }
 
@@ -2408,8 +2405,7 @@ function allocTile(inv,pos,col){
   else t.appendChild(el('div','tile-foot','No growth holdings yet.'));
   // Strategy targets: reference figures from getInvestments, not computed.
   var core=inv.coreTargets||{}, seg=inv.segmentTargets||{};
-  t.appendChild(el('div','tile-foot',(ex.length?esc(ex.join(', '))+(ex.length>1?' are parked cash, so they are':' is parked cash, so it is')+' left out.<br>':'')+
-    'Target: '+Object.keys(core).reverse().map(function(k){ return esc(core[k])+' '+esc(k)+'%'; }).join(' · ')+
+  t.appendChild(el('div','tile-foot','Target: '+Object.keys(core).reverse().map(function(k){ return esc(core[k])+' '+esc(k)+'%'; }).join(' · ')+
     '<br>Segments: '+Object.keys(seg).map(function(k){ return esc(k)+' '+esc(seg[k])+'%'; }).join(' · ')));
   return t;
 }
