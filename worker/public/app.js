@@ -2335,6 +2335,10 @@ function renderInvestments(){
     var foot=[ex.length?'Growth holdings only':'',usd].filter(Boolean).join(' · ');
     if(foot) t.appendChild(el('div','tile-foot',foot));
     g.appendChild(t);
+    // Stability's counterpart to Invested, and the same tile Summary shows. The EF is
+    // commingled with spending cash (there is no EF account), so the runway measures it
+    // and a park's share price never can. Same payload, so it costs no request.
+    var rw=el('section','tile t-rw'); fillRunway(rw,inv.runway); g.appendChild(rw);
     if(inv.pulse) g.appendChild(pulseTile(inv.pulse,pos,col));
     g.appendChild(allocTile(inv,pos,col));
     g.appendChild(holdingsTile(inv,pos,col));
@@ -2419,7 +2423,7 @@ function holdingsTile(inv,pos,col){
   t.appendChild(hd);
   var byName={};
   ((S.cache.accounts&&S.cache.accounts.data.accounts)||[]).forEach(function(a){ byName[a.name]=a; });
-  pos.forEach(function(p){
+  function rows(list){ list.forEach(function(p){
     var acc=byName[p.name], r=el(acc?'button':'div','h-row');
     if(acc){ r.type='button'; r.onclick=function(){ openAccountModal(acc); }; }
     var ac=p.avgCostNative!=null?moneyCur(p.avgCostNative,p.costCurrency):'—';
@@ -2432,7 +2436,21 @@ function holdingsTile(inv,pos,col){
       '<span class="h-val">'+money(p.valuePhp,true)+'</span>'+
       '<span class="h-gain '+(p.gainPhp==null?'':p.gainPhp>=0?'pos':'neg')+'">'+gain+'</span>';
     t.appendChild(r);
-  });
+  }); }
+  // The table is the BROAD set — it lists a park too — so it is the one place the two
+  // kinds meet. A subtotal per group is what makes it add up: the Growth line is the
+  // Invested tile's figure, and the park's line is the holding the runway counts.
+  var ex=(inv.pulse&&inv.pulse.excluded)||[];
+  function group(label,list){
+    if(!list.length) return;
+    t.appendChild(el('div','h-row h-grp','<span>'+esc(label)+'</span><b>'+
+      money(list.reduce(function(s2,p){ return s2+(p.valuePhp||0); },0),true)+'</b>'));
+    rows(list);
+  }
+  if(ex.length){
+    group('Growth',pos.filter(function(p){ return ex.indexOf(p.name)<0; }));
+    group('Emergency fund',pos.filter(function(p){ return ex.indexOf(p.name)>=0; }));
+  } else rows(pos);
   return t;
 }
 
