@@ -197,8 +197,25 @@ async function api(request, env, url) {
     return request.method === 'GET' ? readResponse(body, request) : json(body);
   } catch (err) {
     console.error(action + ': ' + (err && err.stack ? err.stack : err));
-    return json({ status: 'error', message: (err && err.message) ? err.message : String(err) });
+    const message = (err && err.message) ? err.message : String(err);
+    return json({ status: 'error', message }, refused(err, message) ? 200 : 500);
   }
+}
+
+/**
+ * Did the handler refuse THIS payload? That answer is final, so it is HTTP 200 — the
+ * offline queue drops a queued write only on a 200 error, because retrying a payload
+ * the server rejects would wedge the queue behind it for ever.
+ *
+ * Everything else is 500: a D1 hiccup ("D1_ERROR: Network connection lost", "D1 DB is
+ * overloaded") or a bug in the handler (a TypeError) says nothing about the payload.
+ * Both used to answer 200, and the queue DROPPED a saved transaction over a passing
+ * storage fault (bug audit, 2026-09-23). A broken schema rule is a refusal whoever
+ * reports it, D1 included.
+ */
+function refused(err, message) {
+  if (/constraint failed/i.test(message)) return true;
+  return !!err && err.constructor === Error && !/D1[_ ]/.test(message);
 }
 
 const HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };

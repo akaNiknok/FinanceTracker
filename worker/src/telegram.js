@@ -297,7 +297,7 @@ export const TURN_CEILING_MS = 25000;
  *
  * `idPrefix` identifies the source and makes the row IDs idempotent under retries:
  * "tg-<update_id>" for a chat message, "gm-<messageId>" for an ingested email. Row
- * IDs are "<idPrefix>-<i>". `mailId` adds the ⌕ Email button. Returns the IDs that
+ * IDs are "<idPrefix>-<rank>" (see below). `mailId` adds the ⌕ Email button. Returns the IDs that
  * landed — the Gmail courier only trashes the mail when every item made it.
  *
  * ponytail: one service call per item. There is no bulk create, and a message carries
@@ -308,23 +308,34 @@ export async function logItems(env, chat, idPrefix, items, replyTo, mailId) {
   // One read for the whole message, not one per item: resolveAccountName needs the live
   // account list to turn what the model wrote into the name the ledger knows.
   const accounts = (await refs(env)).accounts;
+  const all = items.map((p) => ({
+    Date: p.Date, Category: p.Category, Description: p.Description,
+    Account: resolveAccountName(accounts, p.Account),
+    Amount: p.Amount, ExchangeRate: p.ExchangeRate,
+    ToAccount: p.ToAccount ? resolveAccountName(accounts, p.ToAccount) : p.ToAccount,
+    ToAmount: p.ToAmount
+  }));
+  // The row id is the item's RANK BY CONTENT, not its place in the list. A retry (the
+  // drain, or the courier after a Worker that died mid-message) parses the text again,
+  // and the model may list the same items in another order: by position, a landed item
+  // then read as "duplicate" under someone else's id while it was written a second time.
+  // The receipt keeps the message's order; only the ids are sorted. Description and
+  // Category stay out of the key — the model rewords those between runs.
+  const key = (a) => JSON.stringify([a.Date || '', Number(a.Amount) || 0, a.Account || '',
+                                     a.ToAccount || '', Number(a.ToAmount) || 0]);
+  const rank = [];
+  all.map((a, i) => i)
+    .sort((x, y) => (key(all[x]) < key(all[y]) ? -1 : key(all[x]) > key(all[y]) ? 1 : x - y))
+    .forEach((i, k) => { rank[i] = k; });
   for (let i = 0; i < items.length; i++) {
-    const p = items[i];
-    const args = {
-      ID: idPrefix + '-' + i,
-      Date: p.Date, Category: p.Category, Description: p.Description,
-      Account: resolveAccountName(accounts, p.Account),
-      Amount: p.Amount, ExchangeRate: p.ExchangeRate,
-      ToAccount: p.ToAccount ? resolveAccountName(accounts, p.ToAccount) : p.ToAccount,
-      ToAmount: p.ToAmount
-    };
+    const args = Object.assign({ ID: idPrefix + '-' + rank[i] }, all[i]);
     try {
       const res = args.ToAccount ? await createTransfer(args, env) : await createTransaction(args, env);
       // res.warning is advisory (an unresolved FX rate, a same-day/amount duplicate).
       // The receipt is the only feedback this path has, so it must not swallow it.
       // The receipt reads `args`, not `p`: it must show the resolved account names.
       out.push(receipt(args, res.status) + (res.warning ? '\n› ⚠ ' + res.warning : ''));
-      ids.push(args.ID); idx.push(i);
+      ids.push(args.ID); idx.push(rank[i]);
     } catch (err) {
       out.push('❌ *Failed to add transaction*\n› ' + msgOf(err));
     }
@@ -420,9 +431,12 @@ async function deleteIds(env, ids) {
       out.push('› ❌ ' + msgOf(err));
     }
   }
-  // Cleared either way: the button and /undo point at the same rows, so whichever
-  // fires first must stop the other from chasing them.
-  await metaSet(env, 'tg_last_ids', '[]');
+  // Cleared when /undo points at these rows, so whichever of the button and /undo fires
+  // first stops the other chasing them. ONLY then: the Undo button under an OLDER
+  // receipt used to clear it too, and /undo then had nothing for the newest message.
+  let last = [];
+  try { last = JSON.parse(await metaGet(env, 'tg_last_ids', '[]')); } catch (err) { last = []; }
+  if (last.some((id) => ids.includes(id))) await metaSet(env, 'tg_last_ids', '[]');
   return out;
 }
 

@@ -60,21 +60,25 @@ export async function fxMap(env, currencies) {
 
 /**
  * The rate to stamp on a new transaction. Resolution order, verbatim from Fx.gs:
- *   1. caller override, used as given
- *   2. base currency -> blank (NULL, which the Amount (PHP) expression treats as 1)
+ *   1. base currency or SHARES -> blank (NULL, which the Amount (PHP) expression
+ *      treats as 1), whatever the caller sent
+ *   2. caller override, used as given
  *   3. live rate
  *   4. USD_PHP_FALLBACK (now meta.usd_php_fallback)
  *   5. blank + a warning, and the caller decides
  */
 export async function resolveRate(env, currency, override) {
+  const cur = String(currency || '').toUpperCase();
+  // Pesos and share quantities never carry a rate, and this is checked BEFORE the
+  // override: a rate typed against a PHP account (the editor shows the field for every
+  // account, and Gemini sets one whenever a message names a rate) stamped ₱500 of food
+  // as ₱28,000 (bug audit, 2026-09-23). SHARES is a quantity — there is nothing to fetch.
+  if (cur === BASE_CURRENCY || cur === 'SHARES') return { rate: 1, blank: true, source: 'base' };
   if (override !== undefined && override !== null && override !== '') {
     const n = parseFloat(override);
     if (!isNaN(n)) return { rate: n, blank: false, source: 'override' };
   }
-  const cur = String(currency || '').toUpperCase();
-  // SHARES is a quantity, not a currency — there is no rate to fetch, and asking
-  // open.er-api for one on every write to a holdings account is a wasted subrequest.
-  if (!cur || cur === BASE_CURRENCY || cur === 'SHARES') return { rate: 1, blank: true, source: 'base' };
+  if (!cur) return { rate: 1, blank: true, source: 'base' };
   const live = await fxRate(env, cur);
   if (live) return { rate: live, blank: false, source: 'live' };
   return { rate: 1, blank: true, source: 'unresolved',

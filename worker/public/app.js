@@ -58,9 +58,11 @@ function gs(fn, arg, etag, _retried){
     return res.json().then(function(r){
       if (r == null) throw new Error('Empty response from server (a Date may have leaked into the payload).');
       if (r.status === 'error'){
-        // GAS looked at the payload and refused it. `_server` marks that as final: it's
-        // the ONLY thing flushQueue is allowed to discard a queued write for.
-        var se = new Error(r.message || 'Server error'); se._server = true; throw se;
+        // `_server` marks a FINAL refusal — the ONLY thing flushQueue may discard a
+        // queued write for. The Worker answers 200 only when it refused this payload; a
+        // storage hiccup, a bug or a 503 setup error comes back 5xx and is NOT final
+        // (it used to be, and the queue dropped a saved transaction over one).
+        var se = new Error(r.message || 'Server error'); se._server = res.ok; throw se;
       }
       // The tag travels beside the payload; cachedCall lifts it off before storing.
       r.__etag = res.headers.get('ETag');
@@ -724,7 +726,7 @@ var QA={open:false, text:'', ai:null, aiFor:'', aiBusy:false, over:{}, kind:'', 
 function qaDraft(){
   var d=parseAdd(QA.text,qaCtx()), ai=QA.aiFor===QA.text.trim()&&QA.ai;
   if(ai){
-    ['Amount','Account','ToAccount','Category'].forEach(function(k){ if(!d[k]&&ai[k]) d[k]=ai[k]; });
+    ['Amount','Account','ToAccount','ToAmount','Category'].forEach(function(k){ if(!d[k]&&ai[k]) d[k]=ai[k]; });
     if(ai.Description!=null) d.Description=ai.Description;
     if(ai.Date) d.Date=ai.Date;
   }
@@ -736,7 +738,10 @@ function qaDraft(){
   else { d.ToAccount=''; if(d.Category&&catType(d.Category)!==(kind==='in'?'Income':'Expense')) d.Category=''; }
   d.kind=kind; return d;
 }
-function qaComplete(d){ return !!(d.Amount&&d.Account&&d.Category&&(d.kind!=='xfer'||(d.ToAccount&&d.ToAccount!==d.Account))); }
+// A transfer between two currencies is complete only with the amount that ARRIVED — the
+// local parse cannot know it, so it asks Gemini, then opens the full form.
+function xferNeedsTo(from,to,toAmt){ return !!(from&&to&&!toAmt&&acctCurrency(from).toUpperCase()!==acctCurrency(to).toUpperCase()); }
+function qaComplete(d){ return !!(d.Amount&&d.Account&&d.Category&&(d.kind!=='xfer'||(d.ToAccount&&d.ToAccount!==d.Account&&!xferNeedsTo(d.Account,d.ToAccount,d.ToAmount)))); }
 
 // ⌘K: jump rows (screens) and the Activity search. Text with a digit is an add, not a jump.
 function qaJumps(text){
@@ -869,7 +874,7 @@ function qaSave(){
   if(!qaComplete(d)&&QA.aiFor!==text&&!net.offline) return qaAsk().then(function(){ if(QA.text.trim()===text) qaSave(); });
   var xfer=d.kind==='xfer', amount=Number(d.Amount);
   var payload={Date:d.Date,Category:d.Category,Account:d.Account,Amount:amount,Description:d.Description};
-  if(xfer) payload.ToAccount=d.ToAccount;
+  if(xfer){ payload.ToAccount=d.ToAccount; if(d.ToAmount) payload.ToAmount=Number(d.ToAmount); }
   qaReset(); $('#addInput').blur();
   if(!qaComplete(d)){
     if(!amount) payload.Amount='';
@@ -3720,6 +3725,13 @@ function openTransferModal(t){
     if(fFrom.value===fTo.value){toast('From and To must differ','err');return;}
     var amount=edNum(fAmt);
     if(isNaN(amount)){toast('Enter an amount','err');return;}
+    // The server refuses this too; asking here keeps the typed form on screen.
+    if(xferNeedsTo(fFrom.value,fTo.value,fToAmt&&fToAmt.value)){
+      var more=page.querySelector('.ed-morebtn'); if(more) more.click();
+      toast('These accounts use different currencies. Enter the To amount.','err');
+      if(fToAmt) fToAmt.focus();
+      return;
+    }
     var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
                  ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
     var period=fPeriod?fPeriod.value:(t&&t.Period)||'';
