@@ -31,13 +31,14 @@ function gs(fn, arg, etag, _retried){
     // an unrelated write (a 03:00 Telegram ingest) cost headers instead of a screen.
     init = { method:'GET', headers: etag ? { 'If-None-Match': etag } : {} };
   } else {
-    body = arg ? JSON.parse(JSON.stringify(arg)) : {};
+    body = arg ? structuredClone(arg) : {};
     body.action = action;
     // A client-supplied ID is what makes an offline replay safe: if the request did
     // reach GAS before the connection died, the retry hits the idempotency check and
     // returns {status:'duplicate'} instead of posting a second row. Stamped here,
     // before the first attempt, so the attempt and the replay carry the same one.
-    if (QUEUEABLE[action] && !body.ID) body.ID = 'ui-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    // The `ui-` prefix is read back by SOURCES on the Activity list — keep it.
+    if (QUEUEABLE[action] && !body.ID) body.ID = 'ui-' + crypto.randomUUID();
     init = { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) };
   }
   // A dying connection leaves fetch hanging forever instead of rejecting — the spinner
@@ -46,7 +47,7 @@ function gs(fn, arg, etag, _retried){
   // as offline, which is the right answer: the write is queued and replays under the
   // same client-supplied ID, so a request that DID land can't post twice.
   // ponytail: one fixed budget for every route; split it if a slow report ever trips it.
-  if (AbortSignal.timeout) init.signal = AbortSignal.timeout(GS_TIMEOUT);
+  init.signal = AbortSignal.timeout(GS_TIMEOUT);
   return fetch(url, init).then(function(res){
     netSeen(true);
     // The passphrase cookie expired (or was never set). Ask once, then retry —
@@ -83,8 +84,8 @@ function gs(fn, arg, etag, _retried){
  * opens at all. What's left is writes, and only these two get queued — both are
  * idempotent on a client-supplied ID, so replaying one that actually landed can't
  * double-post. Edits, deletes, account and Ledger writes are NOT queued: they're
- * desk work rather than something you do in a queue at a till, and
- * appendLedgerRow isn't idempotent at any price. They fail with a clear message. */
+ * desk work rather than something you do in a queue at a till, and a ledger insert
+ * isn't idempotent at any price. They fail with a clear message. */
 var LS_QUEUE = 'ft.queue';
 var QUEUEABLE = { createTransaction:1, createTransfer:1 };
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});
@@ -352,9 +353,8 @@ function num(n){return n==null?'—':Number(n).toLocaleString('en-PH',{maximumFr
 // not loaded yet — the re-render after boot lands fills it in.
 function usdOf(php){var r=S.boot&&S.boot.fxUsdPhp;return (php==null||!r)?'':moneyCur(php/r,'USD');}
 function pct(n){return n==null?'—':(Math.round(n*10)/10)+'%';}
-/* Signed variants: a gain reads '+' explicitly, so the sign is text and not only color. */
+/* A gain reads '+' explicitly, so the sign is text and not only color. */
 function signedMoney(n){return n==null?'—':((n>0?'+':'')+money(n,true));}
-function signedPct(n){return n==null||!isFinite(n)?'—':((n>0?'+':'')+pct(n));}
 
 /* ── account color helpers (color-coding across screens) ─────────────────── */
 function isHex6(c){return !!c && /^#[0-9a-fA-F]{6}$/.test(c);}
@@ -386,9 +386,20 @@ function catsForShape(isXfer){
 }
 
 /* ── toast ───────────────────────────────────────────────────────────────── */
+/* A modal <dialog> makes the whole document outside it inert — live regions included —
+ * so an error raised from inside a form would never be announced from #toastRoot's
+ * usual place. Park the host in whichever dialog is on top instead. It is fixed and
+ * pointer-events:none, so the move never shows. The modal is always the upper of the
+ * two: the only stack in the app is the unlock dialog over the editor. */
+function toastRoot(){
+  var m=$('#modalRoot'), host=(m&&m.open)?m:((ED.root&&ED.root.open)?ED.root:document.body);
+  var r=$('#toastRoot');
+  if(r.parentNode!==host) host.appendChild(r);
+  return r;
+}
 function toast(msg,kind){
   var t=el('div','toast '+(kind||''),esc(msg));
-  $('#toastRoot').appendChild(t);
+  toastRoot().appendChild(t);
   var ms = kind==='err'?6000:2400; // errors linger long enough to read
   setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(function(){t.remove();},300);},ms);
 }
@@ -515,7 +526,7 @@ function onResume(){
   // an inline-edit cell. The stamps are already cleared, so the next navigation
   // revalidates anyway — only the immediate repaint is skipped.
   var a = document.activeElement;
-  if(edOpen() || !$('#modalRoot').hidden || (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
+  if(edOpen() || $('#modalRoot').open || (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
   render();
 }
 
@@ -916,7 +927,7 @@ function wireShell(){
   });
   document.addEventListener('keydown',function(e){
     var mod=e.metaKey||e.ctrlKey;
-    if(!$('#modalRoot').hidden) return;   // a modal owns the keys while it is up
+    if($('#modalRoot').open) return;   // a modal owns the keys while it is up
     if(mod && !e.shiftKey && (e.key==='k'||e.key==='K')){ e.preventDefault(); $('#addInput').focus(); }
     else if(mod && e.shiftKey && (e.key==='l'||e.key==='L')){ e.preventDefault(); toggleTheme(); }
   });
@@ -1114,11 +1125,6 @@ function svgEl(tag,attrs){
 // (the old hand-rolled rounding rendered it "₱3K").
 var PHPC = new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',notation:'compact',maximumFractionDigits:1});
 function compactPhp(n){ return PHPC.format(Number(n)); }
-function niceCeil(n){                 // round up to 1/2/2.5/5×10^k for clean axis ticks
-  if(!(n>0)) return 1;
-  var p=Math.pow(10,Math.floor(Math.log(n)/Math.LN10)), f=n/p;
-  return (f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10)*p;
-}
 // Column rounded at the top (the data end), square at the baseline.
 function barPath(x,y,w,h,r){
   r=Math.min(r==null?4:r,w/2,h);
@@ -1533,7 +1539,7 @@ function activeTokens(f){
 }
 function tokenText(k,v){
   if(k==='month'){ var d=monthKey2date(v); return d?MONTHS_FULL[d.getMonth()]+' '+d.getFullYear():String(v); }
-  if(k==='date') return fmtDate(v);
+  if(k==='date') return dayMonth(v,{year:'always'});
   if(k==='type') return TYPE_WORD[v]||v;
   if(k==='source') return SOURCES[v]||v;
   if(k==='minAmount') return '≥ '+money(v,true);
@@ -1874,7 +1880,7 @@ function fmtNet(n){ n=Math.round(n*100)/100; return (n>0?'+':(n<0?'−':''))+mon
 function groupByDay(rows){
   var groups=[], byDate={};
   (rows||[]).forEach(function(t){
-    var d=fmtDate(t.Date);
+    var d=dayMonth(t.Date,{year:'always'});
     if(!byDate[d]){ byDate[d]={label:d,rows:[],net:0,date:t.Date}; groups.push(byDate[d]); }
     byDate[d].rows.push(t);
     byDate[d].net+=txNet(t);
@@ -2057,7 +2063,7 @@ function txRow(t,opts){
     if(t.Description&&t.Category){ part(esc(t.Category),'category',t.Category); s2.appendChild(document.createTextNode(' · ')); }
     part(dotHTML(fromC)+esc(t.Account||''),'account',t.Account);
     if(v.isXfer){ s2.appendChild(document.createTextNode(' → ')); part(dotHTML(toC)+esc(t.ToAccount||''),'account',t.ToAccount); }
-    if(!opts.hideDate) s2.appendChild(document.createTextNode(' · '+fmtDate(t.Date)));
+    if(!opts.hideDate) s2.appendChild(document.createTextNode(' · '+dayMonth(t.Date,{year:'always'})));
     grow.appendChild(s2);
   }
   r.appendChild(grow);
@@ -2089,7 +2095,7 @@ function txTableRow(t,opts){
     cb.appendChild(chk);
     r.onclick=selectClick(r,t);
   }
-  var dc=cell('dim'), dl=dt?shortDate(dt):'';
+  var dc=cell('dim'), dl=dt?dayMonth(dt,{short:1,year:'auto'}):'';
   if(edit) dc.textContent=dl; else dc.appendChild(tokLink(esc(dl),'date',isoDate(t.Date)));
   var fromC=acctColor(t.Account), toC=acctColor(t.ToAccount);
   var dsc=cell('');
@@ -2168,14 +2174,16 @@ function parseDate(d){
   if(m) return new Date(+m[1], +m[2]-1, +m[3]);
   var dt=new Date(d); return isNaN(dt.getTime())?null:dt;
 }
-// Intuitive display format, e.g. "June 6, 2026".
-// "19 Sep", with the year only when it is not this one. Day first, as everywhere.
-function shortDate(dt){ return dt.getDate()+' '+MONTHS[dt.getMonth()]+(dt.getFullYear()!==new Date().getFullYear()?' '+dt.getFullYear():''); }
-function fmtDate(d){
-  if(!d) return '';
-  var dt=parseDate(d);
-  if(!dt||isNaN(dt.getTime())) return String(d);
-  return dt.getDate()+' '+MONTHS_FULL[dt.getMonth()]+' '+dt.getFullYear();   // day first, like every other date in the app
+/* The one date format: DAY FIRST, as everywhere in the app. Takes a Date or anything
+ * parseDate reads, and returns the input unchanged when it is not a date.
+ *   o.short  'Sep' rather than 'September'
+ *   o.year   'always', 'auto' (only when it is not this year), or omitted for never */
+function dayMonth(v,o){
+  var dt=parseDate(v);
+  if(!dt||isNaN(dt.getTime())) return v==null?'':String(v);
+  o=o||{};
+  var yr=o.year==='always'||(o.year==='auto'&&dt.getFullYear()!==new Date().getFullYear());
+  return dt.getDate()+' '+(o.short?MONTHS:MONTHS_FULL)[dt.getMonth()]+(yr?' '+dt.getFullYear():'');
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -2344,7 +2352,7 @@ function loadDebts(){
           var paid=Math.abs(it.amount)-Math.abs(it.open), frac=paid>0?paid/Math.abs(it.amount):0;
           // Short date, the year only when it is not this one: the line must fit a phone.
           var d=it.date&&parseDate(it.date);
-          var when=d?shortDate(d):'Opening balance';
+          var when=d?dayMonth(d,{short:1,year:'auto'}):'Opening balance';
           // Direction per ITEM, not per account: a spend off the tab runs against the balance.
           var theirs=it.amount>=0;
           var r=el('div','a-row');
@@ -2388,7 +2396,7 @@ function renderInvestments(){
     var w=el('div','screen');
     var head=el('div','screen-head'); head.appendChild(el('div','screen-title','Investments')); w.appendChild(head);
     var asOf=pos.reduce(function(m,p){ return p.pricedAt&&p.pricedAt>m?p.pricedAt:m; },'');
-    w.appendChild(el('div','screen-sub',asOf?'Prices as of '+esc(fmtDate(asOf)):'No prices yet'));
+    w.appendChild(el('div','screen-sub',asOf?'Prices as of '+esc(dayMonth(asOf,{year:'always'})):'No prices yet'));
     if(!pos.length){ w.appendChild(el('div','tile','<div class="tile-foot">No holdings yet.</div>')); paint(w); return; }
     var g=el('div','sum inv'); w.appendChild(g);
 
@@ -2537,6 +2545,11 @@ function renderTax(){
     var rows=(res.rows||[]).slice();
     var cols=ledgerCols(res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]));
     var derived={}; (res.derived||[]).forEach(function(h){derived[h]=true;});
+    // Everything the ledger writes need: the table to write to, the pk, and the map
+    // from the sheet-era header this table shows to the db column behind it. The three
+    // write routes are the ADMIN grid's — the ledger has none of its own (v3.2.0).
+    var ctx={cols:cols, derived:derived, txIdCol:res.txIdCol,
+             table:res.table, pk:res.pk, edit:res.edit||{}};
     // Newest payslip first. Dates arrive as yyyy-MM-dd, so a plain string compare
     // orders them; a row whose linked tx is gone has no date and floats to the top,
     // which is where a broken link wants to be.
@@ -2552,7 +2565,7 @@ function renderTax(){
     // BIR files per year and the payload is one year wide, so the year is a control.
     acts.appendChild(ledgerYearSelect(res.year, res.years));
     var addBtn=el('button','btn sm primary','Add row'); addBtn.type='button';
-    addBtn.onclick=function(){ openLedgerAdd(cols,derived); };
+    addBtn.onclick=function(){ openLedgerAdd(ctx); };
     acts.appendChild(addBtn);
     head.appendChild(acts);
     w.appendChild(head);
@@ -2561,7 +2574,7 @@ function renderTax(){
     var qg=el('div','tax-q');
     taxQuarters(rows,String(res.year),isoDate(new Date())).forEach(function(q){ qg.appendChild(taxTile(q)); });
     w.appendChild(qg);
-    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedBanner(res.unlinked,res.txIdCol));
+    if(res.unlinked&&res.unlinked.length) w.appendChild(unlinkedBanner(res.unlinked, ctx));
 
     if(!rows.length){ w.appendChild(el('div','tile','<div class="tile-foot">No salaries in the ledger for '+esc(res.year)+'.</div>')); }
     else {
@@ -2574,7 +2587,7 @@ function renderTax(){
       });
       htr.appendChild(el('th'));
       var thead=el('thead'); thead.appendChild(htr); t.appendChild(thead);
-      var tb=el('tbody'), ctx={cols:cols, derived:derived, txIdCol:res.txIdCol};
+      var tb=el('tbody');
       rows.forEach(function(r){ tb.appendChild(ledgerRowTr(r, ctx)); });
       t.appendChild(tb); wrap.appendChild(t); card.appendChild(wrap); w.appendChild(card);
     }
@@ -2610,9 +2623,8 @@ function taxQuarters(rows, year, today){
   });
   return qs;
 }
-function dayMonth(iso,short){ var m=MONTHS_FULL[+iso.slice(5,7)-1]; return (+iso.slice(8,10))+' '+(short?m.slice(0,3):m); }
 function taxTile(q){
-  var badge={filed:['pos','Filed'],due:['warn','Due '+dayMonth(q.due,true)]}[q.state];
+  var badge={filed:['pos','Filed'],due:['warn','Due '+dayMonth(q.due,{short:1})]}[q.state];
   var sal=q.n+' salar'+(q.n===1?'y':'ies');
   var spec=q.n?{title:'Q'+q.q+' tax',text:'Each salary at its BSP rate, then 8% of the total.',
     rows:[['Income, '+sal,money(q.php,true)],['= Tax at 8%',money(q.tax,true),true]],
@@ -2626,7 +2638,7 @@ function taxTile(q){
 
 /* Salary transactions no ledger row points at yet. Adding one writes ONLY the link;
  * every figure on the row derives from it, so the BSP rate is all that is left to type. */
-function unlinkedBanner(list, txIdCol){
+function unlinkedBanner(list, ctx){
   var n=list.length, b=el('section','tax-warn');
   var one=function(t){ return esc(moneyCur(t.Amount,t.Currency))+' on '+esc(dayMonth(String(t.Date).slice(0,10))); };
   b.innerHTML=icon('info')+'<span class="grow"><b>'+n+' salar'+(n===1?'y is':'ies are')+' not in the tax ledger.</b> '+
@@ -2634,7 +2646,9 @@ function unlinkedBanner(list, txIdCol){
   var add=el('button','btn sm','Add to ledger'); add.type='button';
   add.onclick=function(){
     add.disabled=true; add.textContent='Adding…';
-    list.reduce(function(p,t){ return p.then(function(){ var o={}; o[txIdCol]=t.ID; return gs('api_appendLedgerRow',o); }); },Promise.resolve())
+    var link=ctx.edit[ctx.txIdCol];
+    list.reduce(function(p,t){ return p.then(function(){ var row={}; row[link]=t.ID;
+      return gs('api_insertTableRow',{table:ctx.table, row:row}); }); },Promise.resolve())
       .then(function(){ toast(n===1?'Added to the ledger':n+' added to the ledger','ok'); })
       .catch(function(e){ toast(e.message||e,'err'); })
       .then(function(){ dropCache(); renderTax(); });
@@ -2695,7 +2709,7 @@ var LEDGER_NUM={'Wise Amount':1,'BSP Reference Rate':1,'Total Income':1,'8% Tax'
 function ledgerText(col,val){
   if(val==null||val==='') return '';
   if(typeof val==='number') return col==='Wise Amount'?moneyCur(val,'USD'):/rate/i.test(col)?String(val):money(val);
-  if(col==='Date Received'&&/^\d{4}-\d\d-\d\d$/.test(val)) return shortDate(parseDate(val));
+  if(col==='Date Received'&&/^\d{4}-\d\d-\d\d$/.test(val)) return dayMonth(val,{short:1,year:'auto'});
   if(col==='Reporting Period') return monthLabel(val);
   return String(val);
 }
@@ -2718,7 +2732,7 @@ function ledgerRowTr(r, ctx){
     if(c===ctx.txIdCol && val!=null && val!==''){ td.appendChild(txLinkEl(String(val))); }
     else if(ctx.derived[c]){ td.textContent=ledgerText(c,val); if(LEDGER_NUM[c]) td.className='num'; if(/^⚠/.test(String(val))){ td.className='warn'; td.textContent='Transaction deleted'; } }
     else if(isFiledCol(c)){
-      var q=quarterSelect(val, function(v){ ledgerSaveCell(tr, r, ctx, c, v); });
+      var q=quarterSelect(val, function(v){ ledgerSaveCell(ctx, r, c, v); });
       q.classList.add('q-pill'); if(val) q.classList.add('on');
       td.appendChild(q);
     }
@@ -2731,78 +2745,45 @@ function ledgerRowTr(r, ctx){
     tr.appendChild(td);
   });
   var dtd=el('td'), del=el('button','icon-btn',icon('close')); del.type='button'; del.title='Delete row'; del.setAttribute('aria-label','Delete row');
-  del.onclick=function(){ ledgerDeleteRow(r.__row); };
+  del.onclick=function(){ ledgerDeleteRow(ctx, r.__row); };
   dtd.appendChild(del); tr.appendChild(dtd);
   return tr;
 }
 function ledgerReplaceRow(tr, r, ctx){ tr.parentNode.replaceChild(ledgerRowTr(r,ctx), tr); }
 
-/* Save a single cell, then swap in the row the write handler hands back (its
- * derived cells have already recalculated). Mutating `r` in place keeps the
- * cached rows array in step, so no cache wipe and no screen reload. */
-function ledgerSaveCell(tr, r, ctx, header, value){
-  return gs('api_updateLedgerCell',{row:r.__row, header:header, value:value}).then(function(res){
-    var fresh=res.values;
-    if(fresh) Object.keys(fresh).forEach(function(k){ r[k]=fresh[k]; });
-    toast('Saved','ok'); ledgerReplaceRow(tr, r, ctx);
-  }).catch(function(e){ toast(e.message||e,'err'); ledgerReplaceRow(tr, r, ctx); });
+/* Save one cell, named by the sheet-era header the table shows; ctx.edit maps it to the
+ * db column. A saved cell can move the DERIVED ones with it (8% Tax follows the BSP
+ * rate), so the screen is redrawn rather than the single row — getLedger is one ETag'd
+ * read of a table that holds one row per payslip. */
+function ledgerSaveCell(ctx, r, header, value){
+  return gs('api_updateTableCell',{table:ctx.table, pk:r.__row, column:ctx.edit[header], value:value})
+    .then(function(){ toast('Saved','ok'); dropCache(); renderTax(); },
+          function(e){ toast(e.message||e,'err'); throw e; });
 }
 
-/* Inline cell editor: swap the <td> for a text input that fills the cell (the
- * .editing class drops the td padding so the row doesn't jump on edit). */
 function ledgerCellEdit(td, tr, r, ctx, header){
-  var curVal=r[header];
-  var input=el('input','ledger-edit-input'); input.type='text';
-  if(LEDGER_NUM[header]) input.inputMode='decimal';
-  if(curVal!=null) input.value=String(curVal);
-  td.classList.add('editing'); td.textContent=''; td.appendChild(input); input.focus(); input.select();
-  var done=false;
-  function commit(){
-    if(done) return; done=true;
-    var v=input.value;
-    if(v===String(curVal==null?'':curVal)){ ledgerReplaceRow(tr,r,ctx); return; }   // no-op → restore
-    ledgerSaveCell(tr, r, ctx, header, v);
-  }
-  input.onblur=commit;
-  input.onkeydown=function(e){
-    if(e.key==='Enter'){ e.preventDefault(); commit(); }
-    else if(e.key==='Escape'){ done=true; ledgerReplaceRow(tr,r,ctx); }
-  };
+  cellEdit(td, r[header], { num:!!LEDGER_NUM[header],
+    restore:function(){ ledgerReplaceRow(tr,r,ctx); },
+    save:function(v){ return ledgerSaveCell(ctx, r, header, v); } });
 }
 
-function openLedgerAdd(cols, derived){
-  var inputs={}, body=el('div');
-  cols.forEach(function(c){
-    if(derived[c]) return;                 // formula columns fill themselves
-    var inp=isFiledCol(c)?quarterSelect(''):inputEl(isDateCol(c)?'date':'text','');
-    inputs[c]=inp;                         // a <select> reads through .value like an input
-    body.appendChild(fieldEl(c, inp));
+function openLedgerAdd(ctx){
+  // A <select> reads through .value like an input, so the Filed? quarter fits the
+  // same shape. Derived columns are left out — they fill themselves from the view.
+  var fields=ctx.cols.filter(function(c){ return !ctx.derived[c]; }).map(function(c){
+    return [c, isFiledCol(c)?quarterSelect(''):inputEl(isDateCol(c)?'date':'text','')];
   });
-  var save=el('button','btn primary','Add row');
-  save.onclick=function(){
-    var obj={}, any=false;
-    Object.keys(inputs).forEach(function(c){
-      var v=inputs[c].value; if(v!==''){ obj[c]=v; any=true; }
-    });
-    if(!any){ toast('Fill at least one field','err'); return; }
-    save.disabled=true; save.textContent='Adding…';
-    gs('api_appendLedgerRow',obj).then(function(){
-      closeModal(); toast('Row added','ok'); dropCache(); renderTax();
-    }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
-  };
-  openModal(modalShell('Add a row to the tax ledger', body, [save]));
+  gridAddRow('Add a row to the tax ledger', fields, function(obj){
+    var row={};
+    Object.keys(obj).forEach(function(h){ if(ctx.edit[h]) row[ctx.edit[h]]=obj[h]; });
+    return gs('api_insertTableRow',{table:ctx.table, row:row});
+  }, renderTax);
 }
 
-function ledgerDeleteRow(row){
-  var yes=el('button','btn danger','Delete');
-  yes.onclick=function(){
-    yes.disabled=true; yes.textContent='Deleting…';
-    gs('api_deleteLedgerRow',{row:row}).then(function(){
-      closeModal(); toast('Row deleted','ok'); dropCache(); renderTax();
-    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
-  };
-  var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Delete this ledger row?', el('div','dim','The row leaves the tax ledger. The salary transaction stays.'), [no,yes]));
+function ledgerDeleteRow(ctx, row){
+  gridDeleteRow('Delete this ledger row?',
+    'The row leaves the tax ledger. The salary transaction stays.',
+    function(){ return gs('api_deleteTableRow',{table:ctx.table, pk:row}); }, renderTax);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -3006,59 +2987,82 @@ function adminRowTr(row,res,editable,money){
   return tr;
 }
 
-/* Same swap-the-td-for-an-input editor the Tax screen uses, against the generic
- * updateTableCell handler instead of a ledger-specific one. */
 function adminCellEdit(td,tr,row,res,editable,col,money){
-  var cur=row[col];
+  function restore(){ tr.parentNode.replaceChild(adminRowTr(row,res,editable,money),tr); }
+  cellEdit(td, row[col], { num:!!(money&&money[col]), restore:restore,
+    save:function(v){
+      return gs('api_updateTableCell',{table:res.table,pk:row[res.pk],column:col,value:v})
+        .then(function(){ row[col]=v; toast('Saved','ok'); dropCache(); restore(); },
+              function(e){ toast(e.message||e,'err'); throw e; });
+    } });
+}
+
+function adminAddRow(res){
+  gridAddRow('Add a row to '+adminLabel(res.table),
+    (res.addable||[]).map(function(c){ return [c, inputEl('text','')]; }),
+    function(row){ return gs('api_insertTableRow',{table:res.table, row:row}); }, render);
+}
+
+function adminDeleteRow(res,pk){
+  gridDeleteRow('Delete row '+pk+' from '+adminLabel(res.table)+'?',
+    'This removes the row permanently. D1 Time Travel can restore the database for 7 days.',
+    function(){ return gs('api_deleteTableRow',{table:res.table, pk:pk}); }, render);
+}
+
+/* ── the shared grid ─────────────────────────────────────────────────────────
+ * The Tax screen and the Admin screen are one table UI over one set of write
+ * routes (updateTableCell / insertTableRow / deleteTableRow). Until v3.2.0 each
+ * carried its own copy of these three, and the ledger half also had three write
+ * handlers of its own in api.js — for a table the admin whitelist already held.
+ * What genuinely differs is the row shape and what to repaint, so those are
+ * arguments; `send` returns the gs() promise in both cases. */
+
+/* Swap the <td> for a text input that fills the cell (.editing drops the td padding,
+ * so the row does not jump on edit). `save` owns its own toast and repaint, because
+ * the two screens redraw different amounts; a rejected save puts the cell back. */
+function cellEdit(td, cur, o){
   var inp=el('input','ledger-edit-input'); inp.type='text';
+  if(o.num) inp.inputMode='decimal';
   if(cur!=null) inp.value=String(cur);
   td.classList.add('editing'); td.textContent=''; td.appendChild(inp); inp.focus(); inp.select();
   var done=false;
-  function restore(){ tr.parentNode.replaceChild(adminRowTr(row,res,editable,money),tr); }
   function commit(){
     if(done) return; done=true;
-    var v=inp.value;
-    if(v===String(cur==null?'':cur)){ restore(); return; }
-    gs('api_updateTableCell',{table:res.table,pk:row[res.pk],column:col,value:v}).then(function(){
-      row[col]=v; toast('Saved','ok'); restore(); dropCache();
-    }).catch(function(e){ toast(e.message||e,'err'); restore(); });
+    if(inp.value===String(cur==null?'':cur)) return o.restore();   // no-op → put the cell back
+    o.save(inp.value).catch(function(){ o.restore(); });
   }
   inp.onblur=commit;
   inp.onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); commit(); }
-    else if(e.key==='Escape'){ done=true; restore(); }
+    else if(e.key==='Escape'){ done=true; o.restore(); }
   };
 }
 
-function adminAddRow(res){
-  var inputs={}, body=el('div');
-  (res.addable||[]).forEach(function(c){
-    var inp=inputEl('text',''); inputs[c]=inp; body.appendChild(fieldEl(c,inp));
-  });
+/* The add-a-row modal. `fields` is [[label, inputNode]]; send({label: value}) writes. */
+function gridAddRow(title, fields, send, after){
+  var body=el('div'), inputs={};
+  fields.forEach(function(f){ inputs[f[0]]=f[1]; body.appendChild(fieldEl(f[0], f[1])); });
   var save=el('button','btn primary','Add row');
   save.onclick=function(){
-    var row={}, any=false;
-    Object.keys(inputs).forEach(function(c){ if(inputs[c].value!==''){ row[c]=inputs[c].value; any=true; } });
+    var obj={}, any=false;
+    Object.keys(inputs).forEach(function(c){ if(inputs[c].value!==''){ obj[c]=inputs[c].value; any=true; } });
     if(!any){ toast('Fill at least one field','err'); return; }
     save.disabled=true; save.textContent='Adding…';
-    gs('api_insertTableRow',{table:res.table,row:row}).then(function(){
-      closeModal(); toast('Row added','ok'); dropCache(); render();
-    }).catch(function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
+    send(obj).then(function(){ closeModal(); toast('Row added','ok'); dropCache(); after(); },
+                   function(e){ save.disabled=false; save.textContent='Add row'; toast(e.message||e,'err'); });
   };
-  openModal(modalShell('Add a row to '+adminLabel(res.table), body, [save]));
+  openModal(modalShell(title, body, [save]));
 }
 
-function adminDeleteRow(res,pk){
+function gridDeleteRow(title, note, send, after){
   var yes=el('button','btn danger','Delete');
   yes.onclick=function(){
     yes.disabled=true; yes.textContent='Deleting…';
-    gs('api_deleteTableRow',{table:res.table,pk:pk}).then(function(){
-      closeModal(); toast('Row deleted','ok'); dropCache(); render();
-    }).catch(function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
+    send().then(function(){ closeModal(); toast('Row deleted','ok'); dropCache(); after(); },
+                function(e){ yes.disabled=false; yes.textContent='Delete'; toast(e.message||e,'err'); });
   };
   var no=el('button','btn','Cancel'); no.onclick=closeModal;
-  openModal(modalShell('Delete row '+pk+' from '+adminLabel(res.table)+'?',
-    el('div','dim','This removes the row permanently. D1 Time Travel can restore the database for 7 days.'), [no,yes]));
+  openModal(modalShell(title, el('div','dim',note), [no,yes]));
 }
 
 /* Every row of a table, one 1000-row page at a time (listTable's server-side cap).
@@ -3240,45 +3244,31 @@ function openBulkDelete(){
 // keyboard doesn't cover the focused field/dropdown — a fixed, centered modal can't scroll otherwise.
 function fitModal(){
   var vv=window.visualViewport, root=$('#modalRoot');
-  if(!vv||!root||root.hidden) return;
+  if(!vv||!root||!root.open) return;
   root.style.top=vv.offsetTop+'px'; root.style.height=vv.height+'px';
 }
-/* Focus containment for the two overlays (this modal and the editor below). Without
- * it Tab walks straight out of the dialog and into the page behind it — invisible on
- * a phone, immediate on an iPad with a keyboard or on desktop. `inert` is the native
- * answer (Safari 15.5+, Chrome 102+); an older browser just keeps the old behaviour.
- * Call it with the overlay to open, and with nothing to close. The element that had
- * focus is remembered and restored, or closing leaves focus on <body> and the keyboard
- * has nowhere to resume from. It is a STACK because the unlock dialog can open over
- * the editor (a save whose cookie lapsed), and the editor must still be trapped when
- * that dialog closes. */
-var _traps=[], _hadFocus=[], _inerted=[];
-function trapFocus(keep){
-  _inerted.forEach(function(n){ n.inert=false; });
-  _inerted=[];
-  if(keep){ _traps.push(keep); _hadFocus.push(document.activeElement); }
-  else { _traps.pop(); var back=_hadFocus.pop(); if(back) try{ back.focus(); }catch(e){} }
-  var top=_traps[_traps.length-1];
-  if(!top) return;
-  // Walk up to <body> inerting the SIBLINGS at each level: the overlay's own ancestors
-  // have to stay live, or it would go inert along with the page behind it.
-  for(var n=top; n && n!==document.body; n=n.parentElement){
-    Array.prototype.forEach.call(n.parentElement.children, function(s){
-      // #toastRoot stays live: it is where an error from inside the overlay lands,
-      // and inert would drop it out of the accessibility tree.
-      if(s!==n && s.tagName!=='SCRIPT' && s.id!=='toastRoot'){ s.inert=true; _inerted.push(s); }
-    });
-  }
-}
+/* Both overlays are <dialog>s opened with showModal(), so the top layer contains focus,
+ * Escape raises `cancel`, the page behind goes inert and focus is restored on close —
+ * all of which this file used to do by hand, including a walk up the DOM inerting the
+ * siblings at each level and a stack of remembered focus. The top layer also STACKS,
+ * which is what the stack was for: the unlock dialog opens over the editor on a lapsed
+ * cookie, and the editor is still trapped when that dialog closes. */
+
 // opts.sheet: a bottom sheet on a phone (app.css), a centred card from 768px.
 function openModal(node, opts){
   var root=$('#modalRoot'); var card=$('#modalCard');
   closeModal.onClose=null;
   root.classList.toggle('as-sheet', !!(opts&&opts.sheet));
-  card.innerHTML=''; card.appendChild(node); root.hidden=false;
-  trapFocus(root);
+  card.innerHTML=''; card.appendChild(node);
+  if(!root.open) root.showModal();
   if(window.visualViewport){ visualViewport.addEventListener('resize',fitModal); visualViewport.addEventListener('scroll',fitModal); fitModal(); }
-  $('.modal-backdrop',root).onclick=closeModal;
+  // The dialog element IS the full-viewport host and the card is its child, so a click
+  // that lands on the dialog itself is a click on the backdrop.
+  root.onclick=function(e){ if(e.target===root) closeModal(); };
+  // Escape. preventDefault stops the UA closing it behind our back, so the bookkeeping
+  // in closeModal runs exactly once whichever way it is dismissed. An open combo eats
+  // the key first (comboEl calls preventDefault while its list is up).
+  root.oncancel=function(e){ e.preventDefault(); closeModal(); };
   // Enter in a plain input submits (combos handle Enter themselves to pick an option)
   card.onkeydown=function(e){
     if(e.key==='Enter' && e.target.tagName==='INPUT' && !e.target.classList.contains('combo-input')){
@@ -3287,17 +3277,10 @@ function openModal(node, opts){
     }
   };
 }
-// Escape closes the modal. An open combo dropdown eats the key before it gets here
-// (comboEl's keydown stops propagation), so there's nothing to test for at this level.
-document.addEventListener('keydown',function(e){
-  if(e.key==='Escape' && !$('#modalRoot').hidden) closeModal();
-});
 function closeModal(){
-  var root=$('#modalRoot'), wasOpen=!root.hidden;
-  root.hidden=true; root.style.top=''; root.style.height='';
-  // Only when it really was open: closeModal is also called defensively, and an
-  // unbalanced pop would drop the editor's trap underneath it.
-  if(wasOpen) trapFocus(null);
+  var root=$('#modalRoot');
+  if(root.open) root.close();
+  root.style.top=''; root.style.height='';
   if(window.visualViewport){ visualViewport.removeEventListener('resize',fitModal); visualViewport.removeEventListener('scroll',fitModal); }
   // Dismiss hook — the login form needs to know it was cancelled by the backdrop or
   // Escape, not just by its own button, or unlock()'s promise never settles and every
@@ -3392,9 +3375,10 @@ function comboEl(options,value,opts){
     if(e.key==='ArrowDown'){ e.preventDefault(); if(list.hidden){open();} else {active=Math.min(filtered.length-1,active+1);highlight();scrollActive();} }
     else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(0,active-1); highlight(); scrollActive(); }
     else if(e.key==='Enter'){ if(!list.hidden&&active>=0&&filtered[active]){ e.preventDefault(); choose(filtered[active]); } }
-    // Escape dismisses the dropdown only — swallow it so the document handler below
-    // doesn't also close the whole modal. With the list already shut it bubbles as usual.
-    else if(e.key==='Escape'){ if(!list.hidden) e.stopPropagation(); close(); input.value=_label; }
+    // Escape dismisses the dropdown only — preventDefault is what stops the <dialog>
+    // around it treating the same key as a close request. With the list already shut
+    // the key is left alone and the modal closes as usual.
+    else if(e.key==='Escape'){ if(!list.hidden) e.preventDefault(); close(); input.value=_label; }
   };
   // Strict picker: on blur, snap the text back to the last valid label.
   input.onblur=function(){ setTimeout(function(){ if(input.value!==_label)input.value=_label; close(); },120); };
@@ -3480,9 +3464,12 @@ function commitTx(o){
 var ED={root:null, pages:[], t:0};
 function edRoot(){
   if(ED.root) return ED.root;
-  var r=el('div','ed-root'); r.hidden=true;
-  r.innerHTML='<div class="ed-backdrop"></div><div class="ed-card"></div>';
-  r.firstChild.onclick=closeEditor;
+  var r=el('dialog','ed-root');
+  r.innerHTML='<div class="ed-card"></div>';
+  // The dialog is the full-viewport host; a click on it rather than on the card is a
+  // click on the backdrop. Escape does the same thing the backdrop does — see popPage.
+  r.onclick=function(e){ if(e.target===r) closeEditor(); };
+  r.oncancel=edCancel;
   document.body.appendChild(r);
   if(window.visualViewport){
     var fit=function(){ var vv=visualViewport; r.style.setProperty('--kb',Math.max(0,Math.round(innerHeight-vv.height-vv.offsetTop))+'px'); };
@@ -3490,22 +3477,23 @@ function edRoot(){
   }
   return ED.root=r;
 }
-function edOpen(){ return !!(ED.root&&!ED.root.hidden&&ED.pages.length); }
+function edOpen(){ return !!(ED.root&&ED.root.open&&ED.pages.length); }
 // Show a form page. Already open (the Transaction ⇄ Transfer switch): swap in place.
 function openEditor(page){
   var r=edRoot(), card=r.lastChild, fresh=!edOpen();
   clearTimeout(ED.t);
   card.innerHTML=''; card.appendChild(page); ED.pages=[page];
   // Only on a fresh open: the Transaction ⇄ Transfer switch re-enters here with the
-  // editor already up, and a second trap would leave the page behind inert after close.
-  if(fresh){ r.classList.remove('in','out'); r.hidden=false; void card.offsetWidth; r.classList.add('in'); trapFocus(r); }
+  // editor already up, and showModal() on an open dialog throws.
+  if(fresh){ r.classList.remove('in','out'); r.showModal(); void card.offsetWidth; r.classList.add('in'); }
 }
+/* The exit animation runs while the dialog is still open — close() would drop it out
+ * of the top layer at once and there would be nothing left to animate. */
 function closeEditor(){
   var r=ED.root; if(!edOpen()) return;
   if(document.activeElement&&r.contains(document.activeElement)) document.activeElement.blur();
-  trapFocus(null);
   ED.pages=[]; r.classList.add('out');
-  ED.t=setTimeout(function(){ r.hidden=true; r.classList.remove('in','out'); r.lastChild.innerHTML=''; },300);
+  ED.t=setTimeout(function(){ r.close(); r.classList.remove('in','out'); r.lastChild.innerHTML=''; },300);
 }
 function pushPage(p){ p.classList.add('push'); ED.root.lastChild.appendChild(p); ED.pages.push(p); }
 function popPage(){
@@ -3513,10 +3501,10 @@ function popPage(){
   var p=ED.pages.pop(); p.classList.add('pop');
   setTimeout(function(){ p.remove(); },300);
 }
-document.addEventListener('keydown',function(e){
-  if(e.key!=='Escape'||!edOpen()||!$('#modalRoot').hidden) return;
-  e.preventDefault(); popPage();
-});
+/* Escape backs out one page, and closes the editor on the last one — the same thing
+ * the ‹ button and a backdrop click do. preventDefault keeps the UA from closing the
+ * dialog behind popPage's back, so the exit animation and ED.pages stay in step. */
+function edCancel(e){ e.preventDefault(); popPage(); }
 
 // A page: [left] title [right] in a bar, then the scroller (page.body).
 function edPage(title,left,right){

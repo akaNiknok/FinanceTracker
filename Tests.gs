@@ -10,11 +10,6 @@
  */
 var PURE_TESTS = ["test_gmailScope", "test_gmailQuote", "test_gmailPayload"];
 
-function test_all() {
-  PURE_TESTS.forEach(function (n) { globalThis[n](); });
-  Logger.log("== test_all complete ==");
-}
-
 /**
  * GMAIL_QUERY_ — the two things about the job's scope that must not drift: it reads
  * the inbox only (owner rule: never re-read trashed mail) and it selects by the Gmail
