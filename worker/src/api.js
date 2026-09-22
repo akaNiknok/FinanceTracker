@@ -78,8 +78,14 @@ const hasTo = (v) => !!(v && String(v).trim() !== '');
  * that is how a refund is recorded (negative expense, original category).
  */
 function assertNonZero(label, v) {
-  if (toU(v) === 0) throw new Error(label + ' must not be zero.');
+  const u = toU(v);
+  // NaN is caught here too: D1 sends its parameters as JSON, where NaN is null, so an
+  // amount like "1,234" (Number() says NaN) would otherwise reach the table as NULL.
+  if (!Number.isFinite(u)) throw new Error(label + ' must be a number, not "' + v + '".');
+  if (u === 0) throw new Error(label + ' must not be zero.');
 }
+
+const curOf = (a) => String((a && a.currency) || BASE_CURRENCY).toUpperCase();
 
 /**
  * F16 advisory: the same account, category, amount and date, twice, from two different
@@ -828,7 +834,10 @@ export async function getInvestments(args, env) {
       'LEFT JOIN accounts b ON b.id = t.to_account_id ' +
       'WHERE t.account_id IN (' + ids + ') AND t.to_account_id IS NOT NULL ' +
       'AND t.to_account_id NOT IN (' + ids + ') ' +
-      'ORDER BY d DESC').bind(...shareIds, ...shareIds, ...shareIds, ...shareIds),
+      // Inside one day a SELL sorts first, so the oldest-first walk below meets the buy
+      // before it: a same-day buy and sell walked sell-first found no shares, took no
+      // cost out, and inflated the average for good.
+      'ORDER BY d DESC, side DESC').bind(...shareIds, ...shareIds, ...shareIds, ...shareIds),
     env.DB.prepare(
       'SELECT SUM(t.amount_php_u) AS s FROM transactions t JOIN categories c ON c.id = t.category_id ' +
       "WHERE c.type = 'Expense' AND t.month IN (" + list(monthKeys.length) + ')').bind(...monthKeys)
@@ -1221,12 +1230,15 @@ export async function createTransaction(args, env) {
  * ToAmount/Amount is that rate only when ToAmount is in pesos. A PHP source needs no
  * rate at all (resolveRate returns blank), and a Shares leg is a quantity, not money.
  */
-async function impliedRate(env, from, to, amount, toAmount, override) {
-  const src = String(from.currency || '').toUpperCase(), dst = String(to.currency || '').toUpperCase();
-  const usable = (override === undefined || override === null || override === '') &&
+function impliedUsable(from, to, amount, toAmount, override) {
+  const src = curOf(from), dst = curOf(to);
+  return !!((override === undefined || override === null || override === '') &&
     src !== dst && dst === BASE_CURRENCY && src !== 'SHARES' &&
-    Number(amount) && Number(toAmount);
-  if (usable) return { rate: Math.abs(toAmount / amount), blank: false, source: 'implied' };
+    Number(amount) && Number(toAmount));
+}
+async function impliedRate(env, from, to, amount, toAmount, override) {
+  if (impliedUsable(from, to, amount, toAmount, override))
+    return { rate: Math.abs(toAmount / amount), blank: false, source: 'implied' };
   return resolveRate(env, from.currency, override);
 }
 
@@ -1249,9 +1261,16 @@ export async function createTransfer(args, env) {
     throw new Error('Missing/invalid Amount (source amount).');
   assertNonZero('Amount', args.Amount);
 
-  const toAmount = (args.ToAmount !== undefined && args.ToAmount !== '')
-    ? parseFloat(args.ToAmount) : parseFloat(args.Amount);
-  assertNonZero('ToAmount', toAmount);
+  const given = args.ToAmount !== undefined && args.ToAmount !== null && args.ToAmount !== '';
+  // Two currencies, no ToAmount: the copy below would credit $100 out as ₱100 in, at a
+  // stamped rate of 1. Quick add did exactly that for "100 wise to bpi" (bug audit,
+  // 2026-09-23). Refuse it — only the sender knows what arrived.
+  if (!given && curOf(acct) !== curOf(to))
+    throw new Error('A transfer from ' + acct.currency + ' to ' + to.currency +
+                    ' needs ToAmount (the amount that arrived).');
+  // Number, not parseFloat: parseFloat("5,600") is 5, and would be stored as such.
+  const toAmount = given ? Number(args.ToAmount) : Number(args.Amount);
+  assertNonZero('ToAmount', given ? args.ToAmount : args.Amount);
   const id = args.ID || crypto.randomUUID();
   const fx = await impliedRate(env, acct, to, args.Amount, toAmount, args.ExchangeRate);
   const row = { date: parseDate(args.Date), category_id: cat.id, account_id: acct.id, amount_u: toU(args.Amount) };
@@ -1301,6 +1320,11 @@ export async function updateTransaction(args, env) {
   const mirrored = mirrorToAmount(cur, patch);
   if (mirrored !== undefined) patch.ToAmount = mirrored;
 
+  const acct = r.acctByName[patch.Account !== undefined ? patch.Account : cur.Account];
+  const dst = hasTo(effTo) ? r.acctByName[effTo] : null;
+  // createTransfer refuses this; an edit must not be the way round it.
+  if (dst && acct && dst.id === acct.id) throw new Error('Account and ToAccount must differ.');
+
   const set = [], bind = [];
   const put = (col, v) => { set.push(col + ' = ?'); bind.push(v); };
   if (patch.Date !== undefined) put('date', parseDate(patch.Date));
@@ -1311,13 +1335,19 @@ export async function updateTransaction(args, env) {
   if (patch.Amount !== undefined) put('amount_u', toU(patch.Amount));
   if (patch.ToAccount !== undefined) put('to_account_id', hasTo(patch.ToAccount) ? r.acctByName[patch.ToAccount].id : null);
   if (patch.ToAmount !== undefined) put('to_amount_u', patch.ToAmount === '' ? null : toU(patch.ToAmount));
-  // Re-stamp the rate when the account (and so the currency) changed, or when the
-  // client sent one explicitly — including '' to clear a manual override. Untouched
-  // otherwise, so history never reprices.
-  if (patch.Account !== undefined || args.ExchangeRate !== undefined) {
-    const eff = patch.Account !== undefined ? patch.Account : cur.Account;
-    const acct = r.acctByName[eff];
-    const fx = await resolveRate(env, acct ? acct.currency : '', args.ExchangeRate);
+  // Re-stamp the rate only when it can have changed: the client sent one (including ''
+  // to clear a manual override), the source CURRENCY changed, or a transfer that lands
+  // in pesos had a leg edited — its rate IS ToAmount/Amount. Anything else keeps the
+  // stamp, so history never reprices. "The Account was sent" is not a reason: the
+  // transfer form sends it on every save, and that put today's live rate on a months-old
+  // conversion, erasing its implied rate (bug audit, 2026-09-23).
+  const amt = patch.Amount !== undefined ? patch.Amount : cur.Amount;
+  const toAmt = patch.ToAmount !== undefined ? patch.ToAmount : cur.ToAmount;
+  const legMoved = ['Account', 'ToAccount', 'Amount', 'ToAmount'].some((k) => patch[k] !== undefined);
+  if (args.ExchangeRate !== undefined || (acct && curOf(acct) !== String(cur.Currency).toUpperCase()) ||
+      (dst && legMoved && impliedUsable(acct, dst, amt, toAmt, args.ExchangeRate))) {
+    const fx = dst ? await impliedRate(env, acct, dst, amt, toAmt, args.ExchangeRate)
+                   : await resolveRate(env, acct ? acct.currency : '', args.ExchangeRate);
     put('fx_rate', fx.blank ? null : fx.rate);
   }
 
@@ -1363,7 +1393,7 @@ export async function bulkUpdateTransactions(args, env) {
   if (p.ToAmount !== undefined && p.ToAmount !== '') assertNonZero('ToAmount', p.ToAmount);
 
   const found = (await env.DB.prepare(
-    'SELECT t.id, t.to_account_id, c.type AS type FROM transactions t JOIN categories c ON c.id = t.category_id ' +
+    'SELECT t.id, t.account_id, t.to_account_id, c.type AS type FROM transactions t JOIN categories c ON c.id = t.category_id ' +
     'WHERE t.id IN (' + list(ids.length) + ')').bind(...ids).all()).results;
   const have = new Set(found.map((x) => x.id));
   const skipped = ids.filter((id) => !have.has(id));
@@ -1377,6 +1407,13 @@ export async function bulkUpdateTransactions(args, env) {
       assertShape(type, hasTo(to));
     });
   }
+  // No row may end up a transfer to itself (createTransfer refuses one).
+  const newFrom = p.Account !== undefined ? r.acctByName[p.Account].id : null;
+  const newTo = hasTo(p.ToAccount) ? r.acctByName[p.ToAccount].id : null;
+  found.forEach((row) => {
+    const from = newFrom || row.account_id, to = p.ToAccount !== undefined ? newTo : row.to_account_id;
+    if (to && from === to) throw new Error('Account and ToAccount must differ (row ' + row.id + ').');
+  });
 
   const set = [], bind = [];
   const put = (col, v) => { set.push(col + ' = ?'); bind.push(v); };
@@ -1388,12 +1425,21 @@ export async function bulkUpdateTransactions(args, env) {
   if (p.Amount !== undefined) put('amount_u', toU(p.Amount));
   if (p.ToAccount !== undefined) put('to_account_id', hasTo(p.ToAccount) ? r.acctByName[p.ToAccount].id : null);
   if (p.ToAmount !== undefined) put('to_amount_u', p.ToAmount === '' ? null : toU(p.ToAmount));
-  // ponytail: a bulk clear with no Account change resolves against the reassigned
-  // account's currency for every row — fine for reassigns, which is the only UI path.
-  if (p.Account !== undefined || patch.ExchangeRate !== undefined) {
-    const acct = p.Account !== undefined ? r.acctByName[p.Account] : null;
+  const acct = p.Account !== undefined ? r.acctByName[p.Account] : null;
+  if (patch.ExchangeRate !== undefined) {
+    // ponytail: an explicit rate goes on every row, resolved against the new account's
+    // currency (or none) — no UI path sends one; it is here for the API's sake.
     const fx = await resolveRate(env, acct ? acct.currency : '', patch.ExchangeRate);
     put('fx_rate', fx.blank ? null : fx.rate);
+  } else if (acct) {
+    // A reassign re-stamps ONLY the rows whose currency changes. The rest keep their
+    // rate: moving old dollar rows between two dollar accounts used to put today's rate
+    // on all of them. SQLite evaluates every SET expression against the OLD row, so the
+    // subquery reads the account the row is leaving.
+    const fx = await resolveRate(env, acct.currency);
+    set.push('fx_rate = CASE WHEN UPPER((SELECT currency FROM accounts WHERE id = transactions.account_id)) = ? ' +
+             'THEN fx_rate ELSE ? END');
+    bind.push(curOf(acct), fx.blank ? null : fx.rate);
   }
 
   const targets = [...have];
@@ -1549,13 +1595,17 @@ export async function listTable(args, env) {
  * columns declared numeric are stripped, so a description with commas in it is safe.
  */
 function coerceCell(t, col, value) {
-  if (moneyCols(t).indexOf(col) !== -1) return (value === '' || value == null) ? null : toU(value);
-  if (value === '') return null;
-  if ((t.num || []).indexOf(col) !== -1 && value != null) {
+  const num = () => {
     const n = Number(String(value).replace(/,/g, ''));
     if (isNaN(n)) throw new Error(col + ' must be a number, not "' + value + '".');
     return n;
-  }
+  };
+  // Money cells take the same thousands separator. toU("1,000") is NaN, and D1 sends NaN
+  // as null: a typed credit limit or recurring amount was silently CLEARED under a
+  // "Saved" toast (bug audit, 2026-09-23).
+  if (moneyCols(t).indexOf(col) !== -1) return (value === '' || value == null) ? null : toU(num());
+  if (value === '') return null;
+  if ((t.num || []).indexOf(col) !== -1 && value != null) return num();
   return value;
 }
 

@@ -274,26 +274,29 @@ export async function runScheduled(env, cron) {
  */
 export async function runCron(env) {
   const out = {};
+  let failed = null;
   try {
     out.prices = await pricesJob(env);
     console.log('prices: ' + JSON.stringify(out.prices));
   } catch (err) {
     console.error('prices failed: ' + (err && err.stack ? err.stack : err));
     await notifyOwner(env, '⛔ *prices job failed*\n› ' + msgOf(err));
-    throw err;
+    failed = err;   // rethrown AFTER the snapshot — see below
   }
   // A drift is not a failure — the prices landed — so it never throws. It is the one
   // thing in this job a person has to act on, and Telegram is the only channel a cron
   // has. Sent every morning until the ledger is restated: a wrong share count silently
   // misprices net worth, so nagging is the correct volume.
-  if (out.prices.drift && out.prices.drift.length)
+  if (out.prices && out.prices.drift && out.prices.drift.length)
     await notifyOwner(env, '⚠️ *share count drift*' +
       out.prices.drift.map((d) => '\n› ' + driftLine(d)).join('') +
       '\nA split or other corporate action, or a trade that was never logged.');
 
-  // Snapshot AFTER prices so this month's net worth is stamped with fresh quotes.
-  // Non-fatal on its own: prices (the critical job) already committed, a missed
-  // snapshot just leaves this month's history to fill on the next daily run.
+  // Snapshot AFTER prices so this month's net worth is stamped with fresh quotes — and
+  // EVEN IF prices failed, on yesterday's quotes. The run on the 1st writes the previous
+  // month's CLOSE, which the FI countdown and the bridge read; a flaky IBKR morning used
+  // to skip it, and a close skipped is gone for good (bug audit, 2026-09-23). Non-fatal
+  // on its own: a missed snapshot fills on the next daily run.
   try {
     out.snapshot = await snapshotNetWorth(env);
     console.log('nw snapshot: ' + JSON.stringify(out.snapshot));
@@ -301,5 +304,6 @@ export async function runCron(env) {
     console.error('nw snapshot failed: ' + (err && err.stack ? err.stack : err));
     await notifyOwner(env, '⛔ *net-worth snapshot failed*\n› ' + msgOf(err));
   }
+  if (failed) throw failed;
   return out;
 }

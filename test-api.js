@@ -1721,4 +1721,152 @@ function d1(db) {
       }
     });
   });
+
+  // ── the bug audit (2026-09-23) ─────────────────────────────────────────────
+  // Last in the file on purpose: it adds accounts and rows, and every figure asserted
+  // above is exact. The live rate in the shim is 50; a test that needs it to MOVE passes
+  // its own FX_CACHE.
+  await describe('Bug audit fixes', () => {
+    sqlite.exec("INSERT INTO accounts (id,name,currency,subtype,symbol,starting_balance_u) VALUES " +
+      "(90,'Wise Two','USD','Savings',NULL,0),(91,'SAMEDAY','Shares','Shares','SAMEDAY',0);" +
+      "INSERT INTO prices (symbol,priced_at,price,currency) VALUES ('SAMEDAY','2026-08-22',50,'USD');");
+    const at = (rate) => Object.assign({}, env, { FX_CACHE: { get: async () => String(rate), put: async () => {} } });
+    const fxOf = (id) => sqlite.prepare('SELECT fx_rate FROM transactions WHERE id = ?').get(id).fx_rate;
+    const xfer = { Date: '2026-03-10', Category: 'Investment: Growth' };
+
+    test('a transfer between two currencies needs the amount that arrived', async () => {
+      // "100 wise to bpi" from quick add stored $100 out, ₱100 in, at a rate of 1.
+      await assert.rejects(api.createTransfer(Object.assign({ ID: 'ba-1', Account: 'Wise', ToAccount: 'Maya',
+                                                              Amount: 100 }, xfer), env), /needs ToAmount/);
+      // parseFloat("5,600") is 5 — it must be refused, not stored as five pesos.
+      await assert.rejects(api.createTransfer(Object.assign({ ID: 'ba-2', Account: 'Wise', ToAccount: 'Maya',
+                                                              Amount: 100, ToAmount: '5,600' }, xfer), env), /must be a number/);
+      // Same currency still mirrors, as before.
+      const ok = await api.createTransfer(Object.assign({ ID: 'ba-3', Account: 'Wise', ToAccount: 'Wise Two',
+                                                          Amount: 100 }, xfer), env);
+      assert.strictEqual(ok.transaction.ToAmount, 100);
+    });
+
+    test('editing a transfer keeps its rate, unless the edit changes it', async () => {
+      await api.createTransfer(Object.assign({ ID: 'ba-4', Account: 'Wise', ToAccount: 'Maya',
+                                               Amount: 100, ToAmount: 5600 }, xfer), env);
+      // What the transfer form sends for a description fix: every field, no rate. The
+      // live rate has moved to 58; the implied 56 must stay.
+      const form = { ID: 'ba-4', Date: '2026-03-10', Category: 'Investment: Growth', Account: 'Wise',
+                     ToAccount: 'Maya', Amount: 100, Description: 'typo fixed', Period: '' };
+      await api.updateTransaction(form, at(58));
+      assert.strictEqual(fxOf('ba-4'), 56, 'a description edit re-priced the conversion');
+      // A leg that moves re-derives the implied rate, never the live one.
+      await api.updateTransaction({ ID: 'ba-4', ToAmount: 5700 }, at(58));
+      assert.strictEqual(fxOf('ba-4'), 57);
+      // A dollar-to-dollar transfer has no implied rate: its stamp holds still too.
+      await api.updateTransaction({ ID: 'ba-3', Account: 'Wise', ToAccount: 'Wise Two', Amount: 100,
+                                    Description: 'x' }, at(58));
+      assert.strictEqual(fxOf('ba-3'), 50);
+      // A real currency change does re-stamp: pesos carry none.
+      await api.createTransaction({ ID: 'ba-5', Date: '2026-03-11', Category: 'Expense: Food', Account: 'Wise', Amount: 10 }, env);
+      await api.updateTransaction({ ID: 'ba-5', Account: 'Maya' }, at(58));
+      assert.strictEqual(fxOf('ba-5'), null);
+    });
+
+    test('a bulk reassign re-stamps only the rows whose currency changes', async () => {
+      await api.createTransaction({ ID: 'ba-6', Date: '2026-03-12', Category: 'Expense: Food', Account: 'Wise', Amount: 10 }, env);
+      await api.createTransaction({ ID: 'ba-7', Date: '2026-03-12', Category: 'Expense: Food', Account: 'Maya', Amount: 10 }, env);
+      await api.bulkUpdateTransactions({ ids: ['ba-6', 'ba-7'], patch: { Account: 'Wise Two' } }, at(58));
+      assert.strictEqual(fxOf('ba-6'), 50, 'dollars to dollars must keep the stamped rate');
+      assert.strictEqual(fxOf('ba-7'), 58, 'pesos to dollars takes the rate of the day');
+    });
+
+    test('a rate typed against a PHP account is ignored', async () => {
+      const r = await api.createTransaction({ ID: 'ba-8', Date: '2026-03-13', Category: 'Expense: Food',
+                                              Account: 'Maya', Amount: 500, ExchangeRate: 56 }, env);
+      assert.strictEqual(r.transaction['Amount (PHP)'], 500, '₱500 of food became ₱28,000');
+      assert.strictEqual(r.transaction.ExchangeRate, '');
+    });
+
+    test('no edit can make a transfer to itself', async () => {
+      await assert.rejects(api.updateTransaction({ ID: 'ba-4', ToAccount: 'Wise' }, env), /must differ/);
+      await assert.rejects(api.bulkUpdateTransactions({ ids: ['ba-4'], patch: { Account: 'Maya' } }, env), /must differ/);
+    });
+
+    test('a money cell takes a thousands separator instead of clearing itself', async () => {
+      await api.updateTableCell({ table: 'accounts', pk: 90, column: 'credit_limit_u', value: '60,000' }, env);
+      assert.strictEqual(sqlite.prepare('SELECT credit_limit_u c FROM accounts WHERE id = 90').get().c, 60000e6);
+      await assert.rejects(api.updateTableCell({ table: 'accounts', pk: 90, column: 'credit_limit_u', value: 'abc' }, env),
+                           /must be a number/);
+    });
+
+    test('a same-day buy and sell walk buy-first', async () => {
+      // The sell is entered FIRST, so insertion order alone would walk it first too.
+      await api.createTransfer({ ID: 'ba-s', Date: '2026-04-01', Category: 'Investment: Growth',
+                                 Account: 'SAMEDAY', ToAccount: 'Wise', Amount: 1, ToAmount: 60 }, env);
+      await api.createTransfer({ ID: 'ba-b', Date: '2026-04-01', Category: 'Investment: Growth',
+                                 Account: 'Wise', ToAccount: 'SAMEDAY', Amount: 100, ToAmount: 2 }, env);
+      const p = (await api.getInvestments({}, env)).positions.find((x) => x.name === 'SAMEDAY');
+      assert.strictEqual(p.quantity, 1);
+      assert.strictEqual(p.avgCostNative, 50, 'the sale took no cost out: the average inflated');
+    });
+
+    test('a failed prices job still writes the net-worth snapshot', async () => {
+      const month = dbm.monthOf(dbm.manilaYesterday());
+      sqlite.prepare('DELETE FROM nw_snapshots WHERE month = ?').run(month);
+      const real = globalThis.fetch;
+      globalThis.fetch = async (u) => {
+        if (String(u).includes('interactivebrokers')) throw new Error('ibkr down');
+        return new Response('{"ok":true}', { status: 200 });
+      };
+      try {
+        await assert.rejects(jobsMod.runCron(Object.assign({}, env, { IBKR_FLEX_TOKEN: 't', IBKR_FLEX_QUERY_ID: 'q',
+                                                                        TELEGRAM_BOT_TOKEN: 'x' })), /ibkr down/);
+      } finally { globalThis.fetch = real; }
+      assert.ok(sqlite.prepare('SELECT 1 FROM nw_snapshots WHERE month = ?').get(month), 'the month close was skipped');
+    });
+
+    test('a storage fault answers 500, a refused payload 200', async () => {
+      const h = { Cookie: 'ft_auth=' + await hex('pw'), 'Content-Type': 'application/json' };
+      const post = (e, body) => worker.fetch(new Request('https://x/api', { method: 'POST', headers: h,
+        body: JSON.stringify(body) }), e, ctx);
+      const lost = () => { throw new Error('D1_ERROR: Network connection lost.'); };
+      const down = Object.assign({}, wenv, { DB: { prepare: lost, batch: async () => lost() } });
+      const tx = { action: 'createTransaction', ID: 'ba-h', Category: 'Expense: Food', Account: 'Maya', Amount: 1 };
+      assert.strictEqual((await post(down, tx)).status, 500, 'the offline queue would drop this write');
+      // A broken schema rule IS a refusal, whoever reports it.
+      const bad = await post(wenv, Object.assign({}, tx, { Date: '2026-13-01' }));
+      assert.strictEqual(bad.status, 200);
+      assert.match((await bad.json()).message, /constraint/);
+    });
+
+    // A whole Telegram round trip with the network stubbed.
+    const CHAT = 424242;
+    const tgEnv = Object.assign({}, env, { TELEGRAM_USER_ID: String(CHAT), TELEGRAM_BOT_TOKEN: 'x' });
+    const quiet = async (fn) => {
+      const real = globalThis.fetch;
+      globalThis.fetch = async () => new Response('{"ok":true}', { status: 200 });
+      try { return await fn(); } finally { globalThis.fetch = real; }
+    };
+
+    test('Undo under an older receipt leaves /undo pointing at the newest message', async () => {
+      await api.createTransaction({ ID: 'tg-501-0', Date: '2026-03-14', Category: 'Expense: Food', Account: 'Maya', Amount: 5 }, env);
+      await dbm.metaSet(env, 'tg_last_ids', JSON.stringify(['tg-502-0']));
+      const tap = (id, data) => ({ update_id: id, callback_query: { id: 'c' + id, from: { id: CHAT }, data,
+                                                                  message: { message_id: 1, chat: { id: CHAT } } } });
+      await quiet(() => tgMod.handleUpdate(tgEnv, tap(990001, 'u:tg-501:0')));
+      assert.strictEqual(await dbm.metaGet(env, 'tg_last_ids'), '["tg-502-0"]');
+      await quiet(() => tgMod.handleUpdate(tgEnv, tap(990002, 'u:tg-502:0')));
+      assert.strictEqual(await dbm.metaGet(env, 'tg_last_ids'), '[]', 'the matching Undo still clears it');
+    });
+
+    test('a re-parse that lists the items in another order writes nothing twice', async () => {
+      // The first run lands `a` and fails `b`; the retry parses the same text again and
+      // the model lists them the other way round. By position, `b` then read as a
+      // "duplicate" of a's row and was never written, while `a` was written twice.
+      const a = { Date: '2026-03-15', Category: 'Expense: Food', Account: 'Maya', Amount: 120 };
+      const b = { Date: '2026-03-15', Category: 'Expense: Food', Account: 'Maya', Amount: 80 };
+      await quiet(() => tgMod.logItems(tgEnv, CHAT, 'tg-777', [a, Object.assign({}, b, { Category: 'Nope' })]));
+      await quiet(() => tgMod.logItems(tgEnv, CHAT, 'tg-777', [b, a]));
+      const rows = sqlite.prepare("SELECT amount_u FROM transactions WHERE id LIKE 'tg-777-%'").all();
+      assert.deepStrictEqual(rows.map((x) => x.amount_u).sort((x, y) => x - y), [80e6, 120e6],
+        'each item exactly once');
+    });
+  });
 })().catch((err) => { console.error(err); process.exit(1); });
