@@ -127,7 +127,8 @@ The repository is public. Do not put a secret value in a tracked file.
 | Gemini key | Google AI Studio | Free plan. |
 | Share prices | Interactive Brokers Flex Web Service | See the maintenance task below. |
 | Worker logs | Cloudflare dashboard, Workers, `financetracker-telegram`, tab **Logs** | The setting `[observability]` in `worker/wrangler.toml` turns this on. It keeps the last days and it is searchable. `npm run tail` shows the present only. |
-| Apps Script logs | script.google.com, tab **Executions** | The tab **Cloud logs** is empty until a person attaches a standard Google Cloud project. See the task below. |
+| Apps Script logs | script.google.com, tab **Executions** | The tab **Cloud logs** needs the standard Google Cloud project. See the task below. |
+| Google Cloud project | console.cloud.google.com, owner account | A standard project, attached to Apps Script. The backup needs it, because `DriveApp` needs the Drive API. |
 | Source code | GitHub, `akaNiknok/FinanceTracker` | `main` is the released code. `develop` is the integration branch. |
 
 ## Settings that are not in the repository
@@ -190,7 +191,35 @@ Cloudflare does not do a job again after a failure. Thus each job sends a Telegr
 
 **Set the Apps Script failure notification.** Open the page **Triggers**, then the menu of the `gmail_ingest` trigger, then **Failure notification settings**, then **Notify me immediately**. Apps Script then sends an email each time the trigger fails. Without it, a failure is visible only on the page **Executions**.
 
-**Attach a Google Cloud project to see the Apps Script cloud logs.** Open **Project Settings**, then **Google Cloud Platform (GCP) Project**, then **Change project**, then give the number of a standard project. Until you do this, the tab **Cloud logs** shows nothing, and a failure before the first line of code leaves no record at all.
+**Attach a standard Google Cloud project.** This is necessary, not optional. The
+backup writes a file with `DriveApp`, and `DriveApp` needs the **Google Drive API**
+to be on. A default Apps Script project does not let you turn an API on, and the
+backup fails with `Permission denied while enabling APIs: drive`. The same step
+also fills the tab **Cloud logs**, which is empty on a default project.
+
+Do these actions one time:
+
+1. Open `console.cloud.google.com`. Make a project. Write down the project
+   **number**, not the project id. Apps Script asks for the number.
+2. In that project, open **APIs & Services**, then **OAuth consent screen**.
+   Select **External**. Give an application name and your own email address.
+3. **Set the publishing status to `In production`.** Do not leave it at
+   `Testing`. A project in `Testing` cancels the permission after 7 days, and
+   each trigger then stops without a message. The consent screen says the
+   application is not verified: open **Advanced**, then **Go to (unsafe)**. This
+   is correct for a private script with one user.
+4. In that project, open **APIs & Services**, then **Library**. Enable
+   **Google Drive API**.
+5. In Apps Script, open **Project Settings**, then **Google Cloud Platform (GCP)
+   Project**, then **Change project**. Give the project number from step 1.
+6. The change of project cancels every permission. Open the editor, run
+   `backup_run`, and accept the screen. Do the same for `gmail_ingest`.
+7. Examine the page **Executions** the next morning. The nightly backup must
+   show **Completed**, and the file **FinanceTracker Backup.json** must be in
+   the Drive of the owner.
+
+The script, the triggers and the script properties do not change. Only the
+permissions change.
 
 ### Gmail, Telegram and IBKR
 
@@ -316,6 +345,8 @@ The code and the database do not go back together. Undo the code first.
 | The bot answers, but the answer is an error. | `npm run tail` while you send a message. Then the Gemini quota in AI Studio. An answer of "Unauthorized" indicates the secret `TELEGRAM_USER_ID`. |
 | The buttons do not operate. | Set the webhook again. The permitted update types do not include `callback_query`. |
 | An email stays in the inbox, and the transaction is absent. | The courier tries a failed email again for 3 hours, thus wait 10 minutes first. Then read the Worker logs for the line `ingestEmail:`. A message there names the cause, and it is usually the Gemini quota. To make the courier read the email again after that, delete the script property `GMAIL_LAST_TS`. The row identifier is deterministic, thus a transaction that is already recorded does not become double. |
+| The backup fails with "Permission denied while enabling APIs: drive". | Apps Script tried to enable the **Google Drive API** and it has no permission. This happens on a default Apps Script project, which does not let a person enable an API. Attach a standard Google Cloud project and enable the Drive API there. The task above gives each action. |
+| The backup stops each 7 days, and the trigger shows no message. | The OAuth consent screen of the Google Cloud project is at the status `Testing`. That status cancels the permission after 7 days. Open **APIs & Services**, then **OAuth consent screen**, and set the publishing status to `In production`. Then run `backup_run` one time from the editor. |
 | A trigger fails with "Authorization is required to perform that action." | `npm run push` changed which files the Apps Script project holds, thus Apps Script calculated the list of permissions again. A list that changes makes the permission of each existing trigger old. **The repair is one action.** Open the editor, select `gmail_ingest`, press **Run**, then accept the screen that asks for permission. The trigger operates again at the next tick. Do the same for `backup_run`. |
 | The job does not record the emails. | The Gmail filter. Then the property `GMAIL_QUERY`, which replaces the label. Then the trigger, because Apps Script can disable it. Then the property `WORKER_URL` and the two `INGEST_TOKEN` values. |
 | The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create financetracker-staging --location=apac`, then write the id into the file. |
