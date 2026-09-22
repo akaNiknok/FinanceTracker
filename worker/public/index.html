@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -165,12 +165,16 @@
       <!-- Modal host -->
       <div id="modalRoot" class="modal-root" hidden>
         <div class="modal-backdrop"></div>
-        <div class="modal-card" id="modalCard"></div>
+        <div class="modal-card" id="modalCard" role="dialog" aria-modal="true" tabindex="-1"></div>
       </div>
 
-      <!-- Toasts -->
-      <div id="toastRoot" class="toast-root"></div>
     </div>
+
+    <!-- Toasts. A SIBLING of #app, not a child: the modal and the editor make everything
+         behind them inert, and an inert ancestor would take the toast out of the
+         accessibility tree exactly when an error matters most. .toast-root is fixed and
+         pointer-events:none, so the move is invisible. -->
+    <div id="toastRoot" class="toast-root" role="status" aria-live="polite"></div>
 
     <!-- End of body, not deferred: app.js runs against a built DOM, exactly as it
          did when HtmlService inlined it here. -->

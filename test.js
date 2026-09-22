@@ -672,11 +672,12 @@ describe('Gmail courier watermark (vm)', () => {
                     createElement: mkNode, createElementNS: (_ns, t) => mkNode(t) },
         localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
         setTimeout, clearTimeout, Date, Math, JSON, encodeURIComponent, URLSearchParams,
+        AbortSignal,   // gs() arms a timeout with it; without it here app.js throws on load
         history: {}, location: { search: '', href: 'https://x/' }
       };
       app.globalThis = app;
-      let seen = '';
-      app.fetch = (u) => { seen = u; return Promise.resolve({ status: 200, headers: { get: () => '"tag"' },
+      let seen = '', seenInit = null;
+      app.fetch = (u, i) => { seen = u; seenInit = i; return Promise.resolve({ status: 200, headers: { get: () => '"tag"' },
                                                                 json: () => Promise.resolve({ status: 'ok' }) }); };
       vm.createContext(app);
       vm.runInContext(fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8'), app, { filename: 'app.js' });
@@ -822,9 +823,28 @@ describe('Gmail courier watermark (vm)', () => {
       assert.strictEqual(app.withPendingEdit(refund).Amount, -50, 'an in-flight edit keeps the sign');
       assert.strictEqual(app.withPendingEdit(refund)['Amount (PHP)'], -50);
 
+      // A queued write must never be lost silently. localStorage is the only place the
+      // queue lives, so a full quota has to evict the disposable cache and retry — and
+      // if that still fails, THROW, because enqueue otherwise toasts "Saved offline"
+      // over a transaction that was never stored.
+      let full = true, evictHelps = true; const wrote = {};
+      app.localStorage = {
+        getItem: (k) => (k === 'ft.queue' ? '[]' : null),
+        removeItem: (k) => { if (k === 'ft.cache' && evictHelps) full = false; },
+        setItem: (k, v) => { if (full) throw new Error('QuotaExceededError'); wrote[k] = v; }
+      };
+      app.queueSet([{ fn: 'api_createTransaction', arg: { ID: 'ui-1' } }]);
+      assert.ok(/ui-1/.test(wrote['ft.queue'] || ''), 'queueSet must evict ft.cache and retry');
+      full = true; evictHelps = false;   // the retry fails too: nothing left to free
+      assert.throws(() => app.queueSet([{ fn: 'api_createTransaction', arg: { ID: 'ui-2' } }]),
+        /NOT saved/, 'a queue write that cannot land must throw, not be swallowed');
+
       return app.gs('api_getDashboard', {}).then(() => {
         assert.ok(!/_v=/.test(seen), 'gs() still stamps _v: ' + seen);
         assert.ok(/action=getDashboard/.test(seen), seen);
+        // Without a timeout a dying connection hangs fetch forever: the spinner never
+        // resolves and the offline queue never engages, because it runs off the reject.
+        assert.ok(seenInit && seenInit.signal, 'gs() must arm an abort timeout');
       });
     });
   });
