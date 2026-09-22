@@ -162,18 +162,19 @@
         </div>
       </div>
 
-      <!-- Modal host -->
-      <div id="modalRoot" class="modal-root" hidden>
-        <div class="modal-backdrop"></div>
-        <div class="modal-card" id="modalCard" role="dialog" aria-modal="true" tabindex="-1"></div>
-      </div>
+      <!-- Modal host. A real <dialog>, opened with showModal(): the top layer gives the
+           focus trap, Escape, the ::backdrop and focus restore on close for nothing.
+           No role/aria-modal here — a modal dialog carries both already. -->
+      <dialog id="modalRoot" class="modal-root">
+        <div class="modal-card" id="modalCard"></div>
+      </dialog>
 
     </div>
 
-    <!-- Toasts. A SIBLING of #app, not a child: the modal and the editor make everything
-         behind them inert, and an inert ancestor would take the toast out of the
-         accessibility tree exactly when an error matters most. .toast-root is fixed and
-         pointer-events:none, so the move is invisible. -->
+    <!-- Toasts. A SIBLING of #app: an open modal makes the rest of the document inert,
+         live regions included, so toast() re-parents this host into whichever dialog is
+         open and drops it back here after. .toast-root is fixed and pointer-events:none,
+         so the move is invisible either way. -->
     <div id="toastRoot" class="toast-root" role="status" aria-live="polite"></div>
 
     <!-- End of body, not deferred: app.js runs against a built DOM, exactly as it

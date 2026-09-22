@@ -37,8 +37,7 @@ import {
   getBootstrap, getDashboard, getAccounts, getBudgets, getInvestments, getRecurring,
   getLedger, listTransactions, getDebts, listTable, getExportAll, getWidget, getParse, setWidgetAccounts, setSmartLists,
   createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
-  bulkUpdateTransactions, bulkDeleteTransactions, updateLedgerCell, appendLedgerRow,
-  deleteLedgerRow, updateTableCell, insertTableRow, deleteTableRow
+  bulkUpdateTransactions, bulkDeleteTransactions, updateTableCell, insertTableRow, deleteTableRow
 } from './src/api.js';
 import { handleUpdate, ingestEmail } from './src/telegram.js';
 import { runScheduled } from './src/jobs.js';
@@ -63,8 +62,10 @@ export const ROUTES_READ = {
 export const ROUTES_WRITE = {
   createTransaction, createTransfer, updateTransaction, deleteTransaction, updateAccount,
   bulkUpdateTransactions, bulkDeleteTransactions,
-  updateLedgerCell, appendLedgerRow, deleteLedgerRow,
-  updateTableCell, insertTableRow, deleteTableRow,   // admin grid
+  // The admin grid — and the Tax screen, which writes the `ledger` table through these
+  // same three rather than carrying a second copy of them (v3.2.0). getLedger hands the
+  // client the header -> column map; everything else here is already generic.
+  updateTableCell, insertTableRow, deleteTableRow,
   setWidgetAccounts,                                 // the Accounts screen's widget picker
   setSmartLists,                                     // Activity's saved filters
   ingestEmail                                        // the Gmail courier

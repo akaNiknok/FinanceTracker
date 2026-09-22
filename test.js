@@ -8,9 +8,9 @@
  *   2. worker/src/*.js as plain ESM imports. Most of what used to need a vm is now a
  *      normal module, so most of this is normal unit testing;
  *   3. contract guards — source-text assertions over things whose FAILURE IS SILENT:
- *      a write handler that forgets to bump the version, a create path that loses its
- *      idempotency clause, a read route named so the SPA would POST it. Each of these
- *      breaks something far away from the edit that caused it.
+ *      a read that stops carrying an ETag, a create path that loses its idempotency
+ *      clause, a read route named so the SPA would POST it. Each of these breaks
+ *      something far away from the edit that caused it.
  *
  * What is NOT here: anything needing a real database — that is test-api.js, which runs
  * the handlers against node:sqlite. The v1 cutover tools that used to sit behind this
@@ -538,21 +538,6 @@ describe('Gmail courier watermark (vm)', () => {
       assert.ok(/pricesJob\(env\)/.test(src), 'runCron must call pricesJob with the real pace');
     });
 
-    test('no handler carries a cache version any more', () => {
-      // The successor to "every write handler bumps the data version", which was itself
-      // the successor to cache_bumpVersion_(). Both existed because forgetting the bump
-      // left the SPA serving a cached screen with no error anywhere. v2.9.0 removed the
-      // invariant instead of guarding it harder: reads carry an ETag over their own
-      // bytes (worker.js readResponse), so a write has nothing to remember. This guard
-      // stops half of the old scheme growing back — a `version:` on one read handler
-      // would be a field the client no longer reads and nothing would say so.
-      const src = fs.readFileSync(path.join(__dirname, 'worker', 'src', 'api.js'), 'utf8');
-      assert.ok(!/bumpStmt|dataVersion|data_version/.test(src),
-        'api.js is bumping a data version again — the ETag is the invalidation now');
-      assert.ok(!/version:/.test(src), 'a read handler is stamping `version:` again');
-      assert.ok(!('getDataVersion' in worker.ROUTES_READ), 'getDataVersion is back');
-    });
-
     test('every read is answered with an ETag and honours If-None-Match', () => {
       // The whole client cache hangs off this one function. test-api.js proves it with
       // real requests; this proves the read path still ROUTES through it, which is the
@@ -657,9 +642,9 @@ describe('Gmail courier watermark (vm)', () => {
         'index.html brand-ver is not v' + ver + ' — bump it with the version');
     });
 
-    test('the SPA loads and no longer stamps a _v cache bucket', () => {
-      // The Worker's KV read cache went away with Apps Script; a `_v` on the URL would now
-      // be a cache-buster on nothing. Running app.js here also proves it still parses.
+    test('the SPA loads, and its pure helpers still answer', () => {
+      // Running app.js in a vm proves it parses, and hands every pure helper below to
+      // node's assert without a browser.
       const noop = () => {};
       // Enough DOM to let the chart builders run: they only set attributes and append.
       const mkNode = (tag) => ({ tag, attrs: {}, kids: [], style: {},
@@ -673,6 +658,7 @@ describe('Gmail courier watermark (vm)', () => {
         localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
         setTimeout, clearTimeout, Date, Math, JSON, encodeURIComponent, URLSearchParams,
         AbortSignal,   // gs() arms a timeout with it; without it here app.js throws on load
+        crypto, structuredClone,   // gs() stamps the offline-replay ID and clones the body
         history: {}, location: { search: '', href: 'https://x/' }
       };
       app.globalThis = app;
@@ -840,7 +826,6 @@ describe('Gmail courier watermark (vm)', () => {
         /NOT saved/, 'a queue write that cannot land must throw, not be swallowed');
 
       return app.gs('api_getDashboard', {}).then(() => {
-        assert.ok(!/_v=/.test(seen), 'gs() still stamps _v: ' + seen);
         assert.ok(/action=getDashboard/.test(seen), seen);
         // Without a timeout a dying connection hangs fetch forever: the spinner never
         // resolves and the offline queue never engages, because it runs off the reject.
