@@ -41,6 +41,10 @@ function backup_run() {
   } catch (err) {
     Logger.log("backup_run failed: " + err);
     backup_notifyFailure_(err);
+    // Rethrown, so the run is marked Failed and the trigger's own failure notification
+    // fires. Swallowed, every run read "Completed" — a dead backup looked healthy, and
+    // the email above cannot be relied on when the fault is the script's authorisation.
+    throw err;
   }
 }
 

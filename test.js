@@ -825,11 +825,31 @@ describe('Gmail courier watermark (vm)', () => {
       assert.throws(() => app.queueSet([{ fn: 'api_createTransaction', arg: { ID: 'ui-2' } }]),
         /NOT saved/, 'a queue write that cannot land must throw, not be swallowed');
 
+      // A transfer between two currencies is not complete without the amount that arrived:
+      // quick add saved "100 wise to bpi" as $100 out, ₱100 in (bug audit, 2026-09-23).
+      app.S.boot = { accounts: [{ name: 'Wise', currency: 'USD' }, { name: 'BPI', currency: 'PHP' },
+                                { name: 'Maya', currency: 'PHP' }] };
+      const xfer = { kind: 'xfer', Amount: 100, Account: 'Wise', ToAccount: 'BPI', Category: 'Transfer: Internal' };
+      assert.strictEqual(app.qaComplete(xfer), false, 'USD -> PHP with no ToAmount must not save');
+      assert.strictEqual(app.qaComplete(Object.assign({}, xfer, { ToAmount: 5600 })), true);
+      assert.strictEqual(app.qaComplete(Object.assign({}, xfer, { Account: 'Maya' })), true, 'same currency needs none');
+
+      const reply = (ok, status) => () => Promise.resolve({ ok, status, headers: { get: () => null },
+        json: () => Promise.resolve({ status: 'error', message: 'x' }) });
       return app.gs('api_getDashboard', {}).then(() => {
         assert.ok(/action=getDashboard/.test(seen), seen);
         // Without a timeout a dying connection hangs fetch forever: the spinner never
         // resolves and the offline queue never engages, because it runs off the reject.
         assert.ok(seenInit && seenInit.signal, 'gs() must arm an abort timeout');
+        // Only a 200 refusal is final. A 5xx error body (a D1 hiccup, a bug) must leave the
+        // queued write in place — flushQueue drops an entry on `_server` alone.
+        app.fetch = reply(false, 500);
+        return app.gs('api_createTransaction', { ID: 'ui-q' }).then(() => assert.fail('must reject'),
+          (e) => assert.strictEqual(e._server, false, 'a 500 is not a refusal'));
+      }).then(() => {
+        app.fetch = reply(true, 200);
+        return app.gs('api_createTransaction', { ID: 'ui-q' }).then(() => assert.fail('must reject'),
+          (e) => assert.strictEqual(e._server, true, 'a 200 error is the server refusing the payload'));
       });
     });
   });
