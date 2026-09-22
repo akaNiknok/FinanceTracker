@@ -665,8 +665,9 @@ window.addEventListener('online',function(){ net.offline=false; syncUI(); });
  * as a 3+ letter prefix), and the category the same description had last time
  * (getBootstrap.descCategory). Two accounts make a transfer only with "to" between
  * them, so "grab 312 gcash" stays an expense even with a GrabPay account. Gemini
- * (getParse, the bot's parser) fills what is left on Return, or after a pause when the
- * local pass has an amount but no category. */
+ * (getParse, the bot's parser) fills what is left, ON RETURN ONLY. It used to also fire
+ * 700ms after a typing pause, which billed a call per pause instead of per add — the AI
+ * answer is dropped the moment the text changes (qaDraft), so every pause re-armed it. */
 function parseAdd(text,ctx){
   var norm=function(s){ return String(s).toLowerCase().replace(/[^a-z0-9]/g,''); };
   var words=String(text||'').trim().split(/\s+/).filter(Boolean), out={Amount:null,Account:'',ToAccount:'',Category:'',Description:''};
@@ -707,7 +708,7 @@ function qaCtx(){
 }
 function catType(c){ var x=((S.boot&&S.boot.categories)||{})[c]; return String((x&&x.Type)||''); }
 
-var QA={open:false, text:'', ai:null, aiFor:'', aiBusy:false, over:{}, kind:'', t:0, sel:0, rows:[]};
+var QA={open:false, text:'', ai:null, aiFor:'', aiBusy:false, over:{}, kind:'', sel:0, rows:[]};
 // The draft = the local parse, then Gemini's answer for the same text, then the owner's own picks.
 function qaDraft(){
   var d=parseAdd(QA.text,qaCtx()), ai=QA.aiFor===QA.text.trim()&&QA.ai;
@@ -754,7 +755,7 @@ function qaShow(){
 }
 function qaHide(){ QA.open=false; document.body.classList.remove('qa-on'); var p=$('#qa'); if(p) p.innerHTML=''; qaFit(); }
 function qaReset(){
-  clearTimeout(QA.t); QA.text=''; QA.ai=null; QA.aiFor=''; QA.over={}; QA.kind=''; QA.sel=0;
+  QA.text=''; QA.ai=null; QA.aiFor=''; QA.over={}; QA.kind=''; QA.sel=0;
   $('#addInput').value=''; qaHide();
 }
 
@@ -841,9 +842,6 @@ function qaInput(){
   if(!QA.text.trim()) QA.over={};
   if(!S.boot) return withBoot(qaInput);
   if(QA.open) qaDraw(); else qaShow();
-  clearTimeout(QA.t);
-  var d=qaDraft();
-  if(d.Amount&&!d.Category&&d.kind!=='xfer') QA.t=setTimeout(qaAsk,700);
 }
 function qaRun(k){
   var r=QA.rows[k]; if(!r) return;
