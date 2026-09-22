@@ -1157,65 +1157,14 @@ export async function getLedger(args, env) {
     years: years.results.map((x) => x.y),
     rows: view.results.map(shapeLedger),
     cols: LEDGER_COLS, derived: LEDGER_DERIVED, txIdCol: LEDGER_TXID,
+    // The Tax screen WRITES through the admin grid's routes (updateTableCell /
+    // insertTableRow / deleteTableRow), so `ledger` needs no write routes of its own —
+    // it is already a TABLES entry. This is the one thing the client cannot derive:
+    // which db column each of the sheet-era headers above maps to. Everything not
+    // listed is derived and the screen renders it read-only.
+    table: 'ledger', pk: 'id', edit: LEDGER_EDIT,
     unlinked: unlinked.results.map((row) => shapeTx(row, r))
   };
-}
-
-/** Coerce a numeric-looking string to a Number so it feeds the view's arithmetic. */
-function ledgerCoerce(v) {
-  if (typeof v === 'string' && v !== '' && /^-?\d+(\.\d+)?$/.test(v.replace(/,/g, ''))) {
-    return Number(v.replace(/,/g, ''));
-  }
-  return v == null ? '' : v;
-}
-/** header -> {column, value} for the three typed ledger columns. Throws otherwise. */
-function ledgerCell(header, value) {
-  const col = LEDGER_EDIT[header];
-  if (!col) {
-    if (LEDGER_DERIVED.indexOf(header) !== -1)
-      throw new Error("'" + header + "' is formula-derived and can't be edited.");
-    throw new Error('Unknown Ledger column: ' + header);
-  }
-  const v = ledgerCoerce(value);
-  return { col, value: (v === '' ? null : (col === 'bsp_rate' ? Number(v) : String(v))) };
-}
-
-export async function updateLedgerCell(args, env) {
-  const row = parseInt(args.row, 10);
-  if (!row) throw new Error('updateLedgerCell requires a valid data row.');
-  if (!args.header) throw new Error('updateLedgerCell requires a column header.');
-  const { col, value } = ledgerCell(args.header, args.value);
-  const [res] = await env.DB.batch([
-    env.DB.prepare('UPDATE ledger SET ' + col + ' = ? WHERE id = ?').bind(value, row)
-  ]);
-  if (!res.meta.changes) throw new Error('No ledger row ' + row + '.');
-  const fresh = await env.DB.prepare('SELECT * FROM ledger_view WHERE id = ?').bind(row).first();
-  return { status: 'success', row, header: args.header, values: shapeLedger(fresh) };
-}
-
-export async function appendLedgerRow(args, env) {
-  const cols = [], vals = [];
-  Object.keys(args).forEach((header) => {
-    if (!LEDGER_EDIT[header]) return;                   // derived / unknown -> ignored, as in v1
-    if (args[header] === undefined || args[header] === null || args[header] === '') return;
-    const { col, value } = ledgerCell(header, args[header]);
-    cols.push(col); vals.push(value);
-  });
-  if (!cols.length) throw new Error('Nothing to add — fill at least one editable field.');
-  const [res] = await env.DB.batch([
-    env.DB.prepare('INSERT INTO ledger (' + cols.join(',') + ') VALUES (' + list(cols.length) + ')').bind(...vals)
-  ]);
-  return { status: 'success', row: res.meta.last_row_id };
-}
-
-export async function deleteLedgerRow(args, env) {
-  const row = parseInt(args.row, 10);
-  if (!row) throw new Error('deleteLedgerRow requires a valid data row.');
-  const [res] = await env.DB.batch([
-    env.DB.prepare('DELETE FROM ledger WHERE id = ?').bind(row)
-  ]);
-  if (!res.meta.changes) throw new Error('No ledger row ' + row + '.');
-  return { status: 'success', row };
 }
 
 // ── transaction writes ───────────────────────────────────────────────────────
@@ -1534,18 +1483,19 @@ const TABLES = {
     pk: 'id',
     edit: ['name', 'currency', 'subtype', 'symbol', 'starting_balance_u', 'interest_frequency',
            'interest_rate', 'credit_limit_u', 'notes', 'color'],
-    money: ['starting_balance_u', 'credit_limit_u']
+    money: ['starting_balance_u', 'credit_limit_u'], num: ['interest_rate']
   },
   categories: { pk: 'id', edit: ['name', 'type', 'segment', 'description'] },
   account_types: { pk: 'subtype', edit: ['type'], add: ['subtype', 'type'] },
-  budgets: { pk: 'id', edit: ['segment', 'period', 'target_type', 'target', 'currency', 'notes'] },
+  budgets: { pk: 'id', edit: ['segment', 'period', 'target_type', 'target', 'currency', 'notes'],
+             num: ['target'] },
   recurring: {
     pk: 'id', edit: ['description', 'currency', 'amount_u', 'fee_u', 'months_left', 'grp'],
     money: ['amount_u', 'fee_u']
   },
   ledger: { pk: 'id', edit: ['tx_id', 'bsp_rate', 'filed', 'date_received', 'wise_amount_u'],
-            money: ['wise_amount_u'] },
-  prices: { pk: 'rowid', edit: [], add: ['symbol', 'priced_at', 'price', 'currency'] },
+            money: ['wise_amount_u'], num: ['bsp_rate'] },
+  prices: { pk: 'rowid', edit: [], add: ['symbol', 'priced_at', 'price', 'currency'], num: ['price'] },
   // Cron-owned history: fully read-only (nodelete) so the grid can't corrupt or
   // hole the net-worth line. money cols render as PHP, not micros.
   nw_snapshots: { pk: 'month', edit: [], nodelete: true,
@@ -1589,10 +1539,23 @@ export async function listTable(args, env) {
   };
 }
 
-/** Decimal -> micros for the whitelisted money columns; everything else passes through. */
+/**
+ * Decimal -> micros for the whitelisted money columns, a real Number for the `num`
+ * (REAL-affinity) ones, and everything else passes through.
+ *
+ * `num` exists because the grid hands every cell over as a typed STRING, and SQLite's
+ * REAL affinity converts "57.5" but NOT "1,234.5" — a thousands separator silently
+ * lands a TEXT value in a numeric column, which then reads as 0 in every sum. Only the
+ * columns declared numeric are stripped, so a description with commas in it is safe.
+ */
 function coerceCell(t, col, value) {
   if (moneyCols(t).indexOf(col) !== -1) return (value === '' || value == null) ? null : toU(value);
   if (value === '') return null;
+  if ((t.num || []).indexOf(col) !== -1 && value != null) {
+    const n = Number(String(value).replace(/,/g, ''));
+    if (isNaN(n)) throw new Error(col + ' must be a number, not "' + value + '".');
+    return n;
+  }
   return value;
 }
 

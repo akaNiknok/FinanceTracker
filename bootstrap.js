@@ -11,7 +11,6 @@
 // `npm run dev:pull` is deliberately NOT run here: it downloads real financial data.
 // Run it by hand in the one worktree that needs it.
 const { execSync } = require('node:child_process');
-const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -51,26 +50,20 @@ if (!isWorktree) {
 }
 
 // 3. a dev port this checkout can have to itself
-const free = (port) => new Promise((resolve) => {
-  const s = net.createServer();
-  s.once('error', () => resolve(false));
-  s.once('listening', () => s.close(() => resolve(true)));
-  s.listen(port, '127.0.0.1');
-});
-
-// The port is derived from the checkout path, not from what happens to be listening:
-// two idle worktrees bootstrapped on the same day must still get different ports.
-// Probing only breaks a hash collision or a port some other program already holds.
+//
+// Derived from the checkout PATH, not from what happens to be listening: two idle
+// worktrees bootstrapped on the same day must still get different ports, and a hash is
+// the only thing that holds when neither is running. There is deliberately no probe
+// behind it — the hash already separates the worktrees, and a port some other program
+// holds fails loudly on `npm run dev` rather than silently.
 const portFor = (dir) => {
   if (!isWorktree) return 8123;
   const h = require('node:crypto').createHash('sha1').update(path.resolve(dir)).digest()[0];
   return 8124 + (h % 40);
 };
 
-(async () => {
-  const BASE = portFor(here);
-  let port = BASE;
-  while (port < BASE + 50 && !(await free(port))) port++;
+(() => {
+  const port = portFor(here);
 
   const launch = {
     version: '0.0.1',
@@ -91,6 +84,6 @@ const portFor = (dir) => {
 
   fs.mkdirSync('.claude', { recursive: true });
   fs.writeFileSync(path.join('.claude', 'launch.json'), JSON.stringify(launch, null, 2) + '\n');
-  console.log(`- .claude/launch.json -> port ${port}${port === BASE ? '' : ' (8123 was busy)'}`);
+  console.log(`- .claude/launch.json -> port ${port}`);
   console.log('\nReady. `npm run dev` serves this checkout on its own port.');
 })();

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -110,7 +110,7 @@
           <span class="brand-tile">&#8369;</span>
           <span class="brand-name">Finance</span>
           <!-- stamp-version.js writes this; test.js fails the build if it drifts. -->
-          <span class="brand-ver">v3.1.0</span>
+          <span class="brand-ver">v3.2.0</span>
         </div>
         <div class="nav-group">Overview</div>
         <button class="nav-item active" data-screen="dashboard" title="Summary"><svg class="ico" aria-hidden="true"><use href="#i-summary"/></svg><span class="nav-label">Summary</span></button>
@@ -162,15 +162,20 @@
         </div>
       </div>
 
-      <!-- Modal host -->
-      <div id="modalRoot" class="modal-root" hidden>
-        <div class="modal-backdrop"></div>
+      <!-- Modal host. A real <dialog>, opened with showModal(): the top layer gives the
+           focus trap, Escape, the ::backdrop and focus restore on close for nothing.
+           No role/aria-modal here — a modal dialog carries both already. -->
+      <dialog id="modalRoot" class="modal-root">
         <div class="modal-card" id="modalCard"></div>
-      </div>
+      </dialog>
 
-      <!-- Toasts -->
-      <div id="toastRoot" class="toast-root"></div>
     </div>
+
+    <!-- Toasts. A SIBLING of #app: an open modal makes the rest of the document inert,
+         live regions included, so toast() re-parents this host into whichever dialog is
+         open and drops it back here after. .toast-root is fixed and pointer-events:none,
+         so the move is invisible either way. -->
+    <div id="toastRoot" class="toast-root" role="status" aria-live="polite"></div>
 
     <!-- End of body, not deferred: app.js runs against a built DOM, exactly as it
          did when HtmlService inlined it here. -->

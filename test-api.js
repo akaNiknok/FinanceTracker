@@ -551,11 +551,27 @@ function d1(db) {
   });
 
   await describe('Ledger (Tax screen)', () => {
-    test('the ledger view derives from the linked transaction', async () => {
-      const added = await api.appendLedgerRow({ 'Transaction ID': 't2' }, env);
-      await api.updateLedgerCell({ row: added.row, header: 'BSP Reference Rate', value: '56.5' }, env);
+    // The Tax screen writes through the ADMIN grid's three routes (v3.2.0) — `ledger`
+    // was always a TABLES entry, so the three ledger-only write handlers it used to
+    // have were a second copy of them. getLedger hands the client `table`/`pk`/`edit`,
+    // the header -> column map, which is the one thing it cannot derive.
+    const addLedger = (row) => api.insertTableRow({ table: 'ledger', row }, env);
+    const setLedger = (pk, column, value) =>
+      api.updateTableCell({ table: 'ledger', pk, column, value }, env);
+
+    test('getLedger hands the client what it needs to write through the grid', async () => {
       const l = await api.getLedger({}, env);
-      const row = l.rows.find((r) => r.__row === added.row);
+      assert.strictEqual(l.table, 'ledger');
+      assert.strictEqual(l.pk, 'id');
+      assert.strictEqual(l.edit['BSP Reference Rate'], 'bsp_rate');
+      l.derived.forEach((h) => assert.ok(!(h in l.edit), h + ' is derived but offered as editable'));
+    });
+
+    test('the ledger view derives from the linked transaction', async () => {
+      const added = await addLedger({ tx_id: 't2' });
+      await setLedger(added.pk, 'bsp_rate', '56.5');
+      const l = await api.getLedger({}, env);
+      const row = l.rows.find((r) => r.__row === added.pk);
       assert.strictEqual(row['Date Received'], '2026-07-31');
       assert.strictEqual(row['Reporting Period'], '2026-Aug');   // the derived month, not the raw Period
       assert.strictEqual(row['Wise Amount'], 800);
@@ -566,15 +582,28 @@ function d1(db) {
     });
 
     test('a derived ledger column cannot be edited', async () => {
-      await assert.rejects(() => api.updateLedgerCell({ row: 1, header: 'Total Income', value: 1 }, env),
-        /formula-derived/);
+      await assert.rejects(() => setLedger(1, 'total_income_u', 1), /not editable on ledger/);
+    });
+
+    /* A REAL column reached through the grid arrives as a typed STRING. SQLite's REAL
+     * affinity converts "56.5" but NOT "1,056.5" — a thousands separator silently
+     * lands TEXT in a numeric column, which then reads as 0 in every sum downstream.
+     * TABLES.num is what strips it; only declared-numeric columns are touched. */
+    test('a numeric grid column takes a typed thousands separator', async () => {
+      const added = await addLedger({ tx_id: 't2' });
+      await setLedger(added.pk, 'bsp_rate', '1,056.5');
+      const back = await env.DB.prepare('SELECT bsp_rate FROM ledger WHERE id = ?').bind(added.pk).first();
+      assert.strictEqual(back.bsp_rate, 1056.5);
+      assert.strictEqual(typeof back.bsp_rate, 'number', 'a comma left the rate as TEXT');
+      await assert.rejects(() => setLedger(added.pk, 'bsp_rate', 'fifty'), /must be a number/);
+      await api.deleteTableRow({ table: 'ledger', pk: added.pk }, env);
     });
 
     test('deleting the transaction leaves a warning row, not a broken delete', async () => {
       await api.deleteTransaction({ ID: 't2' }, env);
       const row = (await api.getLedger({}, env)).rows[0];
       assert.strictEqual(row['Date Received'], '⚠ transaction deleted');
-      await api.deleteLedgerRow({ row: row.__row }, env);
+      await api.deleteTableRow({ table: 'ledger', pk: row.__row }, env);
       assert.strictEqual((await api.getLedger({}, env)).rows.length, 0);
     });
 
@@ -585,8 +614,8 @@ function d1(db) {
     test('getLedger returns one year, and always the date-less rows', async () => {
       await api.createTransaction({ ID: 't-2024', Date: '2024-03-15', Category: 'Expense: Food',
                                     Account: 'Maya', Amount: 100 }, env);
-      const old24 = (await api.appendLedgerRow({ 'Transaction ID': 't-2024' }, env)).row;
-      const orphan = (await api.appendLedgerRow({ 'Transaction ID': 'no-such-tx' }, env)).row;
+      const old24 = (await addLedger({ tx_id: 't-2024' })).pk;
+      const orphan = (await addLedger({ tx_id: 'no-such-tx' })).pk;
 
       const y24 = await api.getLedger({ year: '2024' }, env);
       assert.deepStrictEqual(y24.rows.map((r) => r.__row).sort(), [old24, orphan].sort());

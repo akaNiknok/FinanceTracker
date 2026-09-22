@@ -557,10 +557,16 @@ table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
 /* iOS zooms the page into any field under 16px when it takes focus. !important because
  * the smaller field styles below are more specific. */
 @media(pointer:coarse){ :is(input,select,textarea):not(.ed-in,.ed-search){font-size:16px!important} }   /* the editor's own fields are 17px+ */
+/* Both overlays are real <dialog>s opened with showModal() (v3.2.0): the top layer is
+ * what gives focus containment, Escape, focus restore and the backdrop, all of which
+ * used to be hand-written JS. The UA sheet styles a dialog as a small white box, so
+ * each one is reset to a full-viewport host that holds its own card. Plain class
+ * specificity, so the rules further down still win on the keys they set. */
+.modal-root,.ed-root{margin:0;width:auto;height:auto;max-width:none;max-height:none;
+  border:0;padding:0;background:none;color:inherit;overflow:visible}
 .modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;
   padding:calc(max(16px,env(safe-area-inset-top)) + var(--edge)) 16px max(16px,env(safe-area-inset-bottom))}
-.modal-root[hidden]{display:none}
-.modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(3px)}
+.modal-root::backdrop{background:rgba(0,0,0,.6);backdrop-filter:blur(3px)}
 /* max-height:100% (not 90vh) so the card fits the JS-set visual-viewport height when the iOS keyboard is up. */
 .modal-card{position:relative;background:var(--card);border-radius:20px;
   width:100%;max-width:460px;max-height:100%;overflow:auto;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
@@ -830,8 +836,9 @@ table.tbl td.editing{padding:0}
 
 /* ── Transaction editor (DESIGN.md "Editor"): a page on a phone, a form sheet from 768px ── */
 .ed-root{position:fixed;left:0;right:0;top:0;height:var(--app-h,100dvh);z-index:48}
-.ed-root[hidden]{display:none}
-.ed-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.4);opacity:0;transition:opacity .3s}
+/* Transparent on a phone — the card is the whole screen there, so there is nothing to
+ * dim behind it. The desktop sheet dims (below). */
+.ed-root::backdrop{background:transparent}
 .ed-card{position:absolute;inset:0;overflow:hidden;background:var(--bg)}
 .ed-root.in .ed-card{animation:edIn .35s cubic-bezier(.2,.8,.2,1)}
 .ed-root.out .ed-card{animation:edOut .3s cubic-bezier(.4,0,1,1) forwards}
@@ -882,9 +889,9 @@ table.tbl td.editing{padding:0}
 @media(min-width:768px){
   .ed-root{display:grid;place-items:center;padding:max(24px,env(safe-area-inset-top)) 24px calc(24px + var(--kb,0px));
     transition:padding .25s cubic-bezier(.2,.8,.2,1)}
-  .ed-backdrop{opacity:1}
-  .ed-root.in .ed-backdrop{animation:edBd .3s}
-  .ed-root.out .ed-backdrop{opacity:0}
+  .ed-root::backdrop{background:rgba(0,0,0,.4)}
+  .ed-root.in::backdrop{animation:edBd .3s}
+  .ed-root.out::backdrop{opacity:0;transition:opacity .3s}
   .ed-card{position:relative;inset:auto;width:min(540px,100%);height:min(680px,100%);border-radius:16px;box-shadow:var(--shadow)}
   .ed-root.in .ed-card{animation:pop .32s cubic-bezier(.2,.8,.2,1)}
   .ed-root.out .ed-card{animation:edFade .2s forwards}

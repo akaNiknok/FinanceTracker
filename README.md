@@ -41,7 +41,7 @@ flowchart TB
     end
 
     DB[("Cloudflare D1<br/>the source of truth")]
-    SS[("Backup spreadsheet")]
+    SS[("Backup file<br/>JSON on Drive")]
 
     TG --> WK
     BR --> WK
@@ -62,7 +62,7 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 
 **The database moved because the runtime was the cost, not the storage.** A measurement showed that an API call needed 0.5 to 2 seconds, and that the Apps Script invocation and its mandatory redirect caused most of the delay. A different database below Apps Script would move only 200 to 800 milliseconds. Thus version 2.0.0 removed Apps Script from the request path and put the data in D1.
 
-**Apps Script keeps the mailbox only.** `GmailApp` is free and permitted access to the owner mailbox, and it has no equivalent outside the platform. Thus two files stay: a courier that sends the text of each labelled email to the Worker, and a puller that writes a copy of the database into a spreadsheet each night.
+**Apps Script keeps the mailbox only.** `GmailApp` is free and permitted access to the owner mailbox, and it has no equivalent outside the platform. Thus two files stay: a courier that sends the text of each labelled email to the Worker, and a puller that writes a copy of the database to Google Drive each night.
 
 **The money is an integer.** Each amount is a count of millionths of a unit, and the conversion to a decimal is at the API boundary only. Thus a sum is exact, and the same column holds a fractional quantity of shares.
 
@@ -86,13 +86,13 @@ The handlers own each write. The bot, the app, the mail courier and the two jobs
 
 | Item | Value |
 | --- | --- |
-| Backend | approximately 3 110 lines of JavaScript in the Worker |
+| Backend | approximately 3 460 lines of JavaScript in the Worker |
 | Database schema | 5 migration files, 12 tables and 1 view |
-| Frontend | approximately 3 620 lines, no framework and no bundler |
-| Apps Script | approximately 430 lines in 3 files, mail and backup only |
+| Frontend | approximately 3 930 lines, no framework and no bundler |
+| Apps Script | approximately 400 lines in 3 files, mail and backup only |
 | Dependencies | none at runtime, one for development |
-| Tests | 137 tests operate offline with `npm test`, and 90 of them use a real SQLite database |
-| Releases | 73 tagged versions, each one from one command |
+| Tests | 142 tests operate offline with `npm test`, and 96 of them use a real SQLite database |
+| Releases | 81 tagged versions, each one from one command |
 | Transactions | more than 1 000 |
 | Monthly cost | none |
 
@@ -122,7 +122,7 @@ The repository is public. Do not put a secret value in a tracked file.
 | Staging database | Cloudflare D1, name `financetracker-staging` | It holds `worker/seed.sql` only. Never put real data here. |
 | Database | Cloudflare D1, name `financetracker` | Region `apac`. The id is in `worker/wrangler.toml`. |
 | Mail courier and backup | Google Apps Script | Open script.google.com, or use `npm run open`. The project id is in `.clasp.json`. There is no Web App deployment. |
-| Backup spreadsheet | Google Sheets, owner account | The job makes it on the first night and keeps the id in a script property. |
+| Backup file | Google Drive, owner account | One JSON file, rewritten each night. The job makes it on the first night and keeps the id in a script property. Drive keeps the earlier versions. |
 | The bot | Telegram, made with **@BotFather** | |
 | Gemini key | Google AI Studio | Free plan. |
 | Share prices | Interactive Brokers Flex Web Service | See the maintenance task below. |
@@ -159,7 +159,7 @@ For `npx wrangler dev`, put the same names in `worker/.dev.vars`. Git ignores th
 | `INGEST_TOKEN` | It must be the same as the Worker secret of the same name. |
 | `GMAIL_HINTS` | Text for the parser about facts that the email does not state. Usually there is no such property, and the default text in `Gmail.gs` applies. |
 | `GMAIL_QUERY` | It replaces the Gmail search. Usually there is no such property, and a value here has more authority than the label. |
-| `GMAIL_LAST_TS`, `BACKUP_SHEET_ID` | The code writes these values. Do not change them manually. |
+| `GMAIL_LAST_TS`, `BACKUP_FILE_ID` | The code writes these values. Do not change them manually. |
 
 ### Settings in the database
 
@@ -304,7 +304,7 @@ The code and the database do not go back together. Undo the code first.
 ### How to recover the data
 
 1. **D1 Time Travel.** It restores the database to a time in the last 7 days: `npx wrangler d1 time-travel restore financetracker --timestamp=<ISO time>`.
-2. **The backup spreadsheet.** It holds one tab for each table, from the last night.
+2. **The backup file.** It holds every table as JSON, from the last night. Drive keeps the earlier versions of the file.
 3. **The Admin screen.** Each table has an **Export CSV** button.
 
 ## Fault isolation
@@ -321,6 +321,7 @@ The code and the database do not go back together. Undo the code first.
 | The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create financetracker-staging --location=apac`, then write the id into the file. |
 | The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
 | The app asks for the passphrase frequently. | A person changed `APP_PASS`, or the cookie is more than one year old. |
+| The app shows "Storage is full" and does not save the entry. | The device has no free space for the offline queue. The app deletes the cached screens first, then makes a second attempt. This message means that the second attempt also failed. Delete files on the device. Then enter the transaction again, because the app did not record it. |
 | The app starts, but each request fails. | `npm run tail`. Usually the D1 binding or a secret is absent. |
 | The bot sends the message "share count drift". | The count of shares in the ledger does not agree with the count at IBKR. Examine a corporate action first, for example a split of shares. For a split, multiply the quantity of shares in each earlier transfer leg. Change the field **ToAmount** on a purchase. Change the field **Amount** on a sale. Change a leg before the effective date only. Then examine a trade that nobody recorded. The job does not write the count from IBKR, because that action hides the cause. |
 | The price job says "blocked before IBKR answered". | An edge between the Worker and IBKR refused the request. IBKR never saw it, so no token and no query is at fault. The reply body names the edge, for example "403 error code: 1000". Do nothing the first time: the job tries a second request by itself, and the next run is the following morning. Examine the IBKR system status page if the message arrives on two days. |
