@@ -13,6 +13,7 @@
  * name prefix IS the rule that picks between them — it matches ROUTES_READ in
  * worker.js, so there's no second list to keep in sync. Nothing secret reaches
  * this file. */
+var GS_TIMEOUT = 20000;
 function gs(fn, arg, etag, _retried){
   var action = fn.replace(/^api_/, '');
   var read = /^(get|list)/.test(action);
@@ -39,6 +40,13 @@ function gs(fn, arg, etag, _retried){
     if (QUEUEABLE[action] && !body.ID) body.ID = 'ui-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     init = { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) };
   }
+  // A dying connection leaves fetch hanging forever instead of rejecting — the spinner
+  // never resolves AND the offline queue never engages, because the whole offline story
+  // below depends on that rejection. An abort lands in the reject branch and is treated
+  // as offline, which is the right answer: the write is queued and replays under the
+  // same client-supplied ID, so a request that DID land can't post twice.
+  // ponytail: one fixed budget for every route; split it if a slow report ever trips it.
+  if (AbortSignal.timeout) init.signal = AbortSignal.timeout(GS_TIMEOUT);
   return fetch(url, init).then(function(res){
     netSeen(true);
     // The passphrase cookie expired (or was never set). Ask once, then retry —
@@ -80,9 +88,25 @@ function gs(fn, arg, etag, _retried){
 var LS_QUEUE = 'ft.queue';
 var QUEUEABLE = { createTransaction:1, createTransfer:1 };
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});
+// Ask for storage that eviction under pressure will not take. A no-op on iOS (Add to
+// Home Screen already grants it) and it can be refused anywhere; the queue's own quota
+// handling below is what actually has to hold, so nothing branches on the answer.
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function(){});
 
 function queue(){ try{ return JSON.parse(localStorage.getItem(LS_QUEUE)||'[]'); }catch(e){ return []; } }
-function queueSet(q){ try{ localStorage.setItem(LS_QUEUE, JSON.stringify(q)); }catch(e){} }
+/* A swallowed quota error here is a lost transaction the app still says it saved —
+ * the same "dropping money" bug flushQueue is careful about, through a different door.
+ * LS_CACHE is the only thing big enough to fill the quota (bootstrap plus a payload per
+ * month), and it is disposable by definition, so evict it and retry. If it STILL fails,
+ * the caller has to hear about it: enqueue must not toast "Saved offline". */
+function queueSet(q){
+  var s = JSON.stringify(q);
+  try{ localStorage.setItem(LS_QUEUE, s); }
+  catch(e){
+    try{ localStorage.removeItem(LS_CACHE); localStorage.setItem(LS_QUEUE, s); }
+    catch(e2){ throw new Error('Storage is full — this entry was NOT saved. Free up space and re-enter it.'); }
+  }
+}
 function queueDrop(id){ queueSet(queue().filter(function(x){ return x.arg.ID !== id; })); }
 function enqueue(fn, body){
   var q = queue(); q.push({ fn:fn, arg:body }); queueSet(q);
@@ -455,6 +479,46 @@ function withBoot(cb){
   return ensureBoot().then(cb).catch(function(e){ toast(e.message||e,'err'); });
 }
 
+/* ── last-resort net ─────────────────────────────────────────────────────────
+ * Every fetch path already has a .catch. What had nothing was a throw OUTSIDE one:
+ * a render reading a field a stale cached payload doesn't carry, or an API iOS
+ * doesn't ship. That left #main half-painted or blank — no toast, no Retry, nothing
+ * to do but force-quit the app. Toast it always, and when there is nothing usable on
+ * screen fall back to showErr, which at least offers a way back.
+ * Resource errors (a failed <img>) arrive here with e.target and no e.error; they are
+ * not ours to report. */
+function crash(e){
+  var msg = (e && e.message) || String(e || 'Something went wrong');
+  try{
+    toast(msg,'err');
+    var m = $('#main');
+    if(m && (!m.firstElementChild || $('#bootLoader'))) showErr(msg);
+  }catch(e2){}   // a handler that throws would loop straight back into itself
+}
+window.addEventListener('error', function(e){ if(e.error) crash(e.error); });
+window.addEventListener('unhandledrejection', function(e){ crash(e.reason); });
+
+/* ── resume ──────────────────────────────────────────────────────────────────
+ * iOS suspends a backgrounded PWA and restores it in place, so coming back through
+ * the app switcher can show figures from days ago under a green "Synced" dot. There
+ * is no push and nothing self-refreshes, so the return to the foreground IS the
+ * signal. dropCache keeps the ETags, so a screen that did not move costs a 304.
+ * The threshold is REVAL_TTL on purpose: a quick flip to the Telegram bot and back
+ * still repaints at once, while Data Saver's 60 s protects the radio wake-up. */
+var _hidAt = 0;
+function onResume(){
+  if(document.hidden){ _hidAt = Date.now(); return; }
+  if(Date.now() - _hidAt < REVAL_TTL) return;
+  dropCache();
+  flushQueue();   // 'online' does not fire for an app that was suspended offline
+  // Never while the owner is mid-entry: a repaint would throw away an open editor or
+  // an inline-edit cell. The stamps are already cleared, so the next navigation
+  // revalidates anyway — only the immediate repaint is skipped.
+  var a = document.activeElement;
+  if(edOpen() || !$('#modalRoot').hidden || (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
+  render();
+}
+
 function boot(){
   var warm = loadCache();   // before the first render: paint from the last session
   S.month = monthKey(new Date());
@@ -476,6 +540,10 @@ function boot(){
     var s=new URLSearchParams(location.search).get('screen')||'dashboard';
     if(s!==S.screen) go(s,true);
   });
+  document.addEventListener('visibilitychange', onResume);
+  // Safari's back/forward cache restores a whole live page, which the visibility
+  // event does not cover; the same staleness applies.
+  window.addEventListener('pageshow', function(e){ if(e.persisted){ _hidAt = 0; onResume(); } });
   // Scroll-wheel over a focused number input silently changes the value — block it.
   document.addEventListener('wheel',function(e){
     if(e.target.type==='number' && document.activeElement===e.target) e.preventDefault();
@@ -3177,12 +3245,40 @@ function fitModal(){
   if(!vv||!root||root.hidden) return;
   root.style.top=vv.offsetTop+'px'; root.style.height=vv.height+'px';
 }
+/* Focus containment for the two overlays (this modal and the editor below). Without
+ * it Tab walks straight out of the dialog and into the page behind it — invisible on
+ * a phone, immediate on an iPad with a keyboard or on desktop. `inert` is the native
+ * answer (Safari 15.5+, Chrome 102+); an older browser just keeps the old behaviour.
+ * Call it with the overlay to open, and with nothing to close. The element that had
+ * focus is remembered and restored, or closing leaves focus on <body> and the keyboard
+ * has nowhere to resume from. It is a STACK because the unlock dialog can open over
+ * the editor (a save whose cookie lapsed), and the editor must still be trapped when
+ * that dialog closes. */
+var _traps=[], _hadFocus=[], _inerted=[];
+function trapFocus(keep){
+  _inerted.forEach(function(n){ n.inert=false; });
+  _inerted=[];
+  if(keep){ _traps.push(keep); _hadFocus.push(document.activeElement); }
+  else { _traps.pop(); var back=_hadFocus.pop(); if(back) try{ back.focus(); }catch(e){} }
+  var top=_traps[_traps.length-1];
+  if(!top) return;
+  // Walk up to <body> inerting the SIBLINGS at each level: the overlay's own ancestors
+  // have to stay live, or it would go inert along with the page behind it.
+  for(var n=top; n && n!==document.body; n=n.parentElement){
+    Array.prototype.forEach.call(n.parentElement.children, function(s){
+      // #toastRoot stays live: it is where an error from inside the overlay lands,
+      // and inert would drop it out of the accessibility tree.
+      if(s!==n && s.tagName!=='SCRIPT' && s.id!=='toastRoot'){ s.inert=true; _inerted.push(s); }
+    });
+  }
+}
 // opts.sheet: a bottom sheet on a phone (app.css), a centred card from 768px.
 function openModal(node, opts){
   var root=$('#modalRoot'); var card=$('#modalCard');
   closeModal.onClose=null;
   root.classList.toggle('as-sheet', !!(opts&&opts.sheet));
   card.innerHTML=''; card.appendChild(node); root.hidden=false;
+  trapFocus(root);
   if(window.visualViewport){ visualViewport.addEventListener('resize',fitModal); visualViewport.addEventListener('scroll',fitModal); fitModal(); }
   $('.modal-backdrop',root).onclick=closeModal;
   // Enter in a plain input submits (combos handle Enter themselves to pick an option)
@@ -3199,7 +3295,11 @@ document.addEventListener('keydown',function(e){
   if(e.key==='Escape' && !$('#modalRoot').hidden) closeModal();
 });
 function closeModal(){
-  var root=$('#modalRoot'); root.hidden=true; root.style.top=''; root.style.height='';
+  var root=$('#modalRoot'), wasOpen=!root.hidden;
+  root.hidden=true; root.style.top=''; root.style.height='';
+  // Only when it really was open: closeModal is also called defensively, and an
+  // unbalanced pop would drop the editor's trap underneath it.
+  if(wasOpen) trapFocus(null);
   if(window.visualViewport){ visualViewport.removeEventListener('resize',fitModal); visualViewport.removeEventListener('scroll',fitModal); }
   // Dismiss hook — the login form needs to know it was cancelled by the backdrop or
   // Escape, not just by its own button, or unlock()'s promise never settles and every
@@ -3398,11 +3498,14 @@ function openEditor(page){
   var r=edRoot(), card=r.lastChild, fresh=!edOpen();
   clearTimeout(ED.t);
   card.innerHTML=''; card.appendChild(page); ED.pages=[page];
-  if(fresh){ r.classList.remove('in','out'); r.hidden=false; void card.offsetWidth; r.classList.add('in'); }
+  // Only on a fresh open: the Transaction ⇄ Transfer switch re-enters here with the
+  // editor already up, and a second trap would leave the page behind inert after close.
+  if(fresh){ r.classList.remove('in','out'); r.hidden=false; void card.offsetWidth; r.classList.add('in'); trapFocus(r); }
 }
 function closeEditor(){
   var r=ED.root; if(!edOpen()) return;
   if(document.activeElement&&r.contains(document.activeElement)) document.activeElement.blur();
+  trapFocus(null);
   ED.pages=[]; r.classList.add('out');
   ED.t=setTimeout(function(){ r.hidden=true; r.classList.remove('in','out'); r.lastChild.innerHTML=''; },300);
 }
