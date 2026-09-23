@@ -753,6 +753,10 @@ describe('Gmail courier watermark (vm)', () => {
       // any save: the next form mounted there, untappable, over the last one's stale copy.
       const appSrc = fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8');
       assert.ok(!/\b(r|ED\.root)\.(lastChild|lastElementChild)\b/.test(appSrc), 'find the editor card through ED.card, not by position');
+      // A dialog host's own display beats the UA's display:none for a closed dialog, so
+      // without this rule a closed #modalRoot covers the app and eats every tap (v3.2.3).
+      const cssSrc = fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.css'), 'utf8');
+      assert.ok(cssSrc.includes('.modal-root:not([open]),.ed-root:not([open]){display:none}'), 'a closed dialog must not cover the app');
       // Left to spend counts TODAY: the last day of the month is 1 day left, never 0.
       assert.strictEqual(app.daysLeftIn(new Date(2026, 8, 30)), 1, 'the last day still counts');
       assert.strictEqual(app.daysLeftIn(new Date(2026, 8, 23)), 8);
