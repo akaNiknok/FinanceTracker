@@ -748,6 +748,29 @@ describe('Gmail courier watermark (vm)', () => {
       assert.strictEqual(app.yearsMonths(353), '1y 0m', '11.6 months rounds up to a year');
       assert.strictEqual(app.yearsMonths(330), '11m');
       assert.strictEqual(app.yearsMonths(10), 'Under a month');
+      // The editor's card is held by reference. toastRoot() parks #toastRoot inside the
+      // editor dialog, so a card found by POSITION (lastChild) became the toast strip after
+      // any save: the next form mounted there, untappable, over the last one's stale copy.
+      const appSrc = fs.readFileSync(path.join(__dirname, 'worker', 'public', 'app.js'), 'utf8');
+      assert.ok(!/\b(r|ED\.root)\.(lastChild|lastElementChild)\b/.test(appSrc), 'find the editor card through ED.card, not by position');
+      // Left to spend counts TODAY: the last day of the month is 1 day left, never 0.
+      assert.strictEqual(app.daysLeftIn(new Date(2026, 8, 30)), 1, 'the last day still counts');
+      assert.strictEqual(app.daysLeftIn(new Date(2026, 8, 23)), 8);
+      assert.strictEqual(app.daysLeftIn(new Date(2028, 1, 1)), 29, 'a leap February');
+      // The forms' pre-save check. Offline, anything the server would refuse was queued,
+      // toasted "Saved offline", then DROPPED at sync — a transfer with no To account or a
+      // zero amount lost the entry that way.
+      const okTx = { Category: 'Food', Account: 'GCash', Amount: 180 };
+      assert.strictEqual(app.draftError(okTx, false), '');
+      assert.strictEqual(app.draftError(Object.assign({}, okTx, { Amount: -95 }), false), '', 'a refund is allowed');
+      assert.ok(app.draftError(Object.assign({}, okTx, { Amount: 0 }), false), 'a zero amount must be refused');
+      assert.ok(app.draftError(Object.assign({}, okTx, { Amount: NaN }), false));
+      assert.ok(app.draftError(Object.assign({}, okTx, { Category: '' }), false));
+      const okX = { Category: 'Transfer: Internal', Account: 'Wise', ToAccount: 'GCash', Amount: 100 };
+      assert.strictEqual(app.draftError(okX, true), '');
+      assert.ok(app.draftError(Object.assign({}, okX, { ToAccount: '' }), true), 'a transfer needs its To account');
+      assert.ok(app.draftError(Object.assign({}, okX, { ToAccount: 'Wise' }), true), 'From and To must differ');
+      assert.ok(app.draftError(Object.assign({}, okX, { Amount: 0 }), true));
 
       // A refund is a NEGATIVE Expense row. The list used to read Amount as a magnitude
       // and take its sign from the category type, which printed "- -₱95" and — far

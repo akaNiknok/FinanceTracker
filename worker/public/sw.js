@@ -8,7 +8,8 @@
  * stale figures with no way to tell. /api and /login must reach the network so
  * gs() sees a real failure and can queue the write.
  */
-const CACHE = 'ft-shell';
+// -2: the old name held a copy of the page per deep link; the rename makes activate drop it.
+const CACHE = 'ft-shell-2';
 // No font files: the app uses the system font stack (DESIGN.md), so text renders
 // offline with nothing cached for it.
 const SHELL = ['/', '/app.css', '/app.js', '/manifest.json'];
@@ -44,7 +45,9 @@ self.addEventListener('fetch', function (e) {
     // is still one tap away.
     if (hit && navigator.connection && navigator.connection.saveData) return hit;
     const fresh = fetch(e.request).then(function (res) {
-      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(e.request, copy); }); }
+      // Keyed WITHOUT the query: every deep link (/?screen=…&tx=…) is the same page, and
+      // keying on the full URL stored one more copy of it per Telegram receipt, forever.
+      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(function (c) { c.put(url.origin + url.pathname, copy); }); }
       return res;
     });
     if (!hit) return fresh;
