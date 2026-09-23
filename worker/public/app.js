@@ -573,6 +573,10 @@ function boot(){
   var p=new URLSearchParams(location.search);
   var first=p.get('screen')||lastScreen();
   if(first) go(first,true); else render();
+  // Write the screen we actually opened into this history entry, and drop ?tx=: Back
+  // from the next screen then returns here (not to Summary), and a reload does not
+  // reopen the editor.
+  history.replaceState(null,'','?screen='+encodeURIComponent(S.screen));
   // ?tx=<ID> — the Telegram receipt's "Edit details" button: open that row's modal.
   if(p.get('tx')) openTxById(p.get('tx'));
   (warm ? revalidateBoot() : ensureBoot().then(function(){
@@ -1242,11 +1246,13 @@ function nwTile(d,ser){
   return t;
 }
 
+// Days left in the month, TODAY INCLUDED: it can still be spent, so the last day is 1, not 0.
+function daysLeftIn(now){ return new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()+1; }
 /* Left to spend: the Essentials + Rewards budget minus their signed spend. The
  * other segments (Growth) are money kept, not spent, so they sit below as rows. */
 function leftTile(d,isLive){
   var er=d.essentialsRewards; if(!er||er.targetPhp==null) return null;
-  var now=new Date(), daysLeft=isLive?(new Date(now.getFullYear(),now.getMonth()+1,0).getDate()-now.getDate()):null;
+  var daysLeft=isLive?daysLeftIn(new Date()):null;
   var left=er.remainingPhp, perDay=daysLeft>0&&left>0?left/daysLeft:null;
   var inWhat=isLive?'this month':'in '+monthLabel(S.month);
   var rows=[['Essentials + Rewards budget',money(er.targetPhp,true)],['− Spent '+inWhat,money(er.actualPhp,true)],
@@ -1984,7 +1990,7 @@ function renderTxList(){
       day.appendChild(card); c.appendChild(day);
     });
   }
-  if(S.tx.total>S.tx.limit) c.appendChild(pagerEl(S.tx.offset,S.tx.limit,S.tx.total,function(o){ S.tx.offset=o; loadTx(); }));
+  if(S.tx.total>S.tx.limit) c.appendChild(pagerEl(S.tx.offset,S.tx.limit,S.tx.total,function(o){ S.tx.offset=o; clearSel(); loadTx(); }));
   updateBulkBar();
 }
 
@@ -2544,8 +2550,8 @@ function acctMain(a){
  *  TAX / BIR (Ledger)
  * ════════════════════════════════════════════════════════════════════════ */
 function renderTax(){
-  if(!S.cache['tax']) loading('table');
   var yr=S.taxYear||String(new Date().getFullYear());
+  if(!S.cache['tax|'+yr]) loading('table');
   return cachedCall('tax|'+yr, function(et){return gs('api_getLedger',{year:yr},et);}, function(res){
     var rows=(res.rows||[]).slice();
     var cols=ledgerCols(res.cols||(rows[0]?Object.keys(rows[0]).filter(function(k){return k!=='__row';}):[]));
@@ -3466,11 +3472,15 @@ function commitTx(o){
  * scrolled to the focused field, and the two fought (the modal jumped). Here nothing moves
  * for the keyboard: --kb (its height) only pads the bottom, and the text fields sit at the
  * top of the form, above where the keyboard lands. */
-var ED={root:null, pages:[], t:0};
+var ED={root:null, card:null, pages:[], t:0};
 function edRoot(){
   if(ED.root) return ED.root;
   var r=el('dialog','ed-root');
   r.innerHTML='<div class="ed-card"></div>';
+  // Held by reference, never found by position: toastRoot() parks #toastRoot inside
+  // this dialog, and as its lastChild it once took the card's place — the next form
+  // mounted in the untappable toast strip while the card still showed the last one.
+  ED.card=r.firstChild;
   // The dialog is the full-viewport host; a click on it rather than on the card is a
   // click on the backdrop. Escape does the same thing the backdrop does — see popPage.
   r.onclick=function(e){ if(e.target===r) closeEditor(); };
@@ -3485,12 +3495,14 @@ function edRoot(){
 function edOpen(){ return !!(ED.root&&ED.root.open&&ED.pages.length); }
 // Show a form page. Already open (the Transaction ⇄ Transfer switch): swap in place.
 function openEditor(page){
-  var r=edRoot(), card=r.lastChild, fresh=!edOpen();
+  var r=edRoot(), card=ED.card, fresh=!edOpen();
   clearTimeout(ED.t);
   card.innerHTML=''; card.appendChild(page); ED.pages=[page];
   // Only on a fresh open: the Transaction ⇄ Transfer switch re-enters here with the
   // editor already up, and showModal() on an open dialog throws.
-  if(fresh){ r.classList.remove('in','out'); r.showModal(); void card.offsetWidth; r.classList.add('in'); }
+  // Still open inside the 300ms close animation (a fast refusal reopening the form):
+  // the timeout is cleared above, and showModal() on an open dialog would throw.
+  if(fresh){ r.classList.remove('in','out'); if(!r.open) r.showModal(); void card.offsetWidth; r.classList.add('in'); }
 }
 /* The exit animation runs while the dialog is still open — close() would drop it out
  * of the top layer at once and there would be nothing left to animate. */
@@ -3498,9 +3510,9 @@ function closeEditor(){
   var r=ED.root; if(!edOpen()) return;
   if(document.activeElement&&r.contains(document.activeElement)) document.activeElement.blur();
   ED.pages=[]; r.classList.add('out');
-  ED.t=setTimeout(function(){ r.close(); r.classList.remove('in','out'); r.lastChild.innerHTML=''; },300);
+  ED.t=setTimeout(function(){ r.close(); r.classList.remove('in','out'); ED.card.innerHTML=''; },300);
 }
-function pushPage(p){ p.classList.add('push'); ED.root.lastChild.appendChild(p); ED.pages.push(p); }
+function pushPage(p){ p.classList.add('push'); ED.card.appendChild(p); ED.pages.push(p); }
 function popPage(){
   if(ED.pages.length<2) return closeEditor();
   var p=ED.pages.pop(); p.classList.add('pop');
@@ -3674,7 +3686,7 @@ function openTxModal(t){
     if(period||isEdit) payload.Period=period; // on edit, '' clears the override
     if(fFx&&fFx.value) payload.ExchangeRate=edNum(fFx);
     else if(isEdit) payload.ExchangeRate=''; // cleared (or never set) on edit → re-resolve/clear the stamp (issue #7)
-    if(!payload.Category||!payload.Account||isNaN(payload.Amount)){toast('Pick a category and an account, and type an amount','err');return;}
+    var bad=draftError(payload,false); if(bad){ toast(bad,'err'); return; }
     prefSet('lastAcct',payload.Account);   // the next add defaults to this account
     commitTx({t:t, payload:payload, isEdit:isEdit, create:'api_createTransaction',
               addedMsg:'Added', failMsg:'Add failed', reopen:openTxModal});
@@ -3722,9 +3734,9 @@ function openTransferModal(t){
   draft=function(){ return {Date:fDate.value,Period:fPeriod?fPeriod.value:(t&&t.Period)||'',Account:fFrom.value,Amount:fAmt.value,Description:fDesc.value,Category:''}; };
 
   function doSave(){
-    if(fFrom.value===fTo.value){toast('From and To must differ','err');return;}
-    var amount=edNum(fAmt);
-    if(isNaN(amount)){toast('Enter an amount','err');return;}
+    var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
+                 ToAccount:fTo.value,Amount:edNum(fAmt),Description:fDesc.value};
+    var bad=draftError(payload,true); if(bad){ toast(bad,'err'); return; }
     // The server refuses this too; asking here keeps the typed form on screen.
     if(xferNeedsTo(fFrom.value,fTo.value,fToAmt&&fToAmt.value)){
       var more=page.querySelector('.ed-morebtn'); if(more) more.click();
@@ -3732,8 +3744,6 @@ function openTransferModal(t){
       if(fToAmt) fToAmt.focus();
       return;
     }
-    var payload={Date:fDate.value,Category:fCat.value,Account:fFrom.value,
-                 ToAccount:fTo.value,Amount:amount,Description:fDesc.value};
     var period=fPeriod?fPeriod.value:(t&&t.Period)||'';
     if(period||isEdit) payload.Period=period; // on edit, '' clears the override
     if(fToAmt&&fToAmt.value) payload.ToAmount=edNum(fToAmt);
@@ -3746,6 +3756,20 @@ function openTransferModal(t){
   edEnter(page,doSave);
   openEditor(page);
   if(!isEdit&&!fAmt.value&&matchMedia('(pointer:fine)').matches) fAmt.focus();
+}
+
+/* What the server would refuse in a new or edited row, checked BEFORE commitTx. Online a
+ * refusal just reopens the form, but offline the row is queued, the owner sees "Saved
+ * offline", and the sync then drops it as a final refusal. Pure, tested in test.js. */
+function draftError(p, xfer){
+  if(xfer){
+    if(!p.Account||!p.ToAccount) return 'Pick the From and To accounts';
+    if(p.Account===p.ToAccount) return 'From and To must differ';
+    if(!p.Category) return 'Pick a category';
+  } else if(!p.Category||!p.Account) return 'Pick a category and an account';
+  if(typeof p.Amount!=='number'||isNaN(p.Amount)) return 'Type an amount';
+  if(p.Amount===0) return 'The amount cannot be zero';
+  return '';
 }
 
 function confirmDelete(t){
@@ -3830,8 +3854,11 @@ function openAccountModal(a){
     if(newColor !== (a.color||'')) payload['Color']=newColor;
     if(Object.keys(payload).length===1){toast('No changes','err');return;}
     save.disabled=true; save.textContent='Saving…';
+    // The account lives in S.boot too (dots, pickers, holding colours), so re-read the
+    // bootstrap: it repaints the CURRENT screen — this modal also opens from Investments.
     gs('api_updateAccount',payload).then(function(){
-      closeModal(); toast('Saved','ok'); dropCache(); renderAccounts();
+      closeModal(); toast('Saved','ok'); dropCache();
+      revalidateBoot().catch(function(){ render(); });
     }).catch(function(e){ save.disabled=false; save.textContent='Save'; toast(e.message||e,'err'); });
   };
   openModal(modalShell(a.name, body, [save]));
