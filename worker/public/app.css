@@ -567,6 +567,9 @@ table.tbl .icon-btn:hover{background:var(--card-3);color:var(--neg)}
 .modal-root{position:fixed;inset:0;z-index:50;display:grid;place-items:center;
   padding:calc(max(16px,env(safe-area-inset-top)) + var(--edge)) 16px max(16px,env(safe-area-inset-bottom))}
 .modal-root::backdrop{background:rgba(0,0,0,.6);backdrop-filter:blur(3px)}
+/* The display:grid above and on .ed-root beats the UA's dialog:not([open]){display:none},
+ * so a CLOSED dialog stayed a transparent full-viewport layer and ate every tap. */
+.modal-root:not([open]),.ed-root:not([open]){display:none}
 /* max-height:100% (not 90vh) so the card fits the JS-set visual-viewport height when the iOS keyboard is up. */
 .modal-card{position:relative;background:var(--card);border-radius:20px;
   width:100%;max-width:460px;max-height:100%;overflow:auto;box-shadow:var(--shadow);animation:pop .32s cubic-bezier(.2,.8,.2,1)}
