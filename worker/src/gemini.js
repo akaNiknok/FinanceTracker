@@ -1,7 +1,7 @@
 /**
- * gemini.js — the message parser. Straight port of tg_parse_/tg_tryModels_/
- * tg_prompt_ from Telegram.gs: same REST endpoint, same responseSchema, same
- * flash -> flash-lite -> pro fallback, same prompt text word for word.
+ * gemini.js — the message parser: the generateContent call, its responseSchema,
+ * the MODELS fallback chain under a per-attempt cap and a chain budget, and the
+ * system prompt. Began as a port of tg_parse_/tg_tryModels_/tg_prompt_ from Telegram.gs.
  *
  * UrlFetchApp becomes fetch, and the live category/account lists come from D1
  * instead of two sheet reads. Nothing else moved: the free tier is keyed to the API
@@ -94,7 +94,7 @@ export async function parse(env, refs, text, unixDate, budget = {}) {
   const payload = JSON.stringify({
     systemInstruction: { parts: [{ text: prompt(refs, unixDate) }] },
     contents: [{ role: 'user', parts: [{ text }] }],
-    generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: SCHEMA }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: SCHEMA }
   });
   return JSON.parse(await tryModels(MODELS, (model, ms) => generate(model, key, payload, ms),
                                     budget.budgetMs, undefined, budget.capMs));
