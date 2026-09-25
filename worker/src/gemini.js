@@ -1,7 +1,7 @@
 /**
- * gemini.js — the message parser. Straight port of tg_parse_/tg_tryModels_/
- * tg_prompt_ from Telegram.gs: same REST endpoint, same responseSchema, same
- * flash -> flash-lite -> pro fallback, same prompt text word for word.
+ * gemini.js — the message parser: the generateContent call, its responseSchema,
+ * the MODELS fallback chain under a per-attempt cap and a chain budget, and the
+ * system prompt. Began as a port of tg_parse_/tg_tryModels_/tg_prompt_ from Telegram.gs.
  *
  * UrlFetchApp becomes fetch, and the live category/account lists come from D1
  * instead of two sheet reads. Nothing else moved: the free tier is keyed to the API
@@ -66,9 +66,9 @@ const TX_SCHEMA = {
 const SCHEMA = {
   type: 'OBJECT',
   properties: {
-    // Plain STRING, not an enum: an unrecognised value falls back to "log", which is
-    // the pre-existing behaviour — safer than risking a schema the API rejects.
-    intent: { type: 'STRING', description: '"log" to record transactions, "query" to answer a question about past ones, "balance" to report what is in the accounts right now, "undo" to take back the previous message' },
+    // An enum (2026-09-25): as a plain STRING the model invented "error"/"none" for a
+    // non-transaction message. "none" is the honest answer there; error carries why.
+    intent: { type: 'STRING', format: 'enum', enum: ['log', 'query', 'balance', 'undo', 'none'], description: '"log" to record transactions, "query" to answer a question about past ones, "balance" to report what is in the accounts right now, "undo" to take back the previous message, "none" when it is none of these (then set error)' },
     items: { type: 'ARRAY', nullable: true, items: TX_SCHEMA,
              description: 'One entry per transaction in the message (intent=log). A message may contain several.' },
     query: { type: 'OBJECT', nullable: true, description: 'Filters for intent=query (intent=balance uses account only); omit the ones the message does not imply',
@@ -94,7 +94,7 @@ export async function parse(env, refs, text, unixDate, budget = {}) {
   const payload = JSON.stringify({
     systemInstruction: { parts: [{ text: prompt(refs, unixDate) }] },
     contents: [{ role: 'user', parts: [{ text }] }],
-    generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: SCHEMA }
+    generationConfig: { responseMimeType: 'application/json', responseSchema: SCHEMA }
   });
   return JSON.parse(await tryModels(MODELS, (model, ms) => generate(model, key, payload, ms),
                                     budget.budgetMs, undefined, budget.capMs));

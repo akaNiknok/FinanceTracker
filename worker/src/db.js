@@ -144,10 +144,8 @@ export async function metaSet(env, key, value) {
  * refetched a screen when the number moved. It moved on EVERY write, so an ingest the
  * owner never saw re-downloaded every cached screen. Reads now carry an ETag over their
  * own bytes (worker.js readResponse), which is exact, needs nothing from a write path,
- * and cannot be forgotten by a new handler.
- * ponytail: `meta.data_version` is left in the table on purpose — dropping it in the
- * same release as the code that stopped using it would leave a `wrangler rollback`
- * with a frozen counter and permanently stale screens. Drop it a release later.
+ * and cannot be forgotten by a new handler. The `meta.data_version` row itself went in
+ * migration 0006.
  */
 
 // ── balances (the port of "derivation lives in the Sheet") ───────────────────
