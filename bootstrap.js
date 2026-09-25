@@ -36,7 +36,7 @@ const devVars = path.join('worker', '.dev.vars');
 if (!isWorktree) {
   console.log(fs.existsSync(devVars)
     ? '- worker/.dev.vars present'
-    : '- worker/.dev.vars missing. Create it before `npm run dev` (README lists the keys).');
+    : '- worker/.dev.vars missing. Create it before `npm run dev` (HANDBOOK.md lists the keys).');
 } else if (fs.existsSync(devVars)) {
   console.log('- worker/.dev.vars present');
 } else {
