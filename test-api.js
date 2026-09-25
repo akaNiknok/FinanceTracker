@@ -703,7 +703,7 @@ function d1(db) {
       const p = await api.listTable({ table: 'prices' }, env);
       assert.ok(p.rows[0].rowid, 'prices needs a rowid handle — its key is composite');
       const m = await api.listTable({ table: 'meta' }, env);
-      assert.ok(m.rows.some((r) => r.key === 'data_version'));
+      assert.ok(m.rows.some((r) => r.key === 'monthly_income_php'));
       await api.updateTableCell({ table: 'meta', pk: 'monthly_income_php', column: 'value', value: '50000' }, env);
       assert.strictEqual((await api.getBudgets({ month: '2026-Aug' }, env)).incomePhp, 50000);
       // transactions is read + delete: the escape hatch for a row the UI cannot reach.

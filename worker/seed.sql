@@ -242,12 +242,10 @@ INSERT INTO email_quotes (message_id, quote) VALUES
   ('990003', 'Your order has been delivered. Total: PHP 2,950.00 charged to your RCBC card ending 1234.');
 
 INSERT OR REPLACE INTO meta (key, value) VALUES
-  ('data_version',       '1'),
   ('monthly_income_php', '48000'),
   -- Non-zero on purpose: a local run has no FX key warm, and this is what stops every
   -- USD figure collapsing to zero when the rate lookup cannot reach the network.
   ('usd_php_fallback',   '61'),
   ('owner_email',        'dev@example.com'),
-  ('ledger_first_year',  '2026'),
   ('fire_real_return',   '5'),
   ('tg_last_ids',        '[]');

@@ -176,7 +176,6 @@ The `meta` table holds the settings that were script properties before. Change t
 | `smart_lists` | The saved filter sets of the screen **Activity**, as a JSON list of `{name, filters}` (20 maximum). Save and remove them on the screen **Activity**. |
 | `tg_last_ids` | The code writes this value. Do not change it manually. |
 | `app_url` | The address of the app. The code writes this value. The rescue cron reads it to build the Edit button. Do not change it manually. |
-| `data_version`, `ledger_first_year` | No code reads these rows. A later version removes them. Do not change them. |
 
 ### Triggers and schedules
 
