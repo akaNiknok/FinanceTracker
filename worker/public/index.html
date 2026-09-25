@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <title>FinanceTracker</title>
+    <title>Memento Mori</title>
     <!-- Add to Home Screen on iOS: standalone chrome-less window, dark status bar.
          icon-180/512.png are generated from the SVG in icons.js at the repo root by
          `npm run icons` — don't hand-edit them.
@@ -53,16 +53,16 @@
       addEventListener('orientationchange',fitShell);
     })();
     </script>
-    <meta name="apple-mobile-web-app-title" content="Finance">
+    <meta name="apple-mobile-web-app-title" content="Memento Mori">
     <meta name="theme-color" content="#F2F2F7">
     <link rel="icon" href="/icon-180.png" sizes="180x180" type="image/png">
     <link rel="apple-touch-icon" href="/icon-180.png">
-    <!-- Theme before first paint, so the page never flashes the wrong one. ft.theme is
+    <!-- Theme before first paint, so the page never flashes the wrong one. mm.theme is
          'light' | 'dark' | absent (= Auto, follow the system). applyTheme in app.js
          does the same after a switch; keep the two in step. -->
     <script>
     (function(){
-      var t=null; try{ t=localStorage.getItem('ft.theme'); }catch(e){}
+      var t=null; try{ t=localStorage.getItem('mm.theme'); }catch(e){}
       if(t==='light'||t==='dark') document.documentElement.dataset.theme=t;
       var dark=t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);
       document.querySelector('meta[name=theme-color]').content=dark?'#000000':'#F2F2F7';
@@ -108,9 +108,9 @@
       <nav id="nav" class="nav">
         <div class="nav-brand">
           <span class="brand-tile">&#8369;</span>
-          <span class="brand-name">Finance</span>
+          <span class="brand-name">Memento Mori</span>
           <!-- stamp-version.js writes this; test.js fails the build if it drifts. -->
-          <span class="brand-ver">v3.2.4</span>
+          <span class="brand-ver">v3.3.0</span>
         </div>
         <div class="nav-group">Overview</div>
         <button class="nav-item active" data-screen="dashboard" title="Summary"><svg class="ico" aria-hidden="true"><use href="#i-summary"/></svg><span class="nav-label">Summary</span></button>

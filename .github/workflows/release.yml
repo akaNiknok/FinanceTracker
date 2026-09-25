@@ -77,7 +77,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler@4 d1 migrations apply financetracker --remote
+        run: npx wrangler@4 d1 migrations apply memento-mori --remote
 
       - name: Deploy the Worker
         working-directory: worker

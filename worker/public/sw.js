@@ -9,7 +9,7 @@
  * gs() sees a real failure and can queue the write.
  */
 // -2: the old name held a copy of the page per deep link; the rename makes activate drop it.
-const CACHE = 'ft-shell-2';
+const CACHE = 'mm-shell-2';
 // No font files: the app uses the system font stack (DESIGN.md), so text renders
 // offline with nothing cached for it.
 const SHELL = ['/', '/app.css', '/app.js', '/manifest.json'];

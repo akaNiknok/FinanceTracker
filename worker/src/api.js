@@ -1031,7 +1031,7 @@ export async function getParse(args, env) {
   return { status: 'success', intent: p.intent || 'log', items: p.error ? [] : (p.items || []), error: p.error || null };
 }
 
-// ── iOS widgets (widgets/FinanceTracker.js) ─────────────────────────────────
+// ── iOS widgets (widgets/memento-mori.js) ─────────────────────────────────
 /** meta key holding the balance widget's accounts: a JSON array of up to 3 names. */
 const WIDGET_META = 'widget_accounts';
 const WIDGET_SEGMENTS = ['Essentials', 'Rewards'];

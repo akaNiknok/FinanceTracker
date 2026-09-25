@@ -51,7 +51,7 @@ const chrome = BROWSERS.find((p) => fs.existsSync(p));
 if (!chrome) throw new Error('No Chrome/Edge found; add its path to BROWSERS in icons.js');
 
 for (const [suffix, ICON] of Object.entries(ICONS)) for (const size of SIZES) {
-  const wrap = path.join(os.tmpdir(), `ft-icon-${size}${suffix}.html`);
+  const wrap = path.join(os.tmpdir(), `mm-icon-${size}${suffix}.html`);
   fs.writeFileSync(wrap, `<style>*{margin:0;padding:0}svg{display:block;width:${size}px;height:${size}px}</style>${ICON}`);
   const out = path.join(OUT_DIR, `icon-${size}${suffix}.png`);
   execFileSync(chrome, ['--headless', '--disable-gpu', '--hide-scrollbars',

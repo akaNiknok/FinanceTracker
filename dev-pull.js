@@ -9,7 +9,7 @@ const path = require('node:path');
 
 const worker = path.join(__dirname, 'worker');
 const run = (cmd) => execSync(cmd, { cwd: worker, stdio: 'inherit' });
-const DB = 'financetracker', DUMP = '.dev-data.sql';
+const DB = 'memento-mori', DUMP = '.dev-data.sql';
 
 console.log('→ exporting live D1 (read-only)…');
 run(`npx wrangler d1 export ${DB} --remote --output ${DUMP}`);

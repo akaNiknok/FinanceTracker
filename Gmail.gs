@@ -9,7 +9,7 @@
  * ingestEmail endpoint and trashes the mail only if the Worker says every item landed.
  *
  * Everything the owner touches is unchanged: the Gmail filter that applies the
- * "Finance Tracker" label still decides which mail counts, the inbox is still the
+ * "Memento Mori" label still decides which mail counts, the inbox is still the
  * not-yet-logged list, the watermark still means one look per message, and the
  * Telegram receipt (↻ Undo, ✎ Edit details, ⌕ Email) is identical because the Worker
  * runs the same logItems the bot does.
@@ -48,7 +48,7 @@ const GMAIL_MAX_THREADS_ = 20;
 // Search matches *threads* and the loop below reads every message in them, so a label
 // on one message pulls in its siblings. That is wanted (MariBank's alerts share one
 // thread) and the watermark still means each message is looked at once.
-const GMAIL_LABEL_ = "Finance Tracker";
+const GMAIL_LABEL_ = "Memento Mori";
 const GMAIL_QUERY_ = 'in:inbox label:"' + GMAIL_LABEL_ + '"';
 
 // The account is the one thing these emails never state — an Anthropic receipt names
