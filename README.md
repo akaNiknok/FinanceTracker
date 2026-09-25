@@ -1,4 +1,8 @@
-# FinanceTracker
+# Memento Mori
+
+*Count the money. Remember the days.*
+
+*Memento mori* means "remember that you will die". Your time is limited. Use your money to protect that time, not to replace it.
 
 > A personal finance system with three ways in, no server to maintain, and no monthly cost.
 
@@ -14,7 +18,7 @@ This README is for a person. `CLAUDE.md` is the document for AI assistants. The 
 
 - **Telegram bot.** Send "coffee 120 maya". The bot writes the row and answers with a receipt that has an **Undo** button. One message can hold more than one transaction. The bot also answers `/balance` and questions such as "how much on food this month".
 - **Progressive web app.** Seven screens. You can install it on a phone, and you can record a transaction offline. The app sends the record when the connection comes back.
-- **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Finance Tracker` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
+- **Gmail ingest.** Each 5 minutes, a job reads the emails with the `Memento Mori` label, records each transaction, then moves the email to the trash. To add a bank, change the Gmail filter, not the code.
 - **Net worth history.** Each day the app records the total net worth for the month. The Summary screen shows the history above the cash-flow chart, on the same months.
 - **Retirement countdown.** The Summary screen shows the time to financial independence as years and months. The target is 25 times the yearly expenses. The app calculates the date at each month close, thus the count goes down each day.
 - **iPhone widgets.** Four home-screen widgets show the latest transactions, three account balances, the net worth and the segment targets. See [iPhone widgets](#iphone-widgets).
@@ -117,19 +121,19 @@ The repository is public. Do not put a secret value in a tracked file.
 
 | Item | Where | Notes |
 | --- | --- | --- |
-| App, API, bot and jobs | Cloudflare Workers, name `financetracker-telegram` | There is no custom domain. The address ends with `workers.dev`. Do not change the name: it is the address of the app and of the webhook. |
-| Staging app | Cloudflare Workers, name `financetracker-telegram-staging` | The `develop` branch deploys here. It has no bot, no cron and no email job. The data is invented. |
-| Staging database | Cloudflare D1, name `financetracker-staging` | It holds `worker/seed.sql` only. Never put real data here. |
-| Database | Cloudflare D1, name `financetracker` | Region `apac`. The id is in `worker/wrangler.toml`. |
+| App, API, bot and jobs | Cloudflare Workers, name `memento-mori` | There is no custom domain. The address ends with `workers.dev`. The name is the address of the app and of the webhook. A new name gives a new address and a new Worker without secrets. |
+| Staging app | Cloudflare Workers, name `memento-mori-staging` | The `develop` branch deploys here. It has no bot, no cron and no email job. The data is invented. |
+| Staging database | Cloudflare D1, name `memento-mori-staging` | It holds `worker/seed.sql` only. Never put real data here. |
+| Database | Cloudflare D1, name `memento-mori` | Region `apac`. The id is in `worker/wrangler.toml`. |
 | Mail courier and backup | Google Apps Script | Open script.google.com, or use `npm run open`. The project id is in `.clasp.json`. There is no Web App deployment. |
 | Backup file | Google Drive, owner account | One JSON file, rewritten each night. The job makes it on the first night and keeps the id in a script property. Drive keeps the earlier versions. |
 | The bot | Telegram, made with **@BotFather** | |
 | Gemini key | Google AI Studio | Free plan. |
 | Share prices | Interactive Brokers Flex Web Service | See the maintenance task below. |
-| Worker logs | Cloudflare dashboard, Workers, `financetracker-telegram`, tab **Logs** | The setting `[observability]` in `worker/wrangler.toml` turns this on. It keeps the last days and it is searchable. `npm run tail` shows the present only. |
+| Worker logs | Cloudflare dashboard, Workers, `memento-mori`, tab **Logs** | The setting `[observability]` in `worker/wrangler.toml` turns this on. It keeps the last days and it is searchable. `npm run tail` shows the present only. |
 | Apps Script logs | script.google.com, tab **Executions** | The tab **Cloud logs** needs the standard Google Cloud project. See the task below. |
 | Google Cloud project | console.cloud.google.com, owner account | A standard project, attached to Apps Script. The backup needs it, because `DriveApp` needs the Drive API. |
-| Source code | GitHub, `akaNiknok/FinanceTracker` | `main` is the released code. `develop` is the integration branch. |
+| Source code | GitHub, `akaNiknok/memento-mori` | `main` is the released code. `develop` is the integration branch. |
 
 ## Settings that are not in the repository
 
@@ -219,7 +223,7 @@ Do these actions one time:
    immediately**, as for `gmail_ingest`. Do not omit this. It is the only thing
    that makes a dead trigger visible. See the note below.
 8. Examine the page **Executions** the next morning. The nightly backup must
-   show **Completed**, and the file **FinanceTracker Backup.json** must be in
+   show **Completed**, and the file **Memento Mori Backup.json** must be in
    the Drive of the owner.
 
 The script, the triggers and the script properties do not change. Only the
@@ -236,13 +240,13 @@ no Drive API and no new permission.
 ### Gmail, Telegram and IBKR
 
 - **Apps Script permissions.** The project declares no `oauthScopes`, thus Apps Script calculates the list from the code at each push. A push that adds a `.gs` file or removes one changes that list, and each existing trigger then stops until a person runs a function in the editor one time and accepts the screen.
-- **Gmail.** The courier searches for `in:inbox label:"Finance Tracker"`. To add a bank or to remove a bank, change the Gmail filter that applies the label.
+- **Gmail.** The courier searches for `in:inbox label:"Memento Mori"`. To add a bank or to remove a bank, change the Gmail filter that applies the label.
 - **Telegram.** To set the webhook, use the Telegram `setWebhook` method with the address `<worker>/tg`, the secret token, and the update types `message` and `callback_query`. The buttons do not operate without `callback_query`.
 - **IBKR.** In Client Portal, make a Flex Query that has the Open Positions section with the fields Symbol, Position, Mark Price and Currency. Enable the Flex Web Service, then make a token with the maximum validity.
 
 ## iPhone widgets
 
-The file `widgets/FinanceTracker.js` makes four home-screen widgets with the free app **Scriptable**. One script makes all four widgets. The widget parameter selects the widget.
+The file `widgets/memento-mori.js` makes four home-screen widgets with the free app **Scriptable**. One script makes all four widgets. The widget parameter selects the widget.
 
 | Widget | Size | Parameter | Content | A tap opens |
 | --- | --- | --- | --- | --- |
@@ -254,8 +258,8 @@ The file `widgets/FinanceTracker.js` makes four home-screen widgets with the fre
 ### Install the script
 
 1. Install **Scriptable** from the App Store.
-2. On the iPhone, open `widgets/FinanceTracker.js` on GitHub. Select **Raw** and copy all the text.
-3. In Scriptable, select **+**. Paste the text. Set the name of the script to `FinanceTracker`.
+2. On the iPhone, open `widgets/memento-mori.js` on GitHub. Select **Raw** and copy all the text.
+3. In Scriptable, select **+**. Paste the text. Set the name of the script to `Memento Mori`.
 4. Run the script. Type the address of the app and the passphrase, then select **Sign in**.
 5. Select a preview. Make sure that the widget shows data.
 
@@ -264,7 +268,7 @@ The file `widgets/FinanceTracker.js` makes four home-screen widgets with the fre
 1. Touch and hold the home screen. Select **Edit**, then **Add Widget**.
 2. Select **Scriptable**. Select the small size or the medium size, then select **Add Widget**.
 3. Touch and hold the new widget, then select **Edit Widget**.
-4. Set **Script** to `FinanceTracker`.
+4. Set **Script** to `Memento Mori`.
 5. Set **Parameter** to a value from the table. If there is no parameter, a small widget shows `recent` and a medium widget shows `segments`.
 
 ### Widget notes
@@ -344,7 +348,7 @@ The code and the database do not go back together. Undo the code first.
 
 ### How to recover the data
 
-1. **D1 Time Travel.** It restores the database to a time in the last 7 days: `npx wrangler d1 time-travel restore financetracker --timestamp=<ISO time>`.
+1. **D1 Time Travel.** It restores the database to a time in the last 7 days: `npx wrangler d1 time-travel restore memento-mori --timestamp=<ISO time>`.
 2. **The backup file.** It holds every table as JSON, from the last night. Drive keeps the earlier versions of the file.
 3. **The Admin screen.** Each table has an **Export CSV** button.
 
@@ -361,7 +365,7 @@ The code and the database do not go back together. Undo the code first.
 | The backup stops near day 7 after the Google Cloud project was attached. | Google cancelled the refresh token, because the consent screen is at the status `Testing`. Do not publish the application to repair this: `DriveApp` uses a restricted scope, so a published application needs a privacy policy, terms of service and a security assessment. Remove `DriveApp` instead. The backup then sends the same JSON as an email attachment with `MailApp`, which needs no Google Cloud project and no new permission. |
 | A trigger fails with "Authorization is required to perform that action." | `npm run push` changed which files the Apps Script project holds, thus Apps Script calculated the list of permissions again. A list that changes makes the permission of each existing trigger old. **The repair is one action.** Open the editor, select `gmail_ingest`, press **Run**, then accept the screen that asks for permission. The trigger operates again at the next tick. Do the same for `backup_run`. |
 | The job does not record the emails. | The Gmail filter. Then the property `GMAIL_QUERY`, which replaces the label. Then the trigger, because Apps Script can disable it. Then the property `WORKER_URL` and the two `INGEST_TOKEN` values. |
-| The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create financetracker-staging --location=apac`, then write the id into the file. |
+| The staging deploy fails. | The value `database_id` in the `[[env.staging.d1_databases]]` block of `worker/wrangler.toml`. A new checkout has a placeholder there. Make the database with `npx wrangler d1 create memento-mori-staging --location=apac`, then write the id into the file. |
 | The pull request does not merge. | The CI check on the pull request. Read the log of the failed job. The `main` branch accepts no merge before the check is green. |
 | The app asks for the passphrase frequently. | A person changed `APP_PASS`, or the cookie is more than one year old. |
 | The app shows "Storage is full" and does not save the entry. | The device has no free space for the offline queue. The app deletes the cached screens first, then makes a second attempt. This message means that the second attempt also failed. Delete files on the device. Then enter the transaction again, because the app did not record it. |
@@ -376,7 +380,7 @@ The code and the database do not go back together. Undo the code first.
 
 ## How to build the system again
 
-1. Make the D1 database: `npx wrangler d1 create financetracker --location=apac`. Put the id in `worker/wrangler.toml`.
+1. Make the D1 database: `npx wrangler d1 create memento-mori --location=apac`. Put the id in `worker/wrangler.toml`.
 2. Apply the schema: `npm run migrate`.
 3. Set each Worker secret, then run `npm run deploy`.
 4. Make the bot with BotFather, then set the webhook to `<worker>/tg`.

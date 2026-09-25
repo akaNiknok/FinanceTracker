@@ -1,5 +1,5 @@
 # DESIGN.md
-The design system of the FinanceTracker PWA (v3). Read it before you add or change anything the user sees. `worker/public/app.css` holds the tokens. This file holds the rules for using them. If the two disagree, fix one of them in the same commit.
+The design system of the Memento Mori PWA (v3). Read it before you add or change anything the user sees. `worker/public/app.css` holds the tokens. This file holds the rules for using them. If the two disagree, fix one of them in the same commit.
 
 ## Principles
 Apple's HIG principles (hierarchy, harmony, consistency), applied to one goal: **less effort to keep the books.**
@@ -37,7 +37,7 @@ Each semantic token also has a `-tint` variant: a 12–18% wash for chip and ico
 Rules:
 - **Amounts.** In a transaction row (list, table, Recent tile): an expense is `--neg` with a "−". Income (and a refund) is `--pos` with a "+". A transfer is `--accent` with no sign, the same as its ⇄ tile. Totals and nets (day headers, result line, bulk bar) stay plain text. The owner chose coloured row amounts on 2026-09-19; the sign still carries the direction for a CVD reader.
 - **Colour is never the only channel.** In/out bars keep a fixed position (in left, out right) and a legend. A status also has a word ("Limit reached", "Funded ✓").
-- **Check chart colours** against `--card` for 3:1 contrast in both themes when a series colour changes. The Scriptable widgets (`widgets/FinanceTracker.js`) copy these tokens, so change them in the same commit.
+- **Check chart colours** against `--card` for 3:1 contrast in both themes when a series colour changes. The Scriptable widgets (`widgets/memento-mori.js`) copy these tokens, so change them in the same commit.
 - **Account colours** (`accounts.color`) appear only as the dot or initial tile of that account.
 
 ## Typography

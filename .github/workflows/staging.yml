@@ -1,7 +1,7 @@
 name: Staging
 
 # develop's deploy target. Every push to develop redeploys
-# financetracker-telegram-staging.<subdomain>.workers.dev, so a change can be checked
+# memento-mori-staging.<subdomain>.workers.dev, so a change can be checked
 # from a phone before the release PR is merged.
 #
 # A SEPARATE file from ci.yml on purpose: the two need opposite concurrency policies.
@@ -41,14 +41,14 @@ jobs:
 
       # Same order as production: new code must never meet an old schema.
       - name: Apply D1 migrations
-        run: npx wrangler@4 d1 migrations apply financetracker-staging --env staging --remote
+        run: npx wrangler@4 d1 migrations apply memento-mori-staging --env staging --remote
 
       # Only on request. Seeding on every push would wipe whatever you were part way
       # through testing; run this workflow by hand once after creating the database,
       # and again whenever staging needs a clean slate.
       - name: Load worker/seed.sql
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.reseed }}
-        run: npx wrangler@4 d1 execute financetracker-staging --env staging --remote --file=./seed.sql
+        run: npx wrangler@4 d1 execute memento-mori-staging --env staging --remote --file=./seed.sql
 
       - name: Deploy the staging Worker
         run: npx wrangler@4 deploy --env staging

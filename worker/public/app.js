@@ -1,5 +1,5 @@
 /* ============================================================================
- * app.js — the FinanceTracker SPA.
+ * app.js — the Memento Mori SPA.
  * Vanilla JS, served as a static asset by the Cloudflare Worker, which since
  * v2.0.0 IS the backend: /api runs against Cloudflare D1, not Apps Script. The
  * JSON contract did not change with that swap, so nothing in this file did
@@ -88,7 +88,7 @@ function gs(fn, arg, etag, _retried){
  * double-post. Edits, deletes, account and Ledger writes are NOT queued: they're
  * desk work rather than something you do in a queue at a till, and a ledger insert
  * isn't idempotent at any price. They fail with a clear message. */
-var LS_QUEUE = 'ft.queue';
+var LS_QUEUE = 'mm.queue';
 var QUEUEABLE = { createTransaction:1, createTransfer:1 };
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function(){});
 // Ask for storage that eviction under pressure will not take. A no-op on iOS (Add to
@@ -176,7 +176,7 @@ function unlock(){
       '<div class="modal-h"><h3>Unlock</h3></div>' +
       '<div class="modal-b">' +
         '<div class="field"><label for="loginUser">App</label>' +
-          '<input id="loginUser" name="username" autocomplete="username" value="FinanceTracker" readonly></div>' +
+          '<input id="loginUser" name="username" autocomplete="username" value="Memento Mori" readonly></div>' +
         '<div class="field"><label for="loginPass">Passphrase</label>' +
           '<input id="loginPass" name="password" type="password" autocomplete="current-password" ' +
                  'autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" required>' +
@@ -277,7 +277,7 @@ function cachedCall(key, loader, onData){
  * evicts under storage pressure and in private browsing). */
 // `s` is a schema stamp: bump it whenever a cached payload's SHAPE changes, so a
 // deploy can't leave the old session's blob rendering against new code.
-var LS_CACHE = 'ft.cache', LS_SCHEMA = 14;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists; 13 = bootstrap.quickPicks + descCategory; 14 = positions carry price + pulse.excluded
+var LS_CACHE = 'mm.cache', LS_SCHEMA = 14;   // 2 = D1 cutover; 3 = netWorthHistory; 4 = sharesHistory; 5 = pulse/runway; 6 = listTable.tables; 7 = budget *Native figures; 8 = cost basis + the NW bridge; 9 = ETag entries + budgets carries recurring; 10 = the dashboard carries the budgets payload; 11 = runway.parts; 12 = listTransactions.net + bootstrap.smartLists; 13 = bootstrap.quickPicks + descCategory; 14 = positions carry price + pulse.excluded
 function saveCache(){
   clearTimeout(saveCache._t);
   saveCache._t = setTimeout(function(){
@@ -320,7 +320,7 @@ var S = {
   tx:{ rows:[], total:0, net:0, offset:0, limit:50, filters:{}, edit:false, sel:{},
        pendingAdds:[], pendingDeletes:{}, pendingEdits:{} },
   // admin: which whitelisted table the Admin grid is showing (sticky, like the screen)
-  admin:{ table:(function(){ try{ return localStorage.getItem('ft.adminTable')||''; }catch(e){ return ''; } })(), offset:0 },
+  admin:{ table:(function(){ try{ return localStorage.getItem('mm.adminTable')||''; }catch(e){ return ''; } })(), offset:0 },
   taxYear:null,         // the Tax screen's year; null = the current one
   // Dashboard cash-flow window, in months. Sticky per device; the default follows
   // the screen's SHORT edge, so a phone gets 6 bars and an iPad/desktop 12 in both
@@ -604,14 +604,14 @@ function refresh(){
  * (app.css), so nothing here branches on the layout. */
 
 /* Theme: Auto / Light / Dark per device (DESIGN.md "Input parity and keys").
- * 'ft.theme' absent = Auto. index.html's head script applies it before first
+ * 'mm.theme' absent = Auto. index.html's head script applies it before first
  * paint; this is the same rule for a switch at run time. */
 var THEME_BG={light:'#F2F2F7',dark:'#000000'};   // = --bg; the theme-color meta cannot read a var()
 var darkMQ=window.matchMedia?matchMedia('(prefers-color-scheme: dark)'):null;
-function themePref(){ try{ var t=localStorage.getItem('ft.theme'); return t==='light'||t==='dark'?t:'auto'; }catch(e){ return 'auto'; } }
+function themePref(){ try{ var t=localStorage.getItem('mm.theme'); return t==='light'||t==='dark'?t:'auto'; }catch(e){ return 'auto'; } }
 function themeNow(){ var p=themePref(); return p!=='auto'?p:(darkMQ&&darkMQ.matches?'dark':'light'); }
 function applyTheme(pref, fade){
-  try{ if(pref==='auto') localStorage.removeItem('ft.theme'); else localStorage.setItem('ft.theme',pref); }catch(e){}
+  try{ if(pref==='auto') localStorage.removeItem('mm.theme'); else localStorage.setItem('mm.theme',pref); }catch(e){}
   var root=document.documentElement;
   if(fade){ root.classList.add('theme-fade'); setTimeout(function(){ root.classList.remove('theme-fade'); },220); }
   if(pref==='auto') delete root.dataset.theme; else root.dataset.theme=pref;
@@ -1017,12 +1017,12 @@ var SECONDARY_SCREENS={investments:1,exchange:1,tax:1,admin:1};
  * that drop it — an iOS home-screen shortcut reopens its start_url, not the
  * current one. Best-effort: Safari can evict storage under pressure or in private
  * browsing, hence the try/catch. */
-function lastScreen(){ try{ return localStorage.getItem('ft.screen')||null; }catch(e){ return null; } }
+function lastScreen(){ try{ return localStorage.getItem('mm.screen')||null; }catch(e){ return null; } }
 function openSheet(){ $('#sheetRoot').hidden=false; }
 function closeSheet(){ $('#sheetRoot').hidden=true; }
 
 function go(screen, fromHistory){
-  // A retired screen name (a stale bookmark or a stored 'ft.screen' from before the
+  // A retired screen name (a stale bookmark or a stored 'mm.screen' from before the
   // Review/Investments merge) becomes Dashboard here rather than at render time —
   // otherwise it would paint the Dashboard while leaving the nav blank and writing
   // the dead name straight back into localStorage.
@@ -1032,7 +1032,7 @@ function go(screen, fromHistory){
   $('#navMore').classList.toggle('active', !!SECONDARY_SCREENS[screen]);
   document.querySelectorAll('.sheet-item').forEach(function(b){b.classList.toggle('active', b.dataset.screen===screen);});
   closeSheet();
-  try{ localStorage.setItem('ft.screen',screen); }catch(e){}
+  try{ localStorage.setItem('mm.screen',screen); }catch(e){}
   if(!fromHistory) history.pushState(null,'','?screen='+encodeURIComponent(screen));
   render();
 }
@@ -2924,7 +2924,7 @@ function renderAdmin(){
     var bar=el('div','adm-bar'), pick=el('div','seg adm-seg');
     (res.tables||[]).forEach(function(name){
       var b=el('button',name===t?'on':'',esc(adminLabel(name))); b.type='button'; b.setAttribute('aria-pressed',name===t);
-      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('ft.adminTable',name);}catch(e){} render(); };
+      b.onclick=function(){ S.admin.table=name; S.admin.offset=0; try{localStorage.setItem('mm.adminTable',name);}catch(e){} render(); };
       pick.appendChild(b);
     });
     bar.appendChild(pick);
@@ -3404,8 +3404,8 @@ function comboEl(options,value,opts){
 /* —— remember the last-used account/category so re-entry is a couple of taps ——
  * Most transactions reuse the same handful of accounts; pre-filling the last one
  * (and autofocusing) means a new entry is usually just category + amount. */
-function prefGet(k){ try{ return localStorage.getItem('ft.'+k)||''; }catch(e){ return ''; } }
-function prefSet(k,v){ try{ if(v) localStorage.setItem('ft.'+k,String(v)); }catch(e){} }
+function prefGet(k){ try{ return localStorage.getItem('mm.'+k)||''; }catch(e){ return ''; } }
+function prefSet(k,v){ try{ if(v) localStorage.setItem('mm.'+k,String(v)); }catch(e){} }
 // Amount for a form field: absolute value, blank when there's nothing usable
 // (a carried-over draft may hold '' or a half-typed number).
 /* The field shows the amount AS STORED, sign and all. It used to show the magnitude,

@@ -22,7 +22,7 @@ import { snapshotNetWorth } from './api.js';
 // report once it has been generated (a few seconds later, hence the poll). IBKR
 // REQUIRES a User-Agent header and answers 403 to a bare request.
 const FLEX_SEND = 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest';
-const FLEX_UA = { 'User-Agent': 'FinanceTracker/2.0 (personal finance tracker)' };
+const FLEX_UA = { 'User-Agent': 'MementoMori/3 (personal finance tracker)' };
 // Paced against IBKR's published limit: ONE request per second and TEN per minute, per
 // token. The worst case is one send + FLEX_TRIES polls, then a second send + FLEX_RETRY_TRIES
 // polls = 10 requests over about 52s. The first GetStatement waits as well, because
