@@ -45,7 +45,7 @@ run_worker_first = ["/api", "/login", "/tg"]
 [[d1_databases]]
 binding = "DB"
 database_name = "memento-mori"
-database_id = "PASTE-THE-memento-mori-ID"
+database_id = "45ade31b-96a8-4463-927e-34918d528a2b"
 migrations_dir = "migrations"
 
 # FX rates, cached 6h. This is the old API_CACHE namespace rebound: the edge read cache
@@ -96,7 +96,7 @@ binding = "DB"
 database_name = "memento-mori-staging"
 # npx wrangler d1 create memento-mori-staging --location=apac  -> paste the id here.
 # test.js fails until this holds a real id.
-database_id = "PASTE-THE-memento-mori-staging-ID"
+database_id = "b5ae1938-8db0-4422-8b78-98e1276a19a5"
 migrations_dir = "migrations"
 
 # An empty list is how one environment cancels an inherited schedule.
