@@ -4,7 +4,7 @@
  *
  *   npm run dev:pull                         # produces worker/.dev-data.sql (real data)
  *   node migrate/backfill-nw.js > backfill-nw.sql
- *   cd worker && npx wrangler d1 execute financetracker --remote --file=../backfill-nw.sql
+ *   cd worker && npx wrangler d1 execute memento-mori --remote --file=../backfill-nw.sql
  *
  * The cron (jobs.js snapshotNetWorth) only records net worth going forward. This
  * one-shot fills the past: for every month in the ledger that has no snapshot yet

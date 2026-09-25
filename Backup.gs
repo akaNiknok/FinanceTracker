@@ -28,7 +28,7 @@
  */
 
 const BACKUP_FILE_ID_ = "BACKUP_FILE_ID";
-const BACKUP_NAME_ = "FinanceTracker Backup.json";
+const BACKUP_NAME_ = "Memento Mori Backup.json";
 
 /** The trigger entry point. */
 function backup_run() {
@@ -80,7 +80,7 @@ function backup_file_(content) {
 function backup_notifyFailure_(err) {
   try {
     const to = Session.getEffectiveUser().getEmail();
-    if (to) MailApp.sendEmail(to, "[FinanceTracker] Nightly backup failed", String(err && err.stack || err));
+    if (to) MailApp.sendEmail(to, "[Memento Mori] Nightly backup failed", String(err && err.stack || err));
   } catch (mailErr) {
     Logger.log("Could not send the backup failure email: " + mailErr);
   }

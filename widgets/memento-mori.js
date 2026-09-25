@@ -2,7 +2,7 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: blue; icon-glyph: wallet;
 /**
- * FinanceTracker home-screen widgets for Scriptable (iOS). One script, four widgets —
+ * Memento Mori home-screen widgets for Scriptable (iOS). One script, four widgets —
  * the widget's Parameter picks which:
  *   recent    small  — the 3 latest transactions            (tap → Transactions)
  *   balances  small  — 3 accounts, picked in the app's Admin screen (tap → Accounts)
@@ -17,7 +17,7 @@
  * "cached"). Colours are the SPA's own tokens (worker/public/app.css), and each widget
  * copies a Summary tile: sentence-case label, figure, footnote, 6px meters on --track.
  */
-const K_URL = 'financetracker.url', K_COOKIE = 'financetracker.cookie';
+const K_URL = 'mm.url', K_COOKIE = 'mm.cookie';
 // The dark theme's tokens (DESIGN.md "Colour"): the widget is always dark.
 const C = {
   card: '#1C1C1E', card2: '#2C2C2E', track: '#2C2C2E', text: '#F5F5F7', dim: '#A1A1A6',
@@ -57,7 +57,7 @@ function dayLabel(iso) {
 // ── auth + data ─────────────────────────────────────────────────────────────
 async function signIn() {
   const a = new Alert();
-  a.title = 'FinanceTracker';
+  a.title = 'Memento Mori';
   a.message = 'Sign in once. Only the session cookie is kept, in the iOS Keychain.';
   a.addTextField('https://….workers.dev', Keychain.contains(K_URL) ? Keychain.get(K_URL) : '');
   a.addSecureTextField('Passphrase', '');
@@ -71,9 +71,9 @@ async function signIn() {
   r.body = JSON.stringify({ pass: a.textFieldValue(1) });
   await r.loadString();
   if (r.response.statusCode !== 200) throw new Error('Wrong passphrase.');
-  const c = (r.response.cookies || []).find((x) => x.name === 'ft_auth');
+  const c = (r.response.cookies || []).find((x) => x.name === 'mm_auth');
   const hdr = Object.keys(r.response.headers || {}).find((k) => /^set-cookie$/i.test(k));
-  const pair = c ? 'ft_auth=' + c.value : ((hdr && String(r.response.headers[hdr]).match(/ft_auth=[^;]+/)) || [])[0];
+  const pair = c ? 'mm_auth=' + c.value : ((hdr && String(r.response.headers[hdr]).match(/mm_auth=[^;]+/)) || [])[0];
   if (!pair) throw new Error('The server set no session cookie.');
   Keychain.set(K_URL, url);
   Keychain.set(K_COOKIE, pair);
@@ -81,7 +81,7 @@ async function signIn() {
 }
 
 const fm = FileManager.local();
-const CACHE = fm.joinPath(fm.documentsDirectory(), 'financetracker-widget.json');
+const CACHE = fm.joinPath(fm.documentsDirectory(), 'memento-mori-widget.json');
 // iOS refreshes all four widgets at about the same time. A payload younger than this is
 // reused, so the four cost ONE request and one radio wake-up, not four. In the app
 // (a preview) it always fetches, so a preview shows the live figures.
@@ -89,7 +89,7 @@ const FRESH_MS = 15 * 60e3;
 
 async function load() {
   if (!Keychain.contains(K_URL) || !Keychain.contains(K_COOKIE)) {
-    throw new Error('Open Scriptable and run FinanceTracker to sign in.');
+    throw new Error('Open Scriptable and run Memento Mori to sign in.');
   }
   if (config.runsInWidget && fm.fileExists(CACHE) &&
       Date.now() - fm.modificationDate(CACHE).getTime() < FRESH_MS) {
@@ -101,7 +101,7 @@ async function load() {
     r.timeoutInterval = 20;
     const d = await r.loadJSON();
     if (r.response.statusCode === 401) {
-      const e = new Error('Signed out. Run FinanceTracker in Scriptable to sign in again.');
+      const e = new Error('Signed out. Run Memento Mori in Scriptable to sign in again.');
       e.auth = true; throw e;
     }
     if (d.status !== 'success') throw new Error(d.message || 'The API answered an error.');
@@ -312,7 +312,7 @@ async function build(kind, family) {
     header(w, spec.title, right);
     spec.fn(w, d, WIDTH[family] || WIDTH[spec.family]);
   } catch (e) {
-    header(w, 'FinanceTracker');
+    header(w, 'Memento Mori');
     const t = text(w, e.message || String(e), 11, C.dim);
     t.lineLimit = 5;
     w.addSpacer();
@@ -331,7 +331,7 @@ if (config.runsInWidget) {
   try {
     if (!Keychain.contains(K_COOKIE)) await signIn();
     const m = new Alert();
-    m.title = 'FinanceTracker widgets';
+    m.title = 'Memento Mori widgets';
     const kinds = Object.keys(DRAW);
     kinds.forEach((k) => m.addAction('Preview ' + DRAW[k].title));
     m.addAction('Sign in again');
@@ -343,7 +343,7 @@ if (config.runsInWidget) {
       await (DRAW[k].family === 'medium' ? w.presentMedium() : w.presentSmall());
     }
   } catch (e) {
-    const a = new Alert(); a.title = 'FinanceTracker'; a.message = e.message || String(e);
+    const a = new Alert(); a.title = 'Memento Mori'; a.message = e.message || String(e);
     a.addAction('OK'); await a.present();
   }
 }

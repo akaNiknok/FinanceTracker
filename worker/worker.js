@@ -16,7 +16,7 @@
  *                  handler name's get…/list… prefix, which is also how the SPA's gs()
  *                  picks its method, so there is exactly one list to keep in sync.
  *
- * Auth on /api: the ft_auth cookie (the SPA) OR `Authorization: Bearer INGEST_TOKEN`
+ * Auth on /api: the mm_auth cookie (the SPA) OR `Authorization: Bearer INGEST_TOKEN`
  * (the two remaining Apps Script jobs — the Gmail courier and the backup puller).
  * 401 is JSON, never a redirect: that is what lets gs() prompt for the passphrase and
  * retry the call in place. A request whose HOST is localhost skips the check entirely
@@ -42,7 +42,7 @@ import {
 import { handleUpdate, ingestEmail } from './src/telegram.js';
 import { runScheduled } from './src/jobs.js';
 
-const COOKIE = 'ft_auth';
+const COOKIE = 'mm_auth';
 
 /**
  * GET-only, side-effect-free. Names MUST stay get…/list… — worker/public/app.js picks

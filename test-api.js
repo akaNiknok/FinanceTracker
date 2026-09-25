@@ -1610,7 +1610,7 @@ function d1(db) {
   await describe('HTTP layer', () => {
     test('/api is closed without a credential and open with either one', async () => {
       assert.strictEqual((await call('/api?action=getRecurring')).status, 401);
-      const cookie = { Cookie: 'ft_auth=' + await hex('pw') };
+      const cookie = { Cookie: 'mm_auth=' + await hex('pw') };
       assert.strictEqual((await call('/api?action=getRecurring', { headers: cookie })).body.status, 'success');
       const bearer = { Authorization: 'Bearer tok' };
       assert.strictEqual((await call('/api?action=getExportAll', { headers: bearer })).body.status, 'success');
@@ -1630,7 +1630,7 @@ function d1(db) {
     });
 
     test('/api enforces the GET/POST split and answers errors as JSON 200', async () => {
-      const cookie = { Cookie: 'ft_auth=' + await hex('pw'), 'Content-Type': 'application/json' };
+      const cookie = { Cookie: 'mm_auth=' + await hex('pw'), 'Content-Type': 'application/json' };
       const wrongMethod = await call('/api?action=createTransaction', { headers: cookie });
       assert.match(wrongMethod.body.message, /requires POST/);
       const unknown = await call('/api?action=nope', { headers: cookie });
@@ -1645,7 +1645,7 @@ function d1(db) {
     });
 
     // ── the ETag, which IS the client cache (v2.9.0, replaced meta.data_version) ──
-    const cookie = () => hex('pw').then((h) => ({ Cookie: 'ft_auth=' + h }));
+    const cookie = () => hex('pw').then((h) => ({ Cookie: 'mm_auth=' + h }));
     const raw = async (url, headers) =>
       worker.fetch(new Request('https://x' + url, { headers }), wenv, ctx);
 
@@ -1823,7 +1823,7 @@ function d1(db) {
     });
 
     test('a storage fault answers 500, a refused payload 200', async () => {
-      const h = { Cookie: 'ft_auth=' + await hex('pw'), 'Content-Type': 'application/json' };
+      const h = { Cookie: 'mm_auth=' + await hex('pw'), 'Content-Type': 'application/json' };
       const post = (e, body) => worker.fetch(new Request('https://x/api', { method: 'POST', headers: h,
         body: JSON.stringify(body) }), e, ctx);
       const lost = () => { throw new Error('D1_ERROR: Network connection lost.'); };

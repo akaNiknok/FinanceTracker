@@ -1,5 +1,5 @@
 # Deploy:     cd worker && npx wrangler deploy        (also run by `npm run release`)
-# Migrations: npx wrangler d1 migrations apply financetracker --remote
+# Migrations: npx wrangler d1 migrations apply memento-mori --remote
 # Secrets:    npx wrangler secret put APP_PASS            (the SPA passphrase)
 #             npx wrangler secret put SECRET_TOKEN        (= TELEGRAM_SECRET_TOKEN)
 #             npx wrangler secret put TELEGRAM_BOT_TOKEN
@@ -9,10 +9,11 @@
 #             npx wrangler secret put IBKR_FLEX_TOKEN
 #             npx wrangler secret put IBKR_FLEX_QUERY_ID
 #
-# DO NOT RENAME the worker: `name` is the .workers.dev subdomain, which is both the
-# Telegram webhook target and the app's URL. GAS_URL is gone — there is no Apps Script
-# web app any more.
-name = "financetracker-telegram"
+# A RENAME IS A MIGRATION, not an edit: `name` is the .workers.dev subdomain, so the
+# app's URL, the Telegram webhook, the GAS WORKER_URL and the widgets' URL all move with
+# it, and wrangler deploys a NEW Worker that has none of the old one's secrets. Done once,
+# 2026-09-25 (financetracker-telegram -> memento-mori); MEMORY.md has the cutover.
+name = "memento-mori"
 main = "worker.js"
 # UTC, and Cloudflare rejects a future date — Manila is a day ahead of UTC.
 compatibility_date = "2026-07-28"
@@ -20,7 +21,7 @@ compatibility_date = "2026-07-28"
 # Workers Logs. OFF by default, which is why the three ingests that failed on
 # 2026-09-03/04 left nothing to read: worker.js already writes console.error for every
 # handler that throws, but nobody was keeping it. `wrangler tail` only shows the present.
-# With this on, the dashboard (Workers -> financetracker-telegram -> Logs) holds the
+# With this on, the dashboard (Workers -> memento-mori -> Logs) holds the
 # last few days and is searchable, so "why did that email not land" has an answer after
 # the fact. Free plan; head_sampling_rate 1 = keep everything, this Worker does tens of
 # requests a day.
@@ -40,11 +41,11 @@ directory = "./public"
 run_worker_first = ["/api", "/login", "/tg"]
 
 # The source of truth. --location=apac at creation time (nearest region to Manila).
-#   npx wrangler d1 create financetracker --location=apac   -> paste the id below
+#   npx wrangler d1 create memento-mori --location=apac   -> paste the id below
 [[d1_databases]]
 binding = "DB"
-database_name = "financetracker"
-database_id = "0ebfbe8c-32db-434d-b59d-0b4e6ab549c3"
+database_name = "memento-mori"
+database_id = "45ade31b-96a8-4463-927e-34918d528a2b"
 migrations_dir = "migrations"
 
 # FX rates, cached 6h. This is the old API_CACHE namespace rebound: the edge read cache
@@ -68,12 +69,12 @@ id = "414311e8408f43679204a86377b6c414"
 crons = ["0 22 * * *", "*/2 * * * *"]
 
 # ── staging ──────────────────────────────────────────────────────────────────
-# `develop`'s deploy target — financetracker-telegram-staging.<subdomain>.workers.dev,
+# `develop`'s deploy target — memento-mori-staging.<subdomain>.workers.dev,
 # redeployed by .github/workflows/staging.yml on every push to develop. It exists so a
 # change can be checked from a phone before the release PR is merged.
 #
 # There is no `name` key on purpose: wrangler appends the environment name to the
-# top-level one, so the "never rename the Worker" rule stays untouched.
+# top-level one: `memento-mori` + `-staging`.
 #
 # MOST keys are INHERITED — `main`, `compatibility_date`, `assets`, `workers_dev` and
 # `triggers` — so the SPA and the routes need no repetition here. BINDINGS are not:
@@ -92,10 +93,10 @@ crons = ["0 22 * * *", "*/2 * * * *"]
 
 [[env.staging.d1_databases]]
 binding = "DB"
-database_name = "financetracker-staging"
-# npx wrangler d1 create financetracker-staging --location=apac  -> paste the id here.
-# The zero id below is a placeholder: the first staging deploy fails until it is real.
-database_id = "d490a74a-1b5a-425a-9635-1e0011b03fb4"
+database_name = "memento-mori-staging"
+# npx wrangler d1 create memento-mori-staging --location=apac  -> paste the id here.
+# test.js fails until this holds a real id.
+database_id = "b5ae1938-8db0-4422-8b78-98e1276a19a5"
 migrations_dir = "migrations"
 
 # An empty list is how one environment cancels an inherited schedule.

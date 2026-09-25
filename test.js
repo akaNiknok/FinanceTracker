@@ -613,6 +613,8 @@ describe('Gmail courier watermark (vm)', () => {
         assert.ok(copy, 'no staging copy of the D1 binding ' + val(l, 'binding'));
         assert.notStrictEqual(val(copy, 'database_id'), val(l, 'database_id'),
           'staging binding ' + val(l, 'binding') + ' points at the PRODUCTION database');
+        [l, copy].forEach((x) => assert.ok(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(val(x, 'database_id')),
+          val(x, 'database_name') + ' has no real database_id — run `wrangler d1 create` and paste it'));
       });
 
       const trig = named('env.staging.triggers')[0];
@@ -627,7 +629,7 @@ describe('Gmail courier watermark (vm)', () => {
     test('the Scriptable widget compiles and calls a real read route', () => {
       // It runs only on a phone, so nothing else here would notice it break. Scriptable
       // wraps a script in an async function (top-level await), hence the wrapper.
-      const src = fs.readFileSync(path.join(__dirname, 'widgets', 'FinanceTracker.js'), 'utf8');
+      const src = fs.readFileSync(path.join(__dirname, 'widgets', 'memento-mori.js'), 'utf8');
       new vm.Script('(async () => {' + src + '\n})');
       const used = src.match(/action=(\w+)/g).map((m) => m.slice(7));
       used.forEach((a) => assert.ok(a in worker.ROUTES_READ, 'the widget calls ' + a + ', which is not a read route'));
@@ -842,12 +844,12 @@ describe('Gmail courier watermark (vm)', () => {
       // over a transaction that was never stored.
       let full = true, evictHelps = true; const wrote = {};
       app.localStorage = {
-        getItem: (k) => (k === 'ft.queue' ? '[]' : null),
-        removeItem: (k) => { if (k === 'ft.cache' && evictHelps) full = false; },
+        getItem: (k) => (k === 'mm.queue' ? '[]' : null),
+        removeItem: (k) => { if (k === 'mm.cache' && evictHelps) full = false; },
         setItem: (k, v) => { if (full) throw new Error('QuotaExceededError'); wrote[k] = v; }
       };
       app.queueSet([{ fn: 'api_createTransaction', arg: { ID: 'ui-1' } }]);
-      assert.ok(/ui-1/.test(wrote['ft.queue'] || ''), 'queueSet must evict ft.cache and retry');
+      assert.ok(/ui-1/.test(wrote['mm.queue'] || ''), 'queueSet must evict mm.cache and retry');
       full = true; evictHelps = false;   // the retry fails too: nothing left to free
       assert.throws(() => app.queueSet([{ fn: 'api_createTransaction', arg: { ID: 'ui-2' } }]),
         /NOT saved/, 'a queue write that cannot land must throw, not be swallowed');
