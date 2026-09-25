@@ -65,67 +65,9 @@ The project had three lives in twelve weeks. Each version replaced the part that
 | **v2** | August 2026 | Cloudflare D1 replaced Google Sheets. The Worker became the whole backend, and Apps Script kept the mailbox only. |
 | **v3** | September 2026 | A new design: light and dark themes, the system typeface, one bar to add or search, and a new Summary screen. v3.3.0 changed the name from FinanceTracker to Memento Mori. |
 
-Click a version to see it. Each version shows the same invented data.
+<img src="screenshots/evolution.gif" alt="The Summary screen in v1, v2 and v3, one after the other, with the same data.">
 
-<details>
-<summary><b>v3</b> — the current design (light and dark)</summary>
-
-<br>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/v3-transactions-dark.webp">
-  <img src="screenshots/v3-transactions-light.webp" alt="v3 Activity screen with the filter pane and the transaction table">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/v3-investments-dark.webp">
-  <img src="screenshots/v3-investments-light.webp" alt="v3 Investments screen with the allocation bar and the holdings">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/v3-accounts-dark.webp">
-  <img src="screenshots/v3-accounts-light.webp" alt="v3 Accounts screen">
-</picture>
-
-</details>
-
-<details>
-<summary><b>v2</b> — the D1 backend, v2.16.0 (dark only)</summary>
-
-<br>
-
-<img src="screenshots/v2-dashboard.webp" alt="v2 Dashboard with the time to financial independence at the top">
-
-<img src="screenshots/v2-transactions.webp" alt="v2 Transactions screen">
-
-<img src="screenshots/v2-accounts.webp" alt="v2 Accounts screen">
-
-<p>
-  <img src="screenshots/v2-m-dashboard.webp" width="240" alt="v2 Dashboard on a phone">
-  <img src="screenshots/v2-m-transactions.webp" width="240" alt="v2 Transactions on a phone">
-</p>
-
-</details>
-
-<details>
-<summary><b>v1</b> — the Apps Script web page, v1.5.4 (dark only)</summary>
-
-<br>
-
-Apps Script served this page, and the data came from Google Sheets. The page cannot operate outside Apps Script, so these screenshots use the original v1.5.4 files with a small adapter in place of `google.script.run`.
-
-<img src="screenshots/v1-dashboard.webp" alt="v1 Dashboard">
-
-<img src="screenshots/v1-budgets.webp" alt="v1 Budgets screen">
-
-<img src="screenshots/v1-investments.webp" alt="v1 Investments screen">
-
-<p>
-  <img src="screenshots/v1-m-dashboard.webp" width="240" alt="v1 Dashboard on a phone">
-  <img src="screenshots/v1-m-transactions.webp" width="240" alt="v1 Transactions on a phone">
-</p>
-
-</details>
+Each frame shows the same invented data. The v1 frame uses the original v1.5.4 files, with a small adapter in place of Apps Script.
 
 ## Try it on your computer
 
@@ -175,33 +117,26 @@ flowchart TB
 
 The handlers own each write. The bot, the app, the mail courier and the two jobs use the same functions and the same validation. Thus there is one place to correct a rule.
 
-## Engineering decisions
+## Lessons from production
 
-Each decision below comes from a real failure or a real measurement.
+Each lesson comes from a real failure or a real measurement.
 
-**The Worker exists because Telegram refuses a redirect.** The first version sent the webhook to Apps Script, and the bot answered again and again. `getWebhookInfo` gave the cause: `"Wrong response from the webhook: 302 Found"`. Apps Script always answers a POST with a redirect. A 15-line Worker answered Telegram with the code 200, then sent the message to Apps Script. That Worker is now the whole backend.
+| What went wrong | What changed |
+| --- | --- |
+| **Telegram did not stop.** The bot got the same message again and again. Apps Script answers each POST with a `302` redirect, and Telegram counts a redirect as a failure. | A **15-line** Cloudflare Worker answered `200` first, then sent the message on. That Worker is now the whole backend. |
+| **Each tap waited 0.5 to 2 seconds.** A measurement put most of the delay in Apps Script and its redirect. A faster database below Apps Script saves only 200 to 800 milliseconds. | v2.0.0 removed Apps Script from the request path and moved the data to Cloudflare D1. Apps Script now reads the mailbox only. |
+| **Telegram sent a message twice.** Gemini is slow, and the duplicate check came after the Gemini call. Telegram sent the message again first. | The webhook now claims the update ID on its first line. The row ID stops a duplicate row. The claim stops the storm. |
+| **A font was 72 percent of the first download.** Inter from Google Fonts was **146 KB**. The phone downloaded it again each day, and it failed with no connection. | v3 uses the system typeface of each device. The app downloads no font. |
+| **A 03:00 write made the next start slow.** One version counter recorded each write. It could not say which screen changed, so the app downloaded every screen again. | Each read now carries an ETag. The server answers `304` with no content when the answer is the same. |
+| **The interest job was wrong by 1.33 pesos.** The bank paid **24.50** pesos. The job calculated **25.83** pesos, because the bank does not multiply the daily balance by the rate. | v2.0.1 removed the job. A calculation that does not agree with the bank is worse than no calculation. |
 
-**The database moved because the runtime was the cost, not the storage.** A measurement showed that an API call needed 0.5 to 2 seconds, and that the Apps Script invocation and its mandatory redirect caused most of the delay. A different database below Apps Script would move only 200 to 800 milliseconds. Thus version 2.0.0 removed Apps Script from the request path and put the data in D1.
+**The rules that came from these lessons:**
 
-**Apps Script keeps the mailbox only.** `GmailApp` is free and permitted access to the owner mailbox, and it has no equivalent outside the platform. Thus two files stay: a courier that sends the text of each labelled email to the Worker, and a puller that writes a copy of the database to Google Drive each night.
-
-**The money is an integer.** Each amount is a count of millionths of a unit, and the conversion to a decimal is at the API boundary only. Thus a sum is exact, and the same column holds a fractional quantity of shares.
-
-**The database calculates the derived values.** The reporting month and the peso amount are generated columns. The type, the segment and the currency come from a join. The balances come from two group-by queries. Thus no code writes a value that it can calculate.
-
-**The offline queue accepts idempotent writes only.** The app makes the identifier before the first attempt. If the connection fails after the server wrote the row, the second attempt gives the answer "duplicate", and the app counts this answer as a success. Edits and deletions refuse to operate offline, because they are not idempotent.
-
-**One deduplication layer was not sufficient.** A deterministic row identifier stops a second row, but the check is after the slow language model call, and Telegram sent the message again first. The webhook now claims the update identifier at the first line. The row identifier stops a duplicate row. The claim stops the storm.
-
-**The Gmail ingest uses the bot.** The courier has no parser for each bank. The Worker sends the email text to the function that reads a Telegram message, then to the same write function. Thus an email gives the same receipt and the same **Undo** button as a message that you typed. There is one parser, not two.
-
-**The application uses the system typeface.** The first version asked Google Fonts for the font Inter. A measurement gave 146 kilobytes on a first installation, which was 72 percent of the total. The style sheet had a cache time of one day, so a phone requested it again each day, and the font also failed when the phone had no connection. The font files then moved into the repository. Version 3 removes them. The system font of each device shows the text, so the application downloads no font and the text shows with no connection.
-
-**The cache asks the correct question.** One counter in the database recorded the version of the data. Each write increased it, and the app downloaded each screen again. An automatic write at 03:00 thus made the next start of the app expensive, because the counter cannot say which screen changed. Each read now carries an ETag, which is a hash of the answer. The app sends the tag back, and the server answers 304 with no content when the answer is the same. The tag also knows the month, the year and the page, so an old month does not download again, and no write function must remember to invalidate a cache.
-
-**Infrastructure that the project removed.** The first client was an n8n workflow on a laptop, and a migration to a virtual machine started, then stopped. The bot moved into Apps Script, then into the Worker. The project now has no virtual machine, no web server, no TLS certificate, no dynamic DNS name and no container stack.
-
-**A feature that the data removed.** A job calculated the daily interest. The bank gave 24.50 pesos, and the job gave 25.83 pesos, because the bank does not use the daily balance multiplied by the rate. The project stopped the job for that bank, then removed the job completely in v2.0.1. A calculation that does not agree with the bank is worse than no calculation.
+- **Money is an integer.** Each amount is a count of millionths. A sum is exact, and one column also holds a fraction of a share.
+- **The database calculates.** The month and the peso amount are generated columns. No code writes a value that it can calculate.
+- **A retry never makes a second row.** The app makes the row ID before the first attempt. An offline retry gets the answer "duplicate", and the app counts that as a success.
+- **One parser reads two inputs.** The email job sends the email text to the bot parser. An email gets the same receipt and **Undo** button as a typed message.
+- **Each version removes infrastructure.** The project has no virtual machine, no web server, no TLS certificate and no container.
 
 ## Facts
 
